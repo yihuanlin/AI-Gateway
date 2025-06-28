@@ -1,4 +1,4 @@
-import { generateText, streamText, type StreamPart } from 'ai';
+import { generateText, streamText } from 'ai';
 import { gateway } from '@ai-sdk/gateway';
 import { NextRequest, NextResponse } from 'next/server';
 
