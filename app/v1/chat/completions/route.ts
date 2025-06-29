@@ -272,8 +272,17 @@ export async function POST(req: NextRequest) {
   //   aiSdkTools = { ...aiSdkTools, ...mcpClientTools };
   // }
 
+  let finalApiKey = apiKey;
+  if (apiKey === process.env.PASSWORD) {
+    const apiKeys = process.env.AI_GATEWAY_API_KEY?.split(',').map(key => key.trim()) || [];
+    if (apiKeys.length > 0) {
+      const randomIndex = Math.floor(Math.random() * apiKeys.length);
+      finalApiKey = apiKeys[randomIndex];
+    }
+  }
+
   gateway = createGateway({
-    apiKey: apiKey,
+    apiKey: finalApiKey,
     baseURL: 'https://ai-gateway.vercel.sh/v1/ai',
   });
 
