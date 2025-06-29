@@ -1,17 +1,29 @@
-import { generateText, streamText } from 'ai';
+import { generateText, streamText, type GenerateTextResult } from 'ai';
 import { gateway } from '@ai-sdk/gateway';
 import { NextRequest, NextResponse } from 'next/server';
 
 // Helper function to convert Vercel AI SDK result to a non-streaming OpenAI format
-function toOpenAIResponse(result, model) {
+function toOpenAIResponse(result: GenerateTextResult<any, any>, model: string) {
   const now = Math.floor(Date.now() / 1000);
   const step = result.steps[0];
 
   const choices = [];
-  const message = {
+
+  const message: {
+    role: string;
+    content: string | null;
+    tool_calls?: Array<{
+      id: string;
+      type: string;
+      function: {
+        name: string;
+        arguments: string;
+      };
+    }>;
+  } = {
     role: 'assistant',
     content: '',
-    tool_calls: [],
+    tool_calls: [], // Initialize as empty array
   };
 
   let hasText = false;
@@ -23,12 +35,16 @@ function toOpenAIResponse(result, model) {
       hasText = true;
     } else if (part.type === 'tool-call') {
       hasToolCalls = true;
+      // Ensure tool_calls is an array before pushing
+      if (!message.tool_calls) {
+        message.tool_calls = [];
+      }
       message.tool_calls.push({
         id: part.toolCallId,
         type: 'function',
         function: {
           name: part.toolName,
-          arguments: JSON.stringify(part.args),
+          arguments: JSON.stringify(part.input),
         },
       });
     }
@@ -55,22 +71,24 @@ function toOpenAIResponse(result, model) {
     model: model,
     choices: choices,
     usage: {
-      prompt_tokens: step.usage.promptTokens,
-      completion_tokens: step.usage.completionTokens,
-      total_tokens: step.usage.promptTokens + step.usage.completionTokens,
+      prompt_tokens: (step.usage as any).promptTokens,
+      completion_tokens: (step.usage as any).completionTokens,
+      total_tokens: (step.usage as any).promptTokens + (step.usage as any).completionTokens,
     },
   };
 }
 
-function toOpenAIStream(result, model) {
+// A new, more robust helper to convert to an OpenAI-compatible stream
+function toOpenAIStream(result: any, model: string) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
       const now = Math.floor(Date.now() / 1000);
       const chunkId = `chatcmpl-${now}`;
       let isFirstTextDelta = true;
-      const toolCallStates = new Map();
-      for await (const part of result.fullStream) {
+      const toolCallStates = new Map<string, { name: string; args: string }>(); // To manage partial tool calls
+
+      for await (const part of result) {
         const delta: { content?: string; role?: string; tool_calls?: any[] } = {};
         let finish_reason: string | null = null;
         let shouldSend = false;
@@ -120,11 +138,11 @@ function toOpenAIStream(result, model) {
               },
             ],
           };
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
         }
       }
 
-      controller.enqueue(encoder.encode(`data: [DONE]`));
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'));
       controller.close();
     },
   });
