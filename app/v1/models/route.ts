@@ -3,17 +3,34 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export const runtime = 'edge';
 
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
+export async function OPTIONS(req: NextRequest) {
+  return new NextResponse(null, {
+    status: 204,
+    headers: corsHeaders,
+  });
+}
+
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get('Authorization');
   const apiKey = authHeader?.split(' ')[1];
 
   if (!apiKey) {
-    return new NextResponse('Unauthorized', { status: 401 });
+    return new NextResponse('Unauthorized', {
+      status: 401,
+      headers: corsHeaders,
+    });
   }
 
   let finalApiKey = apiKey;
   if (apiKey === process.env.PASSWORD) {
-    const apiKeys = process.env.AI_GATEWAY_API_KEY?.split(',').map(key => key.trim()) || [];
+    const apiKeys =
+      process.env.AI_GATEWAY_API_KEY?.split(',').map(key => key.trim()) || [];
     if (apiKeys.length > 0) {
       const randomIndex = Math.floor(Math.random() * apiKeys.length);
       finalApiKey = apiKeys[randomIndex];
@@ -36,17 +53,25 @@ export async function GET(req: NextRequest) {
       owned_by: 'vercel-ai-gateway',
     }));
 
-    return NextResponse.json({
-      object: 'list',
-      data: data,
-    });
+    return NextResponse.json(
+      {
+        object: 'list',
+        data: data,
+      },
+      {
+        headers: corsHeaders,
+      },
+    );
   } catch (error: any) {
     console.error('Error fetching models:', error);
     const errorMessage = error.message || 'An unknown error occurred';
     const statusCode = error.statusCode || 500;
     return new NextResponse(JSON.stringify({ error: errorMessage }), {
       status: statusCode,
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...corsHeaders,
+      },
     });
   }
 }

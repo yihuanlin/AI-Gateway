@@ -5,6 +5,19 @@ import {
 import { createGateway } from '@ai-sdk/gateway';
 import { NextRequest, NextResponse } from 'next/server';
 
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
+export async function OPTIONS(req: NextRequest) {
+  return new NextResponse(null, {
+    status: 204,
+    headers: corsHeaders,
+  });
+}
+
 function toOpenAIResponse(result: GenerateTextResult<any, any>, model: string) {
   const now = Math.floor(Date.now() / 1000);
   const step = result.steps[0];
@@ -210,6 +223,7 @@ function toOpenAIStream(result: any, model: string) {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
+      ...corsHeaders,
     },
   });
 }
@@ -220,7 +234,7 @@ export async function POST(req: NextRequest) {
   const apiKey = authHeader?.split(' ')[1];
 
   if (!apiKey) {
-    return new NextResponse('Unauthorized', { status: 401 });
+    return new NextResponse('Unauthorized', { status: 401, headers: corsHeaders });
   }
 
   let gateway;
@@ -308,7 +322,7 @@ export async function POST(req: NextRequest) {
     } else {
       const result = await generateText(commonOptions);
       const openAIResponse = toOpenAIResponse(result, model);
-      return NextResponse.json(openAIResponse);
+      return NextResponse.json(openAIResponse, { headers: corsHeaders });
     }
   } catch (error: any) {
     console.error('Error processing request:', error);
@@ -342,13 +356,14 @@ export async function POST(req: NextRequest) {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
           Connection: 'keep-alive',
+          ...corsHeaders,
         },
         status: statusCode,
       });
     } else {
       return new NextResponse(JSON.stringify({ error: errorMessage }), {
         status: statusCode,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...corsHeaders },
       });
     }
   }
