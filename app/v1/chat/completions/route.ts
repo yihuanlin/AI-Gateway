@@ -271,167 +271,175 @@ export async function POST(req: NextRequest) {
     };
   }
 
-  let finalApiKey = apiKey;
-  if (apiKey === process.env.PASSWORD) {
-    const apiKeys = process.env.AI_GATEWAY_API_KEY?.split(',').map(key => key.trim()) || [];
-    if (apiKeys.length > 0) {
-      const randomIndex = Math.floor(Math.random() * apiKeys.length);
-      finalApiKey = apiKeys[randomIndex];
+  const apiKeys = apiKey.split(',').map(key => key.trim()) || [];
+  let lastError: any;
+
+  // Try each API key in sequence until one succeeds
+  for (let i = 0; i < apiKeys.length; i++) {
+    const currentApiKey = apiKeys[i];
+
+    gateway = createGateway({
+      apiKey: currentApiKey,
+      baseURL: 'https://ai-gateway.vercel.sh/v1/ai',
+    });
+
+    try {
+      for (const message of messages) {
+        if (message.role === 'user' && Array.isArray(message.content)) {
+          console.warn('Processing message content as array');
+          message.content = await Promise.all(
+            message.content.map(async (part: any) => {
+              if (part.type === 'image_url') {
+                const url = part.image_url.url;
+                if (url.startsWith('data:')) {
+                  const [mediaType, base64Data] = url.split(';base64,');
+                  const mimeType = mediaType.split(':')[1];
+                  const imageBuffer = Buffer.from(base64Data, 'base64');
+                  return {
+                    type: 'image',
+                    image: new Uint8Array(imageBuffer),
+                    mimeType: mimeType,
+                  };
+                } else {
+                  const response = await fetch(url);
+                  const imageBuffer = await response.arrayBuffer();
+                  const mimeType = response.headers.get('content-type');
+                  return {
+                    type: 'image',
+                    image: new Uint8Array(imageBuffer),
+                    mimeType: mimeType,
+                  };
+                }
+              }
+              return part;
+            }),
+          );
+        }
+      }
+      const commonOptions = {
+        model: gateway(model),
+        messages: messages,
+        tools: aiSdkTools,
+        temperature,
+        top_p,
+        max_completion_tokens,
+        stop_sequences,
+        seed,
+        presence_penalty,
+        frequency_penalty,
+        tool_choice: tool_choice,
+        providerOptions: providerOptions || {
+          anthropic: {
+            thinking: thinking || {
+              type: "enabled",
+              budgetTokens: 8000
+            },
+            cacheControl: {
+              type: "ephemeral"
+            }
+          },
+          openai: {
+            reasoningEffort: reasoning_effort || "high",
+            reasoningSummary: "auto"
+          },
+          xai: {
+            searchParameters: {
+              mode: "auto",
+              returnCitations: true
+            }
+            ,
+            ...(reasoning_effort && { reasoningEffort: reasoning_effort })
+          },
+          google: {
+            useSearchGrounding: useSearchGrounding,
+            ...(extra_body?.google?.thinking_config && { thinking_config: extra_body.google.thinking_config })
+          }
+        },
+      };
+
+      if (stream) {
+        const result = streamText(commonOptions);
+        return toOpenAIStream(result, model);
+      } else {
+        const result = await generateText(commonOptions);
+        const openAIResponse = toOpenAIResponse(result, model);
+        return NextResponse.json(openAIResponse, { headers: corsHeaders });
+      }
+    } catch (error: any) {
+      console.error(`Error with API key ${i + 1}/${apiKeys.length}:`, error);
+      lastError = error;
+
+      if (i < apiKeys.length - 1) {
+        continue;
+      }
+
+      break;
     }
   }
 
-  gateway = createGateway({
-    apiKey: finalApiKey,
-    baseURL: 'https://ai-gateway.vercel.sh/v1/ai',
-  });
+  console.error('All API keys failed. Last error:', lastError);
 
-  try {
-    for (const message of messages) {
-      if (message.role === 'user' && Array.isArray(message.content)) {
-        console.warn('Processing message content as array');
-        message.content = await Promise.all(
-          message.content.map(async (part: any) => {
-            if (part.type === 'image_url') {
-              const url = part.image_url.url;
-              if (url.startsWith('data:')) {
-                const [mediaType, base64Data] = url.split(';base64,');
-                const mimeType = mediaType.split(':')[1];
-                const imageBuffer = Buffer.from(base64Data, 'base64');
-                return {
-                  type: 'image',
-                  image: new Uint8Array(imageBuffer),
-                  mimeType: mimeType,
-                };
-              } else {
-                const response = await fetch(url);
-                const imageBuffer = await response.arrayBuffer();
-                const mimeType = response.headers.get('content-type');
-                return {
-                  type: 'image',
-                  image: new Uint8Array(imageBuffer),
-                  mimeType: mimeType,
-                };
-              }
-            }
-            return part;
-          }),
+  let errorMessage = lastError.message || 'An unknown error occurred';
+  let errorType = lastError.type;
+  const statusCode = lastError.statusCode || 500;
+
+  if (lastError.cause && lastError.cause.responseBody) {
+    try {
+      const body = JSON.parse(lastError.cause.responseBody);
+      if (body.error) {
+        errorMessage = body.error.message || errorMessage;
+        errorType = body.error.type || errorType;
+      }
+    } catch (e) {
+      // ignore parsing error
+    }
+  }
+
+  const errorPayload = {
+    error: {
+      message: `All ${apiKeys.length} API key(s) failed. Last error: ${errorMessage}`,
+      type: errorType,
+      statusCode: statusCode,
+    },
+  };
+
+  if (stream) {
+    const encoder = new TextEncoder();
+    const errorChunk = {
+      id: `chatcmpl-error-${Date.now()}`,
+      object: 'chat.completion.chunk',
+      created: Math.floor(Date.now() / 1000),
+      model: model || 'unknown',
+      choices: [
+        {
+          index: 0,
+          delta: { content: JSON.stringify(errorPayload) },
+          finish_reason: 'stop',
+        },
+      ],
+    };
+    const errorStream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify(errorChunk)}\n\n`)
         );
-      }
-    }
-    const commonOptions = {
-      model: gateway(model),
-      messages: messages,
-      tools: aiSdkTools,
-      temperature,
-      top_p,
-      max_completion_tokens,
-      stop_sequences,
-      seed,
-      presence_penalty,
-      frequency_penalty,
-      tool_choice: tool_choice,
-      providerOptions: providerOptions || {
-        anthropic: {
-          thinking: thinking || {
-            type: "enabled",
-            budgetTokens: 8000
-          },
-          cacheControl: {
-            type: "ephemeral"
-          }
-        },
-        openai: {
-          reasoningEffort: reasoning_effort || "high",
-          reasoningSummary: "auto"
-        },
-        xai: {
-          searchParameters: {
-            mode: "auto",
-            returnCitations: true
-          }
-          ,
-          ...(reasoning_effort && { reasoningEffort: reasoning_effort })
-        },
-        google: {
-          useSearchGrounding: useSearchGrounding,
-          ...(extra_body?.google?.thinking_config && { thinking_config: extra_body.google.thinking_config })
-        }
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
       },
-    };
-
-    if (stream) {
-      const result = streamText(commonOptions);
-      return toOpenAIStream(result, model);
-    } else {
-      const result = await generateText(commonOptions);
-      const openAIResponse = toOpenAIResponse(result, model);
-      return NextResponse.json(openAIResponse, { headers: corsHeaders });
-    }
-  } catch (error: any) {
-    console.error('Error processing request:', error);
-
-    let errorMessage = error.message || 'An unknown error occurred';
-    let errorType = error.type;
-    const statusCode = error.statusCode || 500;
-
-    if (error.cause && error.cause.responseBody) {
-      try {
-        const body = JSON.parse(error.cause.responseBody);
-        if (body.error) {
-          errorMessage = body.error.message || errorMessage;
-          errorType = body.error.type || errorType;
-        }
-      } catch (e) {
-        // ignore parsing error
-      }
-    }
-
-    const errorPayload = {
-      error: {
-        message: errorMessage,
-        type: errorType,
-        statusCode: statusCode,
+    });
+    return new Response(errorStream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        ...corsHeaders,
       },
-    };
-
-    if (stream) {
-      const encoder = new TextEncoder();
-      const errorChunk = {
-        id: `chatcmpl-error-${Date.now()}`,
-        object: 'chat.completion.chunk',
-        created: Math.floor(Date.now() / 1000),
-        model: model || 'unknown',
-        choices: [
-          {
-            index: 0,
-            delta: { content: JSON.stringify(errorPayload) },
-            finish_reason: 'stop',
-          },
-        ],
-      };
-      const errorStream = new ReadableStream({
-        start(controller) {
-          controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify(errorChunk)}\n\n`)
-          );
-          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-          controller.close();
-        },
-      });
-      return new Response(errorStream, {
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          Connection: 'keep-alive',
-          ...corsHeaders,
-        },
-        status: statusCode,
-      });
-    } else {
-      return new NextResponse(JSON.stringify(errorPayload), {
-        status: statusCode,
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
-      });
-    }
+      status: statusCode,
+    });
+  } else {
+    return new NextResponse(JSON.stringify(errorPayload), {
+      status: statusCode,
+      headers: { 'Content-Type': 'application/json', ...corsHeaders },
+    });
   }
 }
