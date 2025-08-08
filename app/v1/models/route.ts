@@ -48,9 +48,17 @@ export async function GET(req: NextRequest) {
     const now = Math.floor(Date.now() / 1000);
     const data = availableModels.models.map(model => ({
       id: model.id,
+      name: model.name,
+      description: `${model.pricing
+        ? ` I: ${(Number(model.pricing.input) * 1000000).toFixed(2)}$, O: ${(
+          Number(model.pricing.output) * 1000000
+        ).toFixed(2)}$`
+        : ''
+        } ${model.description || ''}`,
       object: 'model',
       created: now,
-      owned_by: 'vercel-ai-gateway',
+      owned_by: model.name.split('/')[0],
+      pricing: model.pricing || {},
     }));
 
     return NextResponse.json(

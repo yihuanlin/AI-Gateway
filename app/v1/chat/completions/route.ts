@@ -1,9 +1,8 @@
-import {
-  generateText, streamText, type GenerateTextResult,
-  // experimental_createMCPClient as createMCPClient 
-} from 'ai';
+import { generateText, streamText, type GenerateTextResult } from 'ai';
 import { createGateway } from '@ai-sdk/gateway';
 import { NextRequest, NextResponse } from 'next/server';
+import { openai } from '@ai-sdk/openai';
+import { google } from '@ai-sdk/google';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -20,62 +19,23 @@ export async function OPTIONS(req: NextRequest) {
 
 function toOpenAIResponse(result: GenerateTextResult<any, any>, model: string) {
   const now = Math.floor(Date.now() / 1000);
-  const step = result.steps[0];
-
-  const choices = [];
-  const message: {
-    role: string;
-    content: string | null;
-    tool_calls?: Array<{
-      id: string;
-      type: string;
-      function: {
-        name: string;
-        arguments: string;
-      };
-    }>;
-  } = {
-    role: 'assistant',
-    content: '',
-    tool_calls: [],
-  };
-
-  let hasText = false;
-  let hasToolCalls = false;
-
-  for (const part of step.content) {
-    if (part.type === 'text') {
-      message.content = part.text;
-      hasText = true;
-    } else if (part.type === 'tool-call') {
-      hasToolCalls = true;
-      if (!message.tool_calls) {
-        message.tool_calls = [];
-      }
-      message.tool_calls.push({
-        id: part.toolCallId,
-        type: 'function',
-        function: {
-          name: part.toolName,
-          arguments: JSON.stringify(part.input),
+  const choices = result.text
+    ? [
+      {
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: result.text,
+          reasoning_content: result.reasoningText,
+          tool_calls: result.toolCalls,
+          metadata: {
+            sources: result.sources
+          }
         },
-      });
-    }
-  }
-
-  if (!hasText || hasToolCalls) {
-    message.content = null;
-  }
-
-  if (!hasToolCalls) {
-    delete message.tool_calls;
-  }
-
-  choices.push({
-    index: 0,
-    message: message,
-    finish_reason: step.finishReason,
-  });
+        finish_reason: result.finishReason,
+      },
+    ]
+    : [];
 
   return {
     id: `chatcmpl-${now}`,
@@ -84,9 +44,9 @@ function toOpenAIResponse(result: GenerateTextResult<any, any>, model: string) {
     model: model,
     choices: choices,
     usage: {
-      prompt_tokens: (step.usage as any).promptTokens,
-      completion_tokens: (step.usage as any).completionTokens,
-      total_tokens: (step.usage as any).promptTokens + (step.usage as any).completionTokens,
+      prompt_tokens: result.usage.inputTokens,
+      completion_tokens: result.usage.outputTokens,
+      total_tokens: result.usage.totalTokens,
     },
   };
 }
@@ -97,119 +57,146 @@ function toOpenAIStream(result: any, model: string) {
     async start(controller) {
       const now = Math.floor(Date.now() / 1000);
       const chunkId = `chatcmpl-${now}`;
-      let isFirstTextDelta = true;
-      const toolCallStates = new Map<string, { name: string; args: string }>();
 
       for await (const part of result.fullStream) {
-        const delta: { content?: string; role?: string; tool_calls?: any[]; reasoning_content?: string } = {};
-        let finish_reason: string | null = null;
-        let shouldSend = false;
-
-        if (part.type === 'text-delta') {
-          delta.content = part.textDelta;
-          if (isFirstTextDelta) {
-            delta.role = 'assistant';
-            isFirstTextDelta = false;
-          }
-          shouldSend = true;
-        } else if (part.type === 'text') {
-          delta.content = part.text;
-          if (isFirstTextDelta) {
-            delta.role = 'assistant';
-            isFirstTextDelta = false;
-          }
-          shouldSend = true;
-        } else if (part.type === 'tool-call-delta') {
-          let state = toolCallStates.get(part.toolCallId);
-          const isFirstDeltaForToolCall = !state;
-          if (isFirstDeltaForToolCall) {
-            state = { name: part.toolName, args: '' };
-            toolCallStates.set(part.toolCallId, state);
-          }
-          state!.args += part.argsTextDelta;
-
-          const toolCall: { index: number; id?: string; function: { name?: string; arguments?: string } } = {
-            index: 0,
-            function: {
-              arguments: part.argsTextDelta,
-            },
-          };
-
-          if (isFirstDeltaForToolCall) {
-            toolCall.id = part.toolCallId;
-            toolCall.function.name = part.toolName;
-          }
-
-          delta.tool_calls = [toolCall];
-          shouldSend = true;
-        } else if (part.type === 'tool-call') {
-          const toolCall: { index: number; id?: string; function: { name?: string; arguments?: string } } = {
-            index: 0,
-            id: part.toolCallId,
-            function: {
-              name: part.toolName,
-              arguments: JSON.stringify(part.input),
-            },
-          };
-          delta.tool_calls = [toolCall];
-          shouldSend = true;
-        } else if (part.type === 'reasoning') {
-          delta.reasoning_content = part.text;
-          shouldSend = true;
-        } else if (part.type === 'finish') {
-          finish_reason = part.finishReason;
-          if (part.usage) {
-            (delta as any).usage = {
-              prompt_tokens: part.usage.promptTokens,
-              completion_tokens: part.usage.completionTokens,
-              total_tokens: part.usage.totalTokens,
+        switch (part.type) {
+          case 'reasoning-delta': {
+            const chunk = {
+              id: chunkId,
+              object: 'chat.completion.chunk',
+              created: now,
+              model: model,
+              choices: [
+                {
+                  index: 0,
+                  delta: { reasoning_content: part.text },
+                  finish_reason: null,
+                },
+              ],
             };
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+            break;
           }
-          if (part.toolCalls) {
-            (delta as any).tool_calls = part.toolCalls.map((tc: any) => ({
-              id: tc.toolCallId,
-              type: 'function',
-              function: {
-                name: tc.toolName,
-                arguments: JSON.stringify(tc.args),
+          case 'text-delta': {
+            const chunk = {
+              id: chunkId,
+              object: 'chat.completion.chunk',
+              created: now,
+              model: model,
+              choices: [
+                {
+                  index: 0,
+                  delta: { content: part.text },
+                  finish_reason: null,
+                },
+              ],
+            };
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+            break;
+          }
+          case 'source': {
+            const chunk = {
+              id: chunkId,
+              object: 'chat.completion.chunk',
+              created: now,
+              model: model,
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    role: 'assistant',
+                    content: null,
+                    metadata: {
+                      sources: [part.source]
+                    }
+                  },
+                  finish_reason: null,
+                },
+              ],
+            };
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+            break;
+          }
+          case 'tool-call': {
+            const chunk = {
+              id: chunkId,
+              object: 'chat.completion.chunk',
+              created: now,
+              model: model,
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: part.toolCallId,
+                        type: 'function',
+                        function: {
+                          name: part.toolName,
+                          arguments: JSON.stringify(part.args),
+                        },
+                      },
+                    ],
+                  },
+                  finish_reason: null,
+                },
+              ],
+            };
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+            break;
+          }
+          case 'tool-call-delta': {
+            const chunk = {
+              id: chunkId,
+              object: 'chat.completion.chunk',
+              created: now,
+              model: model,
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: part.toolCallId,
+                        type: 'function',
+                        function: {
+                          name: part.toolName,
+                          arguments: part.argsTextDelta,
+                        },
+                      },
+                    ],
+                  },
+                  finish_reason: null,
+                },
+              ],
+            };
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+            break;
+          }
+          case 'finish': {
+            const chunk = {
+              id: chunkId,
+              object: 'chat.completion.chunk',
+              created: now,
+              model: model,
+              choices: [
+                {
+                  index: 0,
+                  delta: {},
+                  finish_reason: part.finishReason,
+                },
+              ],
+              usage: {
+                prompt_tokens: part.usage.inputTokens,
+                completion_tokens: part.usage.outputTokens,
+                total_tokens: part.usage.totalTokens,
               },
-            }));
+            };
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+            break;
           }
-          if (part.toolResults) {
-            (delta as any).tool_results = part.toolResults.map((tr: any) => ({
-              tool_call_id: tr.toolCallId,
-              tool_name: tr.toolName,
-              result: tr.result,
-              is_error: tr.isError,
-            }));
-          }
-          if (part.sources) {
-            (delta as any).sources = part.sources;
-          }
-          if (part.files) {
-            (delta as any).files = part.files;
-          }
-          if (part.warnings) {
-            (delta as any).warnings = part.warnings;
-          }
-          shouldSend = true;
-        }
-
-        if (shouldSend) {
-          const chunk = {
-            id: chunkId,
-            object: 'chat.completion.chunk',
-            created: now,
-            model: model,
-            choices: [
-              {
-                index: 0,
-                delta: delta,
-                finish_reason: finish_reason,
-              },
-            ],
-          };
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
         }
       }
 
@@ -238,24 +225,30 @@ export async function POST(req: NextRequest) {
   }
 
   let gateway;
-
-  const { model, messages = [], tools, stream, temperature, topP, maxTokens, stopSequences, seed, presencePenalty, frequencyPenalty, tool_choice } = await req.json();
-
-  const validRoles = ['user', 'assistant', 'system', 'tool'];
-  const filteredMessages = (messages || []).filter((msg: any) => validRoles.includes(msg.role));
-
+  let useSearchGrounding = false;
+  const { model, messages = [], tools, stream, temperature, top_p, max_completion_tokens, stop_sequences, seed, presence_penalty, frequency_penalty, tool_choice, providerOptions, reasoning_effort, thinking, extra_body } = await req.json();
   let aiSdkTools: Record<string, any> = {};
-  let shouldFetchMcpTools = false;
-
   if (tools && Array.isArray(tools)) {
     tools.forEach((tool: any) => {
       if (tool.type === 'function' && tool.function) {
         if (tool.function.name === 'googleSearch') {
-          shouldFetchMcpTools = true;
+          const lastMessage = messages[messages.length - 1];
+          if (lastMessage && typeof lastMessage.content === 'string' && (lastMessage.content.includes('http://') || lastMessage.content.includes('https://'))) {
+            aiSdkTools = {
+              ...aiSdkTools,
+              url_context: google.tools.urlContext({}),
+            };
+            useSearchGrounding = true;
+          } else {
+            aiSdkTools = {
+              ...aiSdkTools,
+              google_search: google.tools.googleSearch({}),
+            };
+          }
           return;
         }
 
-        let clientParameters = tool.function.parameters || {};
+        let clientParameters = tool.function.inputSchema || {};
 
         const finalParameters: Record<string, any> = {
           type: "object",
@@ -265,26 +258,18 @@ export async function POST(req: NextRequest) {
 
         aiSdkTools[tool.function.name] = {
           description: tool.function.description,
-          parameters: finalParameters,
+          inputSchema: finalParameters,
         };
       }
     });
   }
 
-  // let mcpClientTools: Record<string, any> | undefined;
-  // const AI_GATEWAY_API_KEYS = process.env.AI_GATEWAY_API_KEY?.split(',').map(key => key.trim());
-  // const isAuthorizedGatewayKey = AI_GATEWAY_API_KEYS && apiKey && AI_GATEWAY_API_KEYS.includes(apiKey);
-
-  // if (shouldFetchMcpTools && isAuthorizedGatewayKey && process.env.SSE_URL) {
-  //   const mcpClient = await createMCPClient({
-  //     transport: {
-  //       type: 'sse',
-  //       url: process.env.SSE_URL,
-  //     },
-  //   });
-  //   mcpClientTools = await mcpClient.tools();
-  //   aiSdkTools = { ...aiSdkTools, ...mcpClientTools };
-  // }
+  if (model.startsWith('openai')) {
+    aiSdkTools = {
+      ...aiSdkTools,
+      web_search_preview: openai.tools.webSearchPreview({}),
+    };
+  }
 
   let finalApiKey = apiKey;
   if (apiKey === process.env.PASSWORD) {
@@ -301,23 +286,81 @@ export async function POST(req: NextRequest) {
   });
 
   try {
+    for (const message of messages) {
+      if (message.role === 'user' && Array.isArray(message.content)) {
+        console.warn('Processing message content as array');
+        message.content = await Promise.all(
+          message.content.map(async (part: any) => {
+            if (part.type === 'image_url') {
+              const url = part.image_url.url;
+              if (url.startsWith('data:')) {
+                const [mediaType, base64Data] = url.split(';base64,');
+                const mimeType = mediaType.split(':')[1];
+                const imageBuffer = Buffer.from(base64Data, 'base64');
+                return {
+                  type: 'image',
+                  image: new Uint8Array(imageBuffer),
+                  mimeType: mimeType,
+                };
+              } else {
+                const response = await fetch(url);
+                const imageBuffer = await response.arrayBuffer();
+                const mimeType = response.headers.get('content-type');
+                return {
+                  type: 'image',
+                  image: new Uint8Array(imageBuffer),
+                  mimeType: mimeType,
+                };
+              }
+            }
+            return part;
+          }),
+        );
+      }
+    }
     const commonOptions = {
       model: gateway(model),
-      messages: filteredMessages,
+      messages: messages,
       tools: aiSdkTools,
       temperature,
-      topP,
-      maxTokens,
-      stopSequences,
+      top_p,
+      max_completion_tokens,
+      stop_sequences,
       seed,
-      presencePenalty,
-      frequencyPenalty,
-      toolChoice: tool_choice,
-      experimental_continueSteps: true,
+      presence_penalty,
+      frequency_penalty,
+      tool_choice: tool_choice,
+      providerOptions: providerOptions || {
+        anthropic: {
+          thinking: thinking || {
+            type: "enabled",
+            budgetTokens: 8000
+          },
+          cacheControl: {
+            type: "ephemeral"
+          }
+        },
+        openai: {
+          reasoningEffort: reasoning_effort || "high",
+          reasoningSummary: "auto"
+        },
+        xai: {
+          searchParameters: {
+            mode: "auto",
+            returnCitations: true
+          }
+          ,
+          ...(reasoning_effort && { reasoningEffort: reasoning_effort })
+        },
+        google: {
+          useSearchGrounding: useSearchGrounding,
+          ...(extra_body?.google?.thinking_config && { thinking_config: extra_body.google.thinking_config })
+        }
+      },
     };
 
     if (stream) {
-      const result = await streamText(commonOptions);
+      const result = streamText(commonOptions);
       return toOpenAIStream(result, model);
     } else {
       const result = await generateText(commonOptions);
@@ -326,8 +369,30 @@ export async function POST(req: NextRequest) {
     }
   } catch (error: any) {
     console.error('Error processing request:', error);
-    const errorMessage = error.message || 'An unknown error occurred';
+
+    let errorMessage = error.message || 'An unknown error occurred';
+    let errorType = error.type;
     const statusCode = error.statusCode || 500;
+
+    if (error.cause && error.cause.responseBody) {
+      try {
+        const body = JSON.parse(error.cause.responseBody);
+        if (body.error) {
+          errorMessage = body.error.message || errorMessage;
+          errorType = body.error.type || errorType;
+        }
+      } catch (e) {
+        // ignore parsing error
+      }
+    }
+
+    const errorPayload = {
+      error: {
+        message: errorMessage,
+        type: errorType,
+        statusCode: statusCode,
+      },
+    };
 
     if (stream) {
       const encoder = new TextEncoder();
@@ -339,14 +404,16 @@ export async function POST(req: NextRequest) {
         choices: [
           {
             index: 0,
-            delta: { content: `Error: ${errorMessage}` },
+            delta: { content: JSON.stringify(errorPayload) },
             finish_reason: 'stop',
           },
         ],
       };
       const errorStream = new ReadableStream({
         start(controller) {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorChunk)}\n\n`));
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify(errorChunk)}\n\n`)
+          );
           controller.enqueue(encoder.encode('data: [DONE]\n\n'));
           controller.close();
         },
@@ -361,7 +428,7 @@ export async function POST(req: NextRequest) {
         status: statusCode,
       });
     } else {
-      return new NextResponse(JSON.stringify({ error: errorMessage }), {
+      return new NextResponse(JSON.stringify(errorPayload), {
         status: statusCode,
         headers: { 'Content-Type': 'application/json', ...corsHeaders },
       });
