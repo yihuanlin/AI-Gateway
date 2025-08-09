@@ -46,9 +46,9 @@ export async function GET(req: NextRequest) {
         id: model.id,
         name: model.name,
         description: `${model.pricing
-          ? ` I: ${(Number(model.pricing.input) * 1000000).toFixed(2)}$, O: ${(
+          ? ` I: $${(Number(model.pricing.input) * 1000000).toFixed(2)}, O: $${(
             Number(model.pricing.output) * 1000000
-          ).toFixed(2)}$`
+          ).toFixed(2)};`
           : ''
           } ${model.description || ''}`,
         object: 'model',
