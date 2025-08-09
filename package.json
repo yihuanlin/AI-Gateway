@@ -13,6 +13,7 @@
     "@ai-sdk/gateway": "^1.0.4",
     "@ai-sdk/google": "^2.0.3",
     "@ai-sdk/openai": "^2.0.7",
+    "@ai-sdk/openai-compatible": "^1.0.3",
     "ai": "^5.0.8",
     "next": "15.3.4",
     "react": "19.1.1",

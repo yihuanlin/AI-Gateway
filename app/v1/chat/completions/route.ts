@@ -1,5 +1,6 @@
 import { generateText, stepCountIs, streamText, tool, type GenerateTextResult } from 'ai';
 import { createGateway } from '@ai-sdk/gateway';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { NextRequest, NextResponse } from 'next/server';
 import { openai } from '@ai-sdk/openai';
 import { google } from '@ai-sdk/google';
@@ -160,57 +161,58 @@ const bashTool = anthropic.tools.bash_20241022({
 });
 
 const javascriptExecutorTool = tool({
-  description: 'Execute JavaScript. Last line is automatically returned.',
+  description: 'Execute plain JavaScript code. Define a function called "tool" and return its result, or just execute code directly.',
   inputSchema: z.object({
-    code: z.string().describe('Plain JavaScript code to execute'),
+    code: z.string().describe('Plain JavaScript code to execute. Define function tool() to return specific result, or code will be evaluated directly.'),
     context: z.string().optional().describe('Optional context'),
   }),
   execute: async ({ code, context }: { code: string; context?: string }) => {
     console.log(`Executing JavaScript code${context ? ` (${context})` : ''}: ${code.substring(0, 100)}...`);
     try {
-      const lines = code.trim().split('\n');
+      // Helper function to handle both sync and async results
+      const handleResult = async (result: any) => {
+        if (result && typeof result.then === 'function') {
+          // It's a Promise, await it
+          return await result;
+        }
+        // It's synchronous, return as-is
+        return result;
+      };
 
-      if (lines.length === 1) {
-        const func = new Function(`return ${code.trim()}`);
-        const result = func();
-        return `Result: ${result}`;
-      } else {
-        const lastLine = lines[lines.length - 1].trim();
+      const func = new Function(`
+        ${code}
+        
+        if (typeof tool === 'function') {
+          return tool();
+        }
+        
+        return undefined;
+      `);
 
-        if (lastLine &&
-          !lastLine.includes('=') &&
-          !lastLine.startsWith('function') &&
-          !lastLine.startsWith('const') &&
-          !lastLine.startsWith('let') &&
-          !lastLine.startsWith('var') &&
-          !lastLine.startsWith('if') &&
-          !lastLine.startsWith('for') &&
-          !lastLine.startsWith('while') &&
-          !lastLine.startsWith('class') &&
-          !lastLine.endsWith('{') &&
-          !lastLine.endsWith('}')) {
+      const result = await handleResult(func());
 
-          // Execute all but last line, then return the expression
-          const beforeLastLine = lines.slice(0, -1).join('\n');
-          const expressionName = lastLine.replace(';', '');
+      if (result !== undefined) {
+        return result;
+      }
 
-          const func = new Function(`
-            ${beforeLastLine}
-            return ${expressionName};
-          `);
-
-          const result = func();
-          return `Result: ${result}`;
-        } else {
-          // Just execute everything
-          const func = new Function(code);
-          const result = func();
-          return result !== undefined ? `Result: ${result}` : 'Code executed successfully';
+      // If no tool function was defined, try to execute the code as an expression
+      try {
+        const exprFunc = new Function(`return (${code})`);
+        const exprResult = await handleResult(exprFunc());
+        return exprResult;
+      } catch {
+        // If it's not a valid expression, just execute it
+        try {
+          const execFunc = new Function(code);
+          const execResult = await handleResult(execFunc());
+          return execResult !== undefined ? execResult : 'Code executed successfully without returning a value';
+        } catch (execError: any) {
+          throw execError;
         }
       }
 
     } catch (error: any) {
-      console.error(`Code execution failed: ${error.message || 'Unknown error occurred'}`);
+      console.log(`Code execution failed: ${error.message || 'Unknown error occurred'}`);
       return `Code execution failed: ${error.message || 'Unknown error occurred'}`;
     }
   },
@@ -409,9 +411,128 @@ const jinaReaderTool = tool({
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': '*',
 };
+
+// Supported custom providers configuration
+const SUPPORTED_PROVIDERS = {
+  cerebras: {
+    name: 'cerebras',
+    baseURL: 'https://api.cerebras.ai/v1',
+  },
+  groq: {
+    name: 'groq',
+    baseURL: 'https://api.groq.com/openai/v1',
+  },
+  gemini: {
+    name: 'gemini',
+    baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  },
+  doubao: {
+    name: 'doubao',
+    baseURL: 'https://ark.cn-beijing.volces.com/api/v3',
+  },
+  modelscope: {
+    name: 'modelscope',
+    baseURL: 'https://api-inference.modelscope.cn/v1',
+  },
+  github: {
+    name: 'github',
+    baseURL: 'https://models.inference.ai.azure.com',
+  },
+  openrouter: {
+    name: 'openrouter',
+    baseURL: 'https://openrouter.ai/api/v1',
+  },
+  nvidia: {
+    name: 'nvidia',
+    baseURL: 'https://integrate.api.nvidia.com/v1',
+  },
+  mistral: {
+    name: 'mistral',
+    baseURL: 'https://api.mistral.ai/v1',
+  },
+  cohere: {
+    name: 'cohere',
+    baseURL: 'https://api.cohere.ai/compatibility/v1',
+  },
+  // morph: {
+  //   name: 'morph',
+  //   baseURL: 'https://api.morphllm.com/v1',
+  // },
+  infini: {
+    name: 'infini',
+    baseURL: 'https://cloud.infini-ai.com/maas/v1',
+  },
+  poixe: {
+    name: 'poixe',
+    baseURL: 'https://api.poixe.ai/v1',
+  },
+};
+
+// Helper function to create custom provider
+function createCustomProvider(providerName: string, apiKey: string) {
+  const config = SUPPORTED_PROVIDERS[providerName as keyof typeof SUPPORTED_PROVIDERS];
+  if (!config) {
+    throw new Error(`Unsupported provider: ${providerName}`);
+  }
+
+  return createOpenAICompatible({
+    name: 'custom',
+    apiKey: apiKey,
+    baseURL: config.baseURL,
+    includeUsage: true,
+  });
+}
+
+// Helper function to parse model and determine provider
+function parseModelName(model: string) {
+  const parts = model.split('/');
+  if (parts.length >= 2) {
+    const [providerName, ...modelParts] = parts;
+    const modelName = modelParts.join('/');
+    if (SUPPORTED_PROVIDERS[providerName as keyof typeof SUPPORTED_PROVIDERS]) {
+      return {
+        provider: providerName,
+        model: modelName,
+        useCustomProvider: true
+      };
+    }
+  }
+
+  return {
+    provider: null,
+    model: model,
+    useCustomProvider: false
+  };
+}
+
+function getProviderKeys(req: NextRequest, authHeader: string | null) {
+  const providerKeys: Record<string, string[]> = {};
+
+  for (const provider of Object.keys(SUPPORTED_PROVIDERS)) {
+    const keyName = `${provider}_api_key`;
+    const headerValue = req.headers.get(keyName);
+    if (headerValue) {
+      const keys = headerValue.split(',').map((k: string) => k.trim());
+      providerKeys[provider] = keys;
+    }
+  }
+
+  // If no provider keys in headers, use auth header for all providers
+  if (Object.keys(providerKeys).length === 0 && authHeader) {
+    const headerKey = authHeader.split(' ')[1];
+    if (headerKey) {
+      const keys = headerKey.split(',').map(k => k.trim());
+      for (const provider of Object.keys(SUPPORTED_PROVIDERS)) {
+        providerKeys[provider] = keys;
+      }
+    }
+  }
+
+  return providerKeys;
+}
 
 export async function OPTIONS(req: NextRequest) {
   return new NextResponse(null, {
@@ -639,7 +760,10 @@ export async function POST(req: NextRequest) {
 
   let gateway;
   let useSearchGrounding = false;
-  const { model, messages = [], tools, stream, temperature, top_p, top_k, max_tokens, stop_sequences, seed, presence_penalty, frequency_penalty, tool_choice, providerOptions, reasoning_effort, thinking, extra_body } = await req.json();
+  const body = await req.json();
+  const { model, messages = [], tools, stream, temperature, top_p, top_k, max_tokens, stop_sequences, seed, presence_penalty, frequency_penalty, tool_choice, reasoning_effort, thinking, extra_body } = body;
+  // Get provider API keys from request headers
+  const providerKeys = getProviderKeys(req, authHeader);
 
   const vercelCity = req.headers.get('x-vercel-ip-city');
 
@@ -663,21 +787,32 @@ export async function POST(req: NextRequest) {
 
     contextMessages = [systemMessage, ...messages];
   }
+
   let aiSdkTools: Record<string, any> = {};
   if (tools && Array.isArray(tools)) {
     if (model.startsWith('openai')) {
       aiSdkTools = {
         web_search_preview: openai.tools.webSearchPreview({}),
         jina_reader: jinaReaderTool,
+        javascript_executor: javascriptExecutorTool,
       };
     } else if (model.startsWith('xai')) {
       aiSdkTools = {
         jina_reader: jinaReaderTool,
+        javascript_executor: javascriptExecutorTool,
+      };
+    } else if (model.startsWith('anthropic')) {
+      aiSdkTools = {
+        tavily_search: tavilySearchTool,
+        jina_reader: jinaReaderTool,
+        str_replace_based_edit_tool: textEditorTool,
+        bash: bashTool,
       };
     } else if (!model.startsWith('google')) {
       aiSdkTools = {
         tavily_search: tavilySearchTool,
         jina_reader: jinaReaderTool,
+        javascript_executor: javascriptExecutorTool,
       };
     }
     tools.forEach((userTool: any) => {
@@ -686,15 +821,16 @@ export async function POST(req: NextRequest) {
           const lastMessage = contextMessages[contextMessages.length - 1];
           if (lastMessage && typeof lastMessage.content === 'string' && (lastMessage.content.includes('http://') || lastMessage.content.includes('https://'))) {
             aiSdkTools = {
-              ...aiSdkTools,
               url_context: google.tools.urlContext({}),
+              tavily_search: tavilySearchTool,
+              code_execution: google.tools.codeExecution({}),
             };
             useSearchGrounding = true;
           } else {
             aiSdkTools = {
-              ...aiSdkTools,
               google_search: google.tools.googleSearch({}),
               jina_reader: jinaReaderTool,
+              code_execution: google.tools.codeExecution({}),
             };
           }
           return;
@@ -758,36 +894,62 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  if (model.startsWith('anthropic')) {
-    aiSdkTools = {
-      ...aiSdkTools,
-      str_replace_based_edit_tool: textEditorTool,
-      bash: bashTool,
-    };
-  } else if (model.startsWith('google')) {
-    aiSdkTools = {
-      ...aiSdkTools,
-      code_execution: google.tools.codeExecution({}),
-    };
+  // Parse the model name to determine provider
+  const modelInfo = parseModelName(model);
+  let providersToTry: Array<{ type: 'gateway' | 'custom', name?: string, apiKey: string, model: string }> = [];
+
+  if (modelInfo.useCustomProvider && modelInfo.provider) {
+    // Model is in format provider/model, try custom provider first
+    const customProviderKeys = providerKeys[modelInfo.provider];
+    if (customProviderKeys && customProviderKeys.length > 0) {
+      for (const key of customProviderKeys) {
+        providersToTry.push({
+          type: 'custom',
+          name: modelInfo.provider,
+          apiKey: key,
+          model: modelInfo.model
+        });
+      }
+    } else {
+      // If no specific provider keys, try using auth header keys
+      const apiKeys = apiKey.split(',').map(key => key.trim()) || [];
+      for (const key of apiKeys) {
+        providersToTry.push({
+          type: 'custom',
+          name: modelInfo.provider,
+          apiKey: key,
+          model: modelInfo.model
+        });
+      }
+    }
   } else {
-    aiSdkTools = {
-      ...aiSdkTools,
-      javascript_executor: javascriptExecutorTool,
-    };
+    // Use gateway with original model name
+    const apiKeys = apiKey.split(',').map(key => key.trim()) || [];
+    for (const key of apiKeys) {
+      providersToTry.push({
+        type: 'gateway',
+        apiKey: key,
+        model: modelInfo.model
+      });
+    }
   }
 
-  const apiKeys = apiKey.split(',').map(key => key.trim()) || [];
   let lastError: any;
 
-  for (let i = 0; i < apiKeys.length; i++) {
-    const currentApiKey = apiKeys[i];
-
-    gateway = createGateway({
-      apiKey: currentApiKey,
-      baseURL: 'https://ai-gateway.vercel.sh/v1/ai',
-    });
+  for (let i = 0; i < providersToTry.length; i++) {
+    const provider = providersToTry[i];
 
     try {
+      if (provider.type === 'gateway') {
+        gateway = createGateway({
+          apiKey: provider.apiKey,
+          baseURL: 'https://ai-gateway.vercel.sh/v1/ai',
+        });
+      } else {
+        // Create custom provider
+        const customProvider = createCustomProvider(provider.name!, provider.apiKey);
+        gateway = customProvider;
+      }
       // Process messages to remove tool roles and convert to assistant messages
       const processedMessages = [];
 
@@ -872,7 +1034,7 @@ export async function POST(req: NextRequest) {
       }
       // console.log('Processed messages:', JSON.stringify(processedMessages, null, 2));
       const commonOptions = {
-        model: gateway(model),
+        model: gateway(provider.model),
         messages: processedMessages,
         tools: aiSdkTools,
         temperature,
@@ -885,7 +1047,7 @@ export async function POST(req: NextRequest) {
         frequencyPenalty: frequency_penalty,
         toolChoice: tool_choice,
         abortSignal: abortController.signal,
-        providerOptions: providerOptions || {
+        providerOptions: req.headers.get('provider_options') ? JSON.parse(req.headers.get('provider_options')!) : {
           anthropic: {
             thinking: thinking || {
               type: "enabled",
@@ -910,11 +1072,13 @@ export async function POST(req: NextRequest) {
           google: {
             useSearchGrounding: useSearchGrounding,
             ...(extra_body?.google?.thinking_config && { thinking_config: extra_body.google.thinking_config })
-          }
+          },
+          custom: {
+            reasoning_effort: reasoning_effort || "medium"
+          },
         },
         stopWhen: [stepCountIs(20)],
       };
-
       if (stream) {
         const result = streamText(commonOptions);
         return toOpenAIStream(result, model);
@@ -924,7 +1088,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(openAIResponse, { headers: corsHeaders });
       }
     } catch (error: any) {
-      console.error(`Error with API key ${i + 1}/${apiKeys.length}:`, error);
+      console.error(`Error with provider ${i + 1}/${providersToTry.length} (${provider.type}${provider.name ? ':' + provider.name : ''}):`, error);
       lastError = error;
 
       if (error.name === 'AbortError' || abortController.signal.aborted) {
@@ -978,7 +1142,7 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      if (i < apiKeys.length - 1) {
+      if (i < providersToTry.length - 1) {
         continue;
       }
 
@@ -986,7 +1150,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  console.error('All API keys failed. Last error:', lastError);
+  console.error('All providers failed. Last error:', lastError);
 
   let errorMessage = lastError.message || 'An unknown error occurred';
   let errorType = lastError.type;
@@ -1006,7 +1170,7 @@ export async function POST(req: NextRequest) {
 
   const errorPayload = {
     error: {
-      message: `All ${apiKeys.length} API key(s) failed. Last error: ${errorMessage}`,
+      message: `All ${providersToTry.length} provider(s) failed. Last error: ${errorMessage}`,
       type: errorType,
       statusCode: statusCode,
     },
