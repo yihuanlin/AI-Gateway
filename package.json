@@ -1,28 +1,24 @@
 {
   "name": "vercel-ai-gateway",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --turbopack",
-    "build": "next build",
-    "start": "next start",
-    "lint": "next lint"
+    "dev": "node --watch dist/index.js",
+    "build": "tsc",
+    "build:netlify": "mkdir -p netlify/edge-functions && cp src/index.ts netlify/edge-functions/index.ts && perl -i -pe 's/export default app/export default (request: Request) => app.fetch(request)/' netlify/edge-functions/index.ts",
+    "start": "node dist/index.js"
   },
   "dependencies": {
     "@ai-sdk/gateway": "^1.0.4",
     "@ai-sdk/google": "^2.0.3",
-    "@ai-sdk/openai": "^2.0.7",
-    "@ai-sdk/openai-compatible": "^1.0.3",
+    "@ai-sdk/openai": "^2.0.8",
+    "@ai-sdk/openai-compatible": "^1.0.4",
     "ai": "^5.0.8",
-    "next": "15.3.4",
-    "react": "19.1.1",
-    "react-dom": "19.1.1",
-    "zod": "^3.25.76"
+    "hono": "^4.6.3",
+    "zod": "^4.0.17"
   },
   "devDependencies": {
-    "@types/node": "^20.19.10",
-    "@types/react": "^19.1.9",
-    "@types/react-dom": "^19.1.7",
+    "@types/node": "^22.17.1",
     "typescript": "^5.9.2"
   }
 }

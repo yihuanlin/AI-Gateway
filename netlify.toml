@@ -1,0 +1,6 @@
+[build]
+  command = "pnpm run build:netlify"
+
+[[edge_functions]]
+  function = "index"
+  path = "/v1/*"

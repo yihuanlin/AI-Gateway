@@ -1,36 +1,72 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Vercel AI Gateway - Hono Version
 
-## Getting Started
+A high-performance AI Gateway built with [Hono](https://hono.dev/) for edge computing environments. This gateway provides unified access to multiple AI providers with intelligent fallback, streaming support, and advanced tools integration.
 
-First, run the development server:
+## 🛠 Quick Start
 
+### Development
 ```bash
-npm run dev
-# or
-yarn dev
-# or
+# Install dependencies
+pnpm install
+
+# Start development server
 pnpm dev
-# or
-bun dev
+
+# Build for production
+pnpm build
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 📡 API Endpoints
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Chat Completions
+```
+POST /v1/chat/completions
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### Models List
+```
+GET /v1/models
+POST /v1/models
+```
 
-## Learn More
+## 🔧 Environment Variables
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+# Required
+PASSWORD=your-gateway-password
+GATEWAY_API_KEY=your-gateway-api-key
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+# Optional AI Services
+TAVILY_API_KEY=your-tavily-key
+JINA_API_KEY=your-jina-key
+PYTHON_API_KEY=your-python-key
+PYTHON_URL=your-python-execution-url
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+# Provider-specific keys
+OPENAI_API_KEY=your-openai-key
+ANTHROPIC_API_KEY=your-anthropic-key
+GROQ_API_KEY=your-groq-key
+# ... etc for other providers
+```
 
-## Deploy on Vercel
+## 🔌 Supported Providers
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- **Gateway**: Vercel AI Gateway
+- **Direct Providers**: OpenAI, Anthropic, Google, Groq, Cerebras, etc.
+- **Tools**: Python execution, web search, content extraction
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## 📊 Architecture
+
+```
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   Client App    │───▶│   Hono Gateway   │───▶│  AI Providers   │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+                              │
+                              ▼
+                       ┌──────────────────┐
+                       │   Tools Layer    │
+                       │ • Python Exec    │
+                       │ • Web Search     │
+                       │ • Content Read   │
+                       └──────────────────┘
+```
