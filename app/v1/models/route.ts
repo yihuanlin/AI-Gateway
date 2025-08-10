@@ -278,7 +278,6 @@ export async function POST(req: NextRequest) {
 }
 
 async function getModelsResponse(apiKey: string, providerKeys: Record<string, string[]>, isPasswordAuth: boolean = false) {
-  const allModels: any[] = [];
   let gatewayApiKeys: string[] = [];
 
   if (isPasswordAuth) {
@@ -292,23 +291,24 @@ async function getModelsResponse(apiKey: string, providerKeys: Record<string, st
     gatewayApiKeys = apiKey.split(',').map(key => key.trim());
   }
 
-  let lastError: any;
+  const fetchPromises: Promise<any[]>[] = [];
 
-  // Get models from gateway first (if we have gateway keys)
+  // Add gateway fetch promise if we have keys
   if (gatewayApiKeys.length > 0) {
-    for (let i = 0; i < gatewayApiKeys.length; i++) {
-      const currentApiKey = gatewayApiKeys[i];
+    const randomIndex = Math.floor(Math.random() * gatewayApiKeys.length);
+    const currentApiKey = gatewayApiKeys[randomIndex];
 
-      const gateway = createGateway({
-        apiKey: currentApiKey,
-        baseURL: 'https://ai-gateway.vercel.sh/v1/ai',
-      });
-
+    const gatewayPromise = (async () => {
       try {
-        const availableModels = await gateway.getAvailableModels();
+        const gateway = createGateway({
+          apiKey: currentApiKey,
+          baseURL: 'https://ai-gateway.vercel.sh/v1/ai',
+        });
 
+        const availableModels = await gateway.getAvailableModels();
         const now = Math.floor(Date.now() / 1000);
-        const gatewayModels = availableModels.models.map(model => ({
+
+        return availableModels.models.map(model => ({
           id: model.id,
           name: model.name,
           description: `${model.pricing
@@ -323,25 +323,24 @@ async function getModelsResponse(apiKey: string, providerKeys: Record<string, st
           pricing: model.pricing || {},
           source: 'gateway',
         })).filter(model => shouldIncludeModel(model));
-
-        allModels.push(...gatewayModels);
-        break; // Successfully got gateway models
       } catch (error: any) {
-        console.error(`Error with gateway API key ${i + 1}/${gatewayApiKeys.length}:`, error);
-        lastError = error;
-
-        if (i < gatewayApiKeys.length - 1) {
-          continue;
-        }
+        console.error(`Error with gateway API key:`, error);
+        return [];
       }
-    }
+    })();
+
+    fetchPromises.push(gatewayPromise);
   }
 
-  // Get models from custom providers if provider keys are provided
+  // Add provider fetch promises
   for (const [providerName, keys] of Object.entries(providerKeys)) {
-    for (let i = 0; i < keys.length; i++) {
-      const providerApiKey = keys[i];
+    if (keys.length === 0) continue;
 
+    // Randomly select one API key for this provider
+    const randomIndex = Math.floor(Math.random() * keys.length);
+    const providerApiKey = keys[randomIndex];
+
+    const providerPromise = (async () => {
       try {
         let formattedModels: any[] = [];
         const now = Math.floor(Date.now() / 1000);
@@ -378,20 +377,26 @@ async function getModelsResponse(apiKey: string, providerKeys: Record<string, st
           }) || [];
         }
 
-        allModels.push(...formattedModels);
-        break; // Successfully got provider models
+        return formattedModels;
       } catch (error: any) {
-        console.error(`Error with ${providerName} API key ${i + 1}/${keys.length}:`, error);
-
-        if (i < keys.length - 1) {
-          continue;
-        }
-        // Don't fail the entire request if one provider fails
+        console.error(`Error with ${providerName} API key:`, error);
+        return [];
       }
-    }
+    })();
+
+    fetchPromises.push(providerPromise);
   }
 
-  // If we have models from any source, return them
+  // Fetch all providers in parallel
+  const results = await Promise.allSettled(fetchPromises);
+
+  // Collect all successful results
+  const allModels: any[] = [];
+  results.forEach((result) => {
+    if (result.status === 'fulfilled' && result.value.length > 0) {
+      allModels.push(...result.value);
+    }
+  });  // If we have models from any source, return them
   if (allModels.length > 0) {
     return NextResponse.json(
       {
@@ -404,14 +409,10 @@ async function getModelsResponse(apiKey: string, providerKeys: Record<string, st
     );
   }
 
-  // If no models were retrieved, return the last error
-  console.error('All providers failed. Last error:', lastError);
-  const errorMessage = lastError?.message || 'An unknown error occurred';
-  const statusCode = lastError?.statusCode || 500;
   return new NextResponse(JSON.stringify({
-    error: `All provider(s) failed. Last error: ${errorMessage}`
+    error: 'All provider(s) failed to return models'
   }), {
-    status: statusCode,
+    status: 500,
     headers: {
       'Content-Type': 'application/json',
       ...corsHeaders,
