@@ -4,9 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --watch dist/index.js",
+    "dev": "node --watch --env-file=.env.local dist/index.js --port 8888",
     "build": "tsc",
     "build:netlify": "mkdir -p netlify/edge-functions && cp src/index.ts netlify/edge-functions/index.ts",
+    "watch:netlify": "fswatch -o dist/index.js | xargs -n1 -I{} netlify build",
+    "dev:netlify": "trap 'jobs -p | xargs -r kill' EXIT; (pnpm run watch:netlify &) && netlify build && netlify dev",
     "start": "node dist/index.js"
   },
   "dependencies": {
@@ -14,12 +16,12 @@
     "@ai-sdk/google": "^2.0.3",
     "@ai-sdk/openai": "^2.0.8",
     "@ai-sdk/openai-compatible": "^1.0.4",
-    "ai": "^5.0.8",
+    "ai": "^5.0.9",
     "hono": "^4.6.3",
     "zod": "^4.0.17"
   },
   "devDependencies": {
-    "@types/node": "^22.17.1",
+    "@types/node": "^24.2.1",
     "typescript": "^5.9.2"
   }
 }

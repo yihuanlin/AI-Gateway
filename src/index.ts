@@ -11,6 +11,11 @@ import { z } from 'zod'
 export const config = { runtime: 'edge' };
 const app = new Hono()
 
+let tavilyApiKey: string | null = null;
+let pythonApiKey: string | null = null;
+let pythonUrl: string | null = null;
+let semanticScholarApiKey: string | null = null;
+
 // CORS middleware
 app.use('*', cors({
 	origin: '*',
@@ -27,16 +32,6 @@ const pythonExecutorTool = tool({
 	execute: async ({ code }: { code: string }) => {
 		console.log(`Executing remote Python code: ${code.substring(0, 100)}...`);
 		try {
-			const pythonUrl = process.env.PYTHON_URL || null;
-			const pythonApiKey = process.env.PYTHON_API_KEY || null;
-
-			if (!pythonUrl) {
-				return { error: 'python_url header is not set' };
-			}
-			if (!pythonApiKey) {
-				return { error: 'python_api_key header is not set' };
-			}
-
 			const controller = new AbortController();
 			const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s
 
@@ -83,30 +78,25 @@ const pythonExecutorTool = tool({
 });
 
 const tavilySearchTool = tool({
-	description: 'Search the web using Tavily API to get current information and relevant results',
+	description: 'Web search tool using Tavily AI search engine',
 	inputSchema: z.object({
-		query: z.string().describe('The search query to find information about'),
+		query: z.string().describe('Search query'),
 		max_results: z.number().optional().describe('Maximum number of results to return (default: 5, max: 20)'),
+		include_raw_content: z.boolean().optional().describe('Include the cleaned and parsed HTML content of each search result (default: false)'),
 		include_domains: z.array(z.string()).optional().describe('List of domains to include in the search'),
 		exclude_domains: z.array(z.string()).optional().describe('List of domains to exclude from the search'),
 	}),
-	execute: async ({ query, max_results, include_domains, exclude_domains }: {
+	execute: async ({ query, max_results, include_domains, exclude_domains, include_raw_content }: {
 		query: string;
 		max_results?: number;
 		include_domains?: string[];
 		exclude_domains?: string[];
+		include_raw_content?: boolean;
 	}) => {
-		console.log(`Tavily search executed with query: ${query}, max_results: ${max_results}, include_domains: ${include_domains}, exclude_domains: ${exclude_domains}`);
+		console.log(`Tavily search with query: ${query}`);
 		try {
-			const tavilyApiKey = process.env.TAVILY_API_KEY || null;
-
-			if (!tavilyApiKey) {
-				return {
-					error: 'TAVILY_API_KEY environment variable is not set'
-				};
-			}
-
 			const maxResults = max_results || 5;
+			const includeRawContent = include_raw_content || false;
 			const apiKeys = tavilyApiKey.split(',').map((key: string) => key.trim());
 			let lastError: any;
 
@@ -119,7 +109,7 @@ const tavilySearchTool = tool({
 						max_results: Math.min(maxResults, 20),
 						include_answer: true,
 						include_images: false,
-						include_raw_content: false,
+						include_raw_content: includeRawContent,
 						...(include_domains && { include_domains }),
 						...(exclude_domains && { exclude_domains })
 					};
@@ -179,17 +169,11 @@ const jinaReaderTool = tool({
 	description: 'Fetch and extract clean content from web pages using Jina Reader API',
 	inputSchema: z.object({
 		url: z.string().describe('The URL of the webpage to fetch content from'),
-		format: z.enum(['text', 'markdown', 'json']).optional().describe('Output format (default: text)'),
-		include_links: z.boolean().optional().describe('Whether to include links in the output (default: false)'),
-		include_images: z.boolean().optional().describe('Whether to include image descriptions (default: false)'),
 	}),
-	execute: async ({ url, format = 'text', include_links = false, include_images = false }: {
+	execute: async ({ url }: {
 		url: string;
-		format?: 'text' | 'markdown' | 'json';
-		include_links?: boolean;
-		include_images?: boolean;
 	}) => {
-		console.log(`Jina Reader fetching content from: ${url}, format: ${format}`);
+		console.log(`Jina Reader fetching content from: ${url}`);
 		try {
 			try {
 				new URL(url);
@@ -199,27 +183,13 @@ const jinaReaderTool = tool({
 				};
 			}
 			const jinaUrl = new URL(`https://r.jina.ai/${url}`);
-			if (format !== 'text') {
-				jinaUrl.searchParams.set('format', format);
-			}
-			if (include_links) {
-				jinaUrl.searchParams.set('links', 'true');
-			}
-			if (include_images) {
-				jinaUrl.searchParams.set('images', 'true');
-			}
 
 			const controller = new AbortController();
 			const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
 
 			const headers: Record<string, string> = {
-				'Accept': format === 'json' ? 'application/json' : 'text/plain',
+				'X-Base': 'final'
 			};
-
-			const jinaApiKey = process.env.JINA_API_KEY || null;
-			if (jinaApiKey) {
-				headers['Authorization'] = `Bearer ${jinaApiKey}`;
-			}
 
 			const response = await fetch(jinaUrl.toString(), {
 				method: 'GET',
@@ -234,40 +204,265 @@ const jinaReaderTool = tool({
 				throw new Error(`Jina Reader API error (${response.status}): ${errorText}`);
 			}
 
-			const content = await response.text();
-
-			if (format === 'json') {
-				try {
-					const jsonData = JSON.parse(content);
-					return {
-						url,
-						format,
-						success: true,
-						data: jsonData
-					};
-				} catch {
-					return {
-						url,
-						format,
-						success: true,
-						content: content
-					};
-				}
-			}
-
-			return {
-				url,
-				format,
-				success: true,
-				content: content,
-				length: content.length
-			};
+			return await response.text();
 
 		} catch (error: any) {
 			return {
 				url,
 				error: `Failed to fetch content: ${error.message || 'Unknown error'}`,
 				success: false
+			};
+		}
+	},
+});
+
+const ensemblApiTool = tool({
+	description: 'Access Ensembl REST API for genomic data and bioinformatics information',
+	inputSchema: z.object({
+		path: z.string().describe('API endpoint path (without base URL). Examples: xrefs/symbol/Danio_rerio/sox6_201?object_type=transcript, lookup/id/ENSG00000139618, sequence/id/ENSG00000139618, genetree/id/ENSGT00390000003602, ontology/id/GO:0060227, ontology/name/Notch%20signalling%20pathway'),
+	}),
+	execute: async ({ path }: { path: string }) => {
+		console.log(`Ensembl API request to path: ${path}`);
+		try {
+			const cleanPath = path.startsWith('/') ? path.slice(1) : path;
+			const baseUrl = 'https://rest.ensembl.org';
+			const fullUrl = `${baseUrl}/${cleanPath}`;
+
+			const controller = new AbortController();
+			const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
+			const response = await fetch(fullUrl, {
+				method: 'GET',
+				headers: {
+					'Content-Type': 'application/json',
+					'Accept': 'application/json'
+				},
+				signal: controller.signal
+			});
+
+			clearTimeout(timeoutId);
+
+			if (!response.ok) {
+				const errorText = await response.text();
+				return {
+					error: `Ensembl API error (${response.status}): ${errorText}`,
+					path: path,
+					url: fullUrl
+				};
+			}
+
+			return await response.json();
+
+		} catch (error: any) {
+			const message = error?.name === 'AbortError' ? 'Request to Ensembl API timed out' : (error?.message || 'Unknown error');
+			return {
+				error: `Ensembl API request failed: ${message}`,
+				path: path
+			};
+		}
+	},
+});
+
+const semanticScholarSearchTool = tool({
+	description: 'Search Semantic Scholar for academic papers or authors',
+	inputSchema: z.object({
+		query: z.string().describe('Search query text'),
+		type: z.enum(['paper', 'author']).optional().default('paper').describe('Type of search: "paper" for papers or "author" for authors (default: "paper")'),
+		fields: z.string().optional().describe('Comma-separated list of fields to return (e.g., "title,authors,year,abstract")'),
+		limit: z.number().optional().describe('Maximum number of results (default: 10, max: 100 for papers, max: 1000 for authors)'),
+		offset: z.number().optional().describe('Used for pagination to get more results (default: 0)'),
+		year: z.string().optional().describe('Filter by publication year or range (e.g., "2020", "2018-2022")'),
+		venue: z.string().optional().describe('Filter by publication venue (e.g., "Nature", "Science")'),
+		fieldsOfStudy: z.string().optional().describe('Filter by fields of study (e.g., "Computer Science,Biology")'),
+		minCitationCount: z.number().optional().describe('Minimum number of citations required'),
+		publicationTypes: z.string().optional().describe('Filter by publication types (e.g., "Review,JournalArticle")'),
+	}),
+	execute: async ({ query, type = 'paper', fields, limit = 10, offset = 0, year, venue, fieldsOfStudy, minCitationCount, publicationTypes }: {
+		query: string;
+		type?: 'paper' | 'author';
+		fields?: string;
+		limit?: number;
+		offset?: number;
+		year?: string;
+		venue?: string;
+		fieldsOfStudy?: string;
+		minCitationCount?: number;
+		publicationTypes?: string;
+	}) => {
+		console.log(`Semantic Scholar ${type} search: ${query}`);
+		try {
+			const baseUrl = 'https://api.semanticscholar.org/graph/v1';
+			const endpoint = type === 'paper' ? 'paper/search' : 'author/search';
+
+			const params = new URLSearchParams();
+			params.append('query', query);
+
+			// Set appropriate limit based on search type and API constraints
+			const maxLimit = type === 'paper' ? 100 : 1000;
+			params.append('limit', Math.min(limit, maxLimit).toString());
+
+			if (offset > 0) params.append('offset', offset.toString());
+			if (fields) params.append('fields', fields);
+			if (year) params.append('year', year);
+			if (venue) params.append('venue', venue);
+			if (fieldsOfStudy) params.append('fieldsOfStudy', fieldsOfStudy);
+			if (minCitationCount) params.append('minCitationCount', minCitationCount.toString());
+			if (publicationTypes) params.append('publicationTypes', publicationTypes);
+
+			const fullUrl = `${baseUrl}/${endpoint}?${params.toString()}`;
+
+			const controller = new AbortController();
+			const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+			const headers: Record<string, string> = {
+				'Content-Type': 'application/json',
+				'Accept': 'application/json'
+			};
+
+			if (semanticScholarApiKey) {
+				headers['x-api-key'] = semanticScholarApiKey;
+			}
+
+			const response = await fetch(fullUrl, {
+				method: 'GET',
+				headers,
+				signal: controller.signal
+			});
+
+			clearTimeout(timeoutId);
+
+			if (!response.ok) {
+				const errorText = await response.text();
+				console.log(`Semantic Scholar API error: (${response.status}): ${errorText}`);
+				return {
+					error: `Semantic Scholar API error (${response.status}): ${errorText}`,
+					query: query,
+					type: type,
+					url: fullUrl
+				};
+			}
+
+			const data = await response.json();
+			return {
+				query: query,
+				type: type,
+				url: fullUrl,
+				total: data.total || 0,
+				offset: data.offset || 0,
+				next: data.next,
+				results: data.data || data
+			};
+
+		} catch (error: any) {
+			const message = error?.name === 'AbortError' ? 'Request to Semantic Scholar API timed out' : (error?.message || 'Unknown error');
+			console.log(`Semantic Scholar search failed: ${message}`);
+			return {
+				error: `Semantic Scholar search failed: ${message}`,
+				query: query,
+				type: type
+			};
+		}
+	},
+});
+
+const semanticScholarRecommendationsTool = tool({
+	description: 'Get paper recommendations from Semantic Scholar based on example papers',
+	inputSchema: z.object({
+		paperId: z.string().optional().describe('Single paper ID to get recommendations for'),
+		positivePaperIds: z.array(z.string()).optional().describe('Array of paper IDs that represent positive examples (for batch recommendations)'),
+		negativePaperIds: z.array(z.string()).optional().describe('Array of paper IDs that represent negative examples (for batch recommendations)'),
+		fields: z.string().optional().describe('Comma-separated list of fields to return (e.g., "title,authors,year,abstract")'),
+		limit: z.number().optional().describe('Maximum number of recommendations (default: 10, max: 100)'),
+		from: z.enum(['recent', 'all-cs']).optional().describe('Pool of papers to recommend from (default: recent)'),
+	}),
+	execute: async ({ paperId, positivePaperIds, negativePaperIds, fields, limit = 10, from = 'recent' }: {
+		paperId?: string;
+		positivePaperIds?: string[];
+		negativePaperIds?: string[];
+		fields?: string;
+		limit?: number;
+		from?: 'recent' | 'all-cs';
+	}) => {
+		console.log(`Semantic Scholar recommendations for: ${paperId || `${positivePaperIds?.length || 0} positive papers`}`);
+		try {
+			const baseUrl = 'https://api.semanticscholar.org/recommendations/v1';
+			let url: string;
+			let method: string = 'GET';
+			let body: any = null;
+
+			if (paperId) {
+				// Single paper recommendation
+				const params = new URLSearchParams();
+				params.append('limit', Math.min(limit, 100).toString());
+				params.append('from', from);
+				if (fields) params.append('fields', fields);
+
+				url = `${baseUrl}/papers/forpaper/${paperId}?${params.toString()}`;
+			} else if (positivePaperIds && positivePaperIds.length > 0) {
+				// Batch recommendations
+				const params = new URLSearchParams();
+				params.append('limit', Math.min(limit, 100).toString());
+				if (fields) params.append('fields', fields);
+
+				url = `${baseUrl}/papers?${params.toString()}`;
+				method = 'POST';
+				body = {
+					positivePaperIds: positivePaperIds,
+					...(negativePaperIds && { negativePaperIds: negativePaperIds })
+				};
+			} else {
+				return {
+					error: 'Either paperId or positivePaperIds must be provided'
+				};
+			}
+
+			const controller = new AbortController();
+			const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+			const headers: Record<string, string> = {
+				'Content-Type': 'application/json',
+				'Accept': 'application/json'
+			};
+
+			if (semanticScholarApiKey) {
+				headers['x-api-key'] = semanticScholarApiKey;
+			}
+
+			const requestOptions: RequestInit = {
+				method: method,
+				headers,
+				signal: controller.signal
+			};
+
+			if (body) {
+				requestOptions.body = JSON.stringify(body);
+			}
+
+			const response = await fetch(url, requestOptions);
+
+			clearTimeout(timeoutId);
+
+			if (!response.ok) {
+				const errorText = await response.text();
+				console.log(`Semantic Scholar Recommendations API error: (${response.status}): ${errorText}`);
+				return {
+					error: `Semantic Scholar Recommendations API error (${response.status}): ${errorText}`,
+					url: url
+				};
+			}
+
+			const data = await response.json();
+			return {
+				url: url,
+				method: method,
+				recommendations: data.recommendedPapers || data.data || data
+			};
+
+		} catch (error: any) {
+			const message = error?.name === 'AbortError' ? 'Request to Semantic Scholar Recommendations API timed out' : (error?.message || 'Unknown error');
+			console.log(`Semantic Scholar recommendations failed: ${message}`);
+			return {
+				error: `Semantic Scholar recommendations failed: ${message}`
 			};
 		}
 	},
@@ -297,7 +492,7 @@ const SUPPORTED_PROVIDERS = {
 	},
 	github: {
 		name: 'github',
-		baseURL: 'https://models.inference.ai.azure.com',
+		baseURL: 'https://models.github.ai/inference',
 	},
 	openrouter: {
 		name: 'openrouter',
@@ -394,7 +589,6 @@ function parseModelDisplayName(model: string) {
 		} else if (/^a?\d+[bkmae]$/.test(lowerWord)) {
 			return word.toUpperCase();
 		} else {
-			// Capitalize first letter of each word
 			return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
 		}
 	}).join(' ');
@@ -654,10 +848,10 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	let useSearchGrounding = false;
 
 	// Get headers
-	const jinaApiKey = c.req.header('jina_api_key') || (isPasswordAuth ? process.env.JINA_API_KEY : null);
-	const tavilyApiKey = c.req.header('tavily_api_key') || (isPasswordAuth ? process.env.TAVILY_API_KEY : null);
-	const pythonApiKey = c.req.header('python_api_key') || (isPasswordAuth ? process.env.PYTHON_API_KEY : null);
-	const pythonUrl = c.req.header('python_url') || (isPasswordAuth ? process.env.PYTHON_URL : null);
+	tavilyApiKey = c.req.header('tavily_api_key') || (isPasswordAuth ? process.env.TAVILY_API_KEY : null);
+	pythonApiKey = c.req.header('python_api_key') || (isPasswordAuth ? process.env.PYTHON_API_KEY : null);
+	pythonUrl = c.req.header('python_url') || (isPasswordAuth ? process.env.PYTHON_URL : null);
+	semanticScholarApiKey = c.req.header('semantic_scholar_api_key') || (isPasswordAuth ? process.env.SEMANTIC_SCHOLAR_API_KEY : null);
 
 	// Read Vercel context headers
 	const vercelCity = c.req.header('x-vercel-ip-city');
@@ -695,6 +889,19 @@ app.post('/v1/chat/completions', async (c: Context) => {
 
 	let aiSdkTools: Record<string, any> = {};
 	if (tools && Array.isArray(tools)) {
+		// Check if messages contain scientific research keywords
+		const researchKeywords = [
+			'scientific', 'biolog', 'research', 'paper'
+		];
+
+		const messageText = contextMessages.map(msg =>
+			typeof msg.content === 'string' ? msg.content.toLowerCase() : ''
+		).join(' ');
+
+		const containsResearchKeywords = researchKeywords.some(keyword =>
+			messageText.includes(keyword)
+		);
+
 		if (model.startsWith('openai')) {
 			aiSdkTools.web_search_preview = openai.tools.webSearchPreview({});
 		} else if (model.startsWith('xai')) {
@@ -713,7 +920,9 @@ app.post('/v1/chat/completions', async (c: Context) => {
 		tools.forEach((userTool: any) => {
 			if (userTool.type === 'function' && userTool.function) {
 				if (userTool.function.name === 'googleSearch') {
-					useSearchGrounding = true;
+					if (!model.startsWith('google')) {
+						return;
+					}
 					const lastMessage = contextMessages[contextMessages.length - 1];
 					if (lastMessage && typeof lastMessage.content === 'string' && (lastMessage.content.includes('http://') || lastMessage.content.includes('https://'))) {
 						aiSdkTools = {
@@ -789,6 +998,11 @@ app.post('/v1/chat/completions', async (c: Context) => {
 				});
 			}
 		});
+		if (containsResearchKeywords) {
+			aiSdkTools.ensembl_api = ensemblApiTool;
+			aiSdkTools.semantic_scholar_search = semanticScholarSearchTool;
+			aiSdkTools.semantic_scholar_recommendations = semanticScholarRecommendationsTool;
+		}
 	}
 
 	// Parse the model name to determine provider
@@ -969,7 +1183,8 @@ app.post('/v1/chat/completions', async (c: Context) => {
 					...(extra_body?.google?.thinking_config && { thinking_config: extra_body.google.thinking_config })
 				},
 				custom: {
-					reasoning_effort: reasoning_effort || "medium"
+					reasoning_effort: reasoning_effort || "medium",
+					extra_body: extra_body,
 				},
 			};
 
@@ -1125,21 +1340,46 @@ async function fetchProviderModels(providerName: string, apiKey: string) {
 	if (!config) {
 		throw new Error(`Unsupported provider: ${providerName}`);
 	}
+	let modelsEndpoint;
+	if (providerName === 'github') {
+		modelsEndpoint = config.baseURL.replace('inference', 'catalog/models');
+	} else {
+		modelsEndpoint = `${config.baseURL}/models`;
+	}
 
-	const modelsEndpoint = `${config.baseURL}/models`;
-	const response = await fetch(modelsEndpoint, {
-		method: 'GET',
-		headers: {
-			'Authorization': `Bearer ${apiKey}`,
-			'Content-Type': 'application/json',
-		},
-	});
+	let response;
+	if (providerName === 'gemini') {
+		modelsEndpoint = config.baseURL.replace('openai', 'models?key=' + apiKey);
+		response = await fetch(modelsEndpoint);
+	} else {
+		response = await fetch(modelsEndpoint, {
+			method: 'GET',
+			headers: {
+				'Authorization': `Bearer ${apiKey}`,
+				'Content-Type': 'application/json',
+			},
+		});
+	}
 
 	if (!response.ok) {
 		throw new Error(`Provider ${providerName} models API failed: ${response.status} ${response.statusText}`);
 	}
 
 	const data = await response.json();
+	if (providerName === 'gemini') {
+		return {
+			data: data.models.map((model: any) => ({
+				id: model.name,
+				name: model.displayName,
+				description: model.description || '',
+			}))
+		}
+	} else if (providerName === 'github') {
+		return {
+			data: data
+		}
+	}
+
 	return data;
 }
 
@@ -1244,8 +1484,6 @@ async function getModelsResponse(apiKey: string, providerKeys: Record<string, st
 					object: 'model',
 					created: now,
 					owned_by: model.name.split('/')[0],
-					pricing: model.pricing || {},
-					source: 'gateway',
 				})).filter(model => shouldIncludeModel(model));
 			} catch (error: any) {
 				console.error(`Error with gateway API key:`, error);
@@ -1267,7 +1505,6 @@ async function getModelsResponse(apiKey: string, providerKeys: Record<string, st
 		const providerPromise = (async () => {
 			try {
 				let formattedModels: any[] = [];
-				const now = Math.floor(Date.now() / 1000);
 
 				// Check if this provider has a custom model list (doesn't support /models endpoint)
 				if (CUSTOM_MODEL_LISTS[providerName as keyof typeof CUSTOM_MODEL_LISTS]) {
@@ -1276,10 +1513,8 @@ async function getModelsResponse(apiKey: string, providerKeys: Record<string, st
 						id: `${providerName}/${model.id}`,
 						name: model.name,
 						object: 'model',
-						created: now,
+						created: 0,
 						owned_by: providerName,
-						pricing: {},
-						source: providerName,
 					})).filter(model => shouldIncludeModel(model, providerName));
 				} else {
 					// Use regular API call for providers that support /models endpoint
@@ -1287,12 +1522,10 @@ async function getModelsResponse(apiKey: string, providerKeys: Record<string, st
 					formattedModels = (providerModels as any).data?.map((model: any) => ({
 						id: `${providerName}/${model.id.replace('models/', '')}`,
 						name: `${model.name?.replace(' (free)', '') || parseModelDisplayName(model.id)}`,
-						description: model.description || '',
+						description: model.description || model.summary || '',
 						object: 'model',
-						created: model.created || now,
+						created: model.created || 0,
 						owned_by: model.owned_by || providerName,
-						pricing: model.pricing || {},
-						source: providerName,
 					})).filter((model: any) => {
 						if (!shouldIncludeModel(model, providerName)) {
 							return false;
@@ -1350,12 +1583,6 @@ const CUSTOM_MODEL_LISTS = {
 	cohere: [
 		{ id: 'command-a-03-2025', name: 'Command A' },
 		{ id: 'command-a-vision-07-2025', name: 'Cohere A Vision' },
-	],
-	github: [
-		{ id: 'grok-3-mini', name: 'Grok 3 Mini' },
-		{ id: 'grok-3', name: 'Grok 3' },
-		{ id: 'gpt-5', name: 'GPT-5' },
-		{ id: 'gpt-5-chat', name: 'GPT-5 Chat' },
 	],
 };
 

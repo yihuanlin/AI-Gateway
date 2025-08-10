@@ -21,8 +21,8 @@ importers:
         specifier: ^1.0.4
         version: 1.0.4(zod@4.0.17)
       ai:
-        specifier: ^5.0.8
-        version: 5.0.8(zod@4.0.17)
+        specifier: ^5.0.9
+        version: 5.0.9(zod@4.0.17)
       hono:
         specifier: ^4.6.3
         version: 4.9.0
@@ -31,8 +31,8 @@ importers:
         version: 4.0.17
     devDependencies:
       '@types/node':
-        specifier: ^22.17.1
-        version: 22.17.1
+        specifier: ^24.2.1
+        version: 24.2.1
       typescript:
         specifier: ^5.9.2
         version: 5.9.2
@@ -80,11 +80,11 @@ packages:
   '@standard-schema/spec@1.0.0':
     resolution: {integrity: sha512-m2bOd0f2RT9k8QJx1JN85cZYyH1RqFBdlwtkSlf4tBDYLCiiZnv1fIIwacK6cqwXavOydf0NPToMQgpKq+dVlA==}
 
-  '@types/node@22.17.1':
-    resolution: {integrity: sha512-y3tBaz+rjspDTylNjAX37jEC3TETEFGNJL6uQDxwF9/8GLLIjW1rvVHlynyuUKMnMr1Roq8jOv3vkopBjC4/VA==}
+  '@types/node@24.2.1':
+    resolution: {integrity: sha512-DRh5K+ka5eJic8CjH7td8QpYEV6Zo10gfRkjHCO3weqZHWDtAaSTFtl4+VMqOJ4N5jcuhZ9/l+yy8rVgw7BQeQ==}
 
-  ai@5.0.8:
-    resolution: {integrity: sha512-qbnhj046UvG30V1S5WhjBn+RBGEAmi8PSZWqMhRsE3EPxvO5BcePXTZFA23e9MYyWS9zr4Vm8Mv3wQXwLmtIBw==}
+  ai@5.0.9:
+    resolution: {integrity: sha512-l7YdzsCTId7CDNNQ+roC0m4uDMmVIO9NpDC3bI2RxNDss3XpGIvsbHq7bT+IZzMYIqGbHK17HI0eiOOvtwzN6Q==}
     engines: {node: '>=18'}
     peerDependencies:
       zod: ^3.25.76 || ^4
@@ -105,8 +105,8 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
-  undici-types@6.21.0:
-    resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
+  undici-types@7.10.0:
+    resolution: {integrity: sha512-t5Fy/nfn+14LuOc2KNYg75vZqClpAiqscVvMygNnlsHBFpSXdJaYtXMcdNLpl/Qvc3P2cB3s6lOV51nqsFq4ag==}
 
   zod-to-json-schema@3.24.6:
     resolution: {integrity: sha512-h/z3PKvcTcTetyjl1fkj79MHNEjm+HpD6NXheWjzOekY7kV+lwDYnHw+ivHkijnCSMz1yJaWBD9vu/Fcmk+vEg==}
@@ -158,11 +158,11 @@ snapshots:
 
   '@standard-schema/spec@1.0.0': {}
 
-  '@types/node@22.17.1':
+  '@types/node@24.2.1':
     dependencies:
-      undici-types: 6.21.0
+      undici-types: 7.10.0
 
-  ai@5.0.8(zod@4.0.17):
+  ai@5.0.9(zod@4.0.17):
     dependencies:
       '@ai-sdk/gateway': 1.0.4(zod@4.0.17)
       '@ai-sdk/provider': 2.0.0
@@ -178,7 +178,7 @@ snapshots:
 
   typescript@5.9.2: {}
 
-  undici-types@6.21.0: {}
+  undici-types@7.10.0: {}
 
   zod-to-json-schema@3.24.6(zod@4.0.17):
     dependencies:

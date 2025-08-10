@@ -38,7 +38,6 @@ GATEWAY_API_KEY=your-gateway-api-key
 
 # Optional AI Services
 TAVILY_API_KEY=your-tavily-key
-JINA_API_KEY=your-jina-key
 PYTHON_API_KEY=your-python-key
 PYTHON_URL=your-python-execution-url
 
@@ -52,7 +51,7 @@ GROQ_API_KEY=your-groq-key
 ## 🔌 Supported Providers
 
 - **Gateway**: Vercel AI Gateway
-- **Direct Providers**: OpenAI, Anthropic, Google, Groq, Cerebras, etc.
+- **Direct Providers**: Google, Groq, Cerebras, etc.
 - **Tools**: Python execution, web search, content extraction
 
 ## 📊 Architecture
