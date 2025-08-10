@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node --watch dist/index.js",
     "build": "tsc",
-    "build:netlify": "mkdir -p netlify/edge-functions && cp src/index.ts netlify/edge-functions/index.ts && perl -i -pe 's/export default app/export default (request: Request) => app.fetch(request)/' netlify/edge-functions/index.ts",
+    "build:netlify": "mkdir -p netlify/edge-functions && cp src/index.ts netlify/edge-functions/index.ts",
     "start": "node dist/index.js"
   },
   "dependencies": {

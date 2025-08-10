@@ -321,7 +321,7 @@ const SUPPORTED_PROVIDERS = {
 	},
 	poixe: {
 		name: 'poixe',
-		baseURL: 'https://api.poixe.ai/v1',
+		baseURL: 'https://api.poixe.com/v1',
 	},
 };
 
@@ -373,10 +373,7 @@ function parseModelDisplayName(model: string) {
 		baseName = baseName.slice(0, -5);
 	}
 
-	const parts = baseName.split('-');
-	let displayName;
-
-	displayName = baseName.replace(/-/g, ' ');
+	let displayName = baseName.replace(/-/g, ' ');
 	displayName = displayName.split(' ').map(word => {
 		const lowerWord = word.toLowerCase();
 		if (lowerWord === 'deepseek') {
@@ -1182,13 +1179,12 @@ function getProviderKeysFromHeaders(headers: Record<string, string>, isPasswordA
 // Helper function to filter out unwanted models
 function shouldIncludeModel(model: any, providerName?: string) {
 	const modelId = model.id.toLowerCase();
-
 	// Common exclusions for all providers
 	const commonExclusions = ['gemma', 'rerank', 'distill', 'parse', 'embed', 'bge-', 'tts', 'phi', 'live', 'audio', 'lite', 'qwen2', 'qwen-2', 'qwen1', 'qwq', 'qvq', 'gemini-2.0', 'gemini-1', 'learnlm', 'gemini-exp', 'turbo', 'claude-3', 'voxtral', 'pixtral', 'mixtral', 'ministral', '-24', 'moderation', 'saba', '-ocr-'];
 	if (commonExclusions.some(exclusion => modelId.includes(exclusion))) {
 		return false;
 	}
-	if (!modelId.includes('super') && (['nemotron', 'llama'].some(exclusion => modelId.includes(exclusion))) || modelId.includes('nvidia')) {
+	if (!modelId.includes('super') && ((['nemotron', 'llama'].some(exclusion => modelId.includes(exclusion))) || modelId.includes('nvidia'))) {
 		return false;
 	}
 
@@ -1212,19 +1208,16 @@ async function getModelsResponse(apiKey: string, providerKeys: Record<string, st
 	let gatewayApiKeys: string[] = [];
 
 	if (isPasswordAuth) {
-		// For password auth, try to get gateway API keys from environment variables
 		const gatewayKey = process.env.GATEWAY_API_KEY;
 		if (gatewayKey) {
 			gatewayApiKeys = gatewayKey.split(',').map((key: string) => key.trim());
 		}
 	} else {
-		// Use the provided API key for gateway
 		gatewayApiKeys = apiKey.split(',').map((key: string) => key.trim());
 	}
 
 	const fetchPromises: Promise<any[]>[] = [];
 
-	// Add gateway fetch promise if we have keys
 	if (gatewayApiKeys.length > 0) {
 		const randomIndex = Math.floor(Math.random() * gatewayApiKeys.length);
 		const currentApiKey = gatewayApiKeys[randomIndex];
@@ -1358,6 +1351,12 @@ const CUSTOM_MODEL_LISTS = {
 		{ id: 'command-a-03-2025', name: 'Command A' },
 		{ id: 'command-a-vision-07-2025', name: 'Cohere A Vision' },
 	],
+	github: [
+		{ id: 'grok-3-mini', name: 'Grok 3 Mini' },
+		{ id: 'grok-3', name: 'Grok 3' },
+		{ id: 'gpt-5', name: 'GPT-5' },
+		{ id: 'gpt-5-chat', name: 'GPT-5 Chat' },
+	],
 };
 
 // Models endpoint
@@ -1423,4 +1422,4 @@ app.get('/*', (c: Context) => {
 	return c.text('Running')
 })
 
-export default app
+export default (request: Request) => app.fetch(request)
