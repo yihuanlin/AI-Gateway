@@ -1,8 +1,0 @@
-{
-	"routes": [
-		{
-			"src": "/v1/(.*)",
-			"dest": "src/index.ts"
-		}
-	]
-}
