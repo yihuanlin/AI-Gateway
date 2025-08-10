@@ -4,216 +4,64 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { NextRequest, NextResponse } from 'next/server';
 import { openai } from '@ai-sdk/openai';
 import { google } from '@ai-sdk/google';
-import { anthropic } from '@ai-sdk/anthropic';
 import { z } from 'zod';
-const fs = require('fs').promises;
-const pathModule = require('path');
 
-const textEditorTool = anthropic.tools.textEditor_20250429({
-  execute: async ({
-    command,
-    path,
-    file_text,
-    insert_line,
-    new_str,
-    old_str,
-    view_range,
-  }) => {
-    console.log(`Executing text editor command: ${command}, path: ${path}, file_text: ${file_text}, insert_line: ${insert_line}, new_str: ${new_str}, old_str: ${old_str}, view_range: ${view_range}`);
-
+const pythonExecutorTool = tool({
+  description: 'Execute Python code remotely via a secure Python execution API. Installed packages include: numpy, pandas.',
+  inputSchema: z.object({
+    code: z.string().describe('Python code to execute remotely.'),
+  }),
+  execute: async ({ code }: { code: string }) => {
+    console.log(`Executing remote Python code: ${code.substring(0, 100)}...`);
     try {
-      const normalizedPath = pathModule.resolve(path);
-
-      switch (command) {
-        case 'view':
-          try {
-            const stats = await fs.stat(normalizedPath);
-
-            if (stats.isDirectory()) {
-              const files = await fs.readdir(normalizedPath);
-              return files.map((file: string) => `${file}${stats.isDirectory() ? '/' : ''}`).join('\n');
-            } else {
-              let content = await fs.readFile(normalizedPath, 'utf8');
-              if (view_range && Array.isArray(view_range) && view_range.length === 2) {
-                const lines = content.split('\n');
-                const [start, end] = view_range;
-                const startLine = Math.max(0, start - 1);
-                const endLine = end === -1 ? lines.length : Math.min(lines.length, end);
-                content = lines.slice(startLine, endLine).join('\n');
-              }
-
-              const lines = content.split('\n');
-              const numberedContent = lines.map((line: string, index: number) => `${index + 1}: ${line}`).join('\n');
-
-              return numberedContent;
-            }
-          } catch (error) {
-            return `Error reading ${path}: ${error instanceof Error ? error.message : String(error)}`;
-          }
-
-        case 'create':
-          try {
-            const dir = pathModule.dirname(normalizedPath);
-            await fs.mkdir(dir, { recursive: true });
-
-            await fs.writeFile(normalizedPath, file_text || '', 'utf8');
-            return `Successfully created file: ${path}`;
-          } catch (error) {
-            return `Error creating file ${path}: ${error instanceof Error ? error.message : String(error)}`;
-          }
-
-        case 'str_replace':
-          try {
-            const content = await fs.readFile(normalizedPath, 'utf8');
-
-            const occurrences = (content.match(new RegExp((old_str || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
-
-            if (occurrences === 0) {
-              return `Error: Text to replace not found in ${path}`;
-            } else if (occurrences > 1) {
-              return `Error: Found ${occurrences} matches for replacement text. Please provide more specific text to ensure unique replacement.`;
-            }
-
-            const newContent = content.replace(old_str, new_str);
-            await fs.writeFile(normalizedPath, newContent, 'utf8');
-
-            return `Successfully replaced text at exactly one location.`;
-          } catch (error) {
-            return `Error replacing text in ${path}: ${error instanceof Error ? error.message : String(error)}`;
-          }
-
-        case 'insert':
-          try {
-            const content = await fs.readFile(normalizedPath, 'utf8');
-            const lines = content.split('\n');
-
-            const insertIndex = Math.max(0, Math.min(insert_line || 0, lines.length));
-            lines.splice(insertIndex, 0, new_str);
-
-            const newContent = lines.join('\n');
-            await fs.writeFile(normalizedPath, newContent, 'utf8');
-
-            return `Successfully inserted text at line ${insert_line}.`;
-          } catch (error) {
-            return `Error inserting text in ${path}: ${error instanceof Error ? error.message : String(error)}`;
-          }
-
-        default:
-          return `Error: Unknown command '${command}'. Supported commands: view, create, str_replace, insert`;
+      if (!pythonUrl) {
+        return { error: 'python_url header is not set' };
       }
-    } catch (error) {
-      return `Error: ${error instanceof Error ? error.message : String(error)}`;
-    }
-  },
-});
-
-const bashTool = anthropic.tools.bash_20241022({
-  execute: async ({ command, restart }) => {
-    console.log(`Executing bash command: ${command}`);
-    try {
-      const { exec } = require('child_process');
-      const { promisify } = require('util');
-      const execAsync = promisify(exec);
-
-      const dangerousCommands = ['rm -rf', 'sudo', 'chmod 777', 'mkfs', 'dd if=', 'format', 'del /f', 'deltree'];
-      const lowerCommand = command.toLowerCase();
-
-      for (const dangerous of dangerousCommands) {
-        if (lowerCommand.includes(dangerous)) {
-          return {
-            stdout: '',
-            stderr: `Command blocked for security reasons: contains '${dangerous}'`,
-            return_code: 1
-          };
-        }
+      if (!pythonApiKey) {
+        return { error: 'python_api_key header is not set' };
       }
 
-      const options = {
-        timeout: 30000, // 30 second timeout
-        maxBuffer: 1024 * 1024, // 1MB buffer
-        cwd: process.cwd()
-      };
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s
 
-      if (restart) {
+      const response = await fetch(pythonUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/plain',
+          'Authorization': `Bearer ${pythonApiKey}`,
+        },
+        body: code,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      const text = await response.text();
+      let data: any;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        return { error: `Invalid JSON from Python server: ${text.slice(0, 500)}` };
+      }
+
+      if (!response.ok || data.error) {
         return {
-          stdout: 'Session restarted successfully',
-          stderr: '',
-          return_code: 0
+          success: false,
+          error: data?.error || `Python server error (${response.status})`,
+          output: data?.output ?? '',
+          result: data?.result ?? null,
+          status: response.status,
         };
       }
 
-      const { stdout, stderr } = await execAsync(command, options);
-
       return {
-        stdout: stdout || '',
-        stderr: stderr || '',
-        return_code: 0
+        success: true,
+        output: data.output ?? '',
+        ...(data.result !== undefined && { result: data.result }),
       };
-
     } catch (error: any) {
-      return {
-        stdout: '',
-        stderr: error.message || 'Command execution failed',
-        return_code: error.code || 1
-      };
-    }
-  },
-});
-
-const javascriptExecutorTool = tool({
-  description: 'Execute plain JavaScript code. Define a function called "tool" and return its result, or just execute code directly.',
-  inputSchema: z.object({
-    code: z.string().describe('Plain JavaScript code to execute. Define function tool() to return specific result, or code will be evaluated directly.'),
-    context: z.string().optional().describe('Optional context'),
-  }),
-  execute: async ({ code, context }: { code: string; context?: string }) => {
-    console.log(`Executing JavaScript code${context ? ` (${context})` : ''}: ${code.substring(0, 100)}...`);
-    try {
-      // Helper function to handle both sync and async results
-      const handleResult = async (result: any) => {
-        if (result && typeof result.then === 'function') {
-          // It's a Promise, await it
-          return await result;
-        }
-        // It's synchronous, return as-is
-        return result;
-      };
-
-      const func = new Function(`
-        ${code}
-        
-        if (typeof tool === 'function') {
-          return tool();
-        }
-        
-        return undefined;
-      `);
-
-      const result = await handleResult(func());
-
-      if (result !== undefined) {
-        return result;
-      }
-
-      // If no tool function was defined, try to execute the code as an expression
-      try {
-        const exprFunc = new Function(`return (${code})`);
-        const exprResult = await handleResult(exprFunc());
-        return exprResult;
-      } catch {
-        // If it's not a valid expression, just execute it
-        try {
-          const execFunc = new Function(code);
-          const execResult = await handleResult(execFunc());
-          return execResult !== undefined ? execResult : 'Code executed successfully without returning a value';
-        } catch (execError: any) {
-          throw execError;
-        }
-      }
-
-    } catch (error: any) {
-      console.log(`Code execution failed: ${error.message || 'Unknown error occurred'}`);
-      return `Code execution failed: ${error.message || 'Unknown error occurred'}`;
+      const message = error?.name === 'AbortError' ? 'Request to Python server timed out' : (error?.message || 'Unknown error');
+      return { success: false, error: message };
     }
   },
 });
@@ -234,7 +82,6 @@ const tavilySearchTool = tool({
   }) => {
     console.log(`Tavily search executed with query: ${query}, max_results: ${max_results}, include_domains: ${include_domains}, exclude_domains: ${exclude_domains}`);
     try {
-      const tavilyApiKey = process.env.TAVILY_API_KEY;
       if (!tavilyApiKey) {
         return {
           error: 'TAVILY_API_KEY environment variable is not set'
@@ -352,7 +199,6 @@ const jinaReaderTool = tool({
         'User-Agent': 'Vercel-AI-Gateway/1.0'
       };
 
-      const jinaApiKey = process.env.JINA_API_KEY;
       if (jinaApiKey) {
         headers['Authorization'] = `Bearer ${jinaApiKey}`;
       }
@@ -471,6 +317,8 @@ const SUPPORTED_PROVIDERS = {
   },
 };
 
+let jinaApiKey: string | null, tavilyApiKey: string | null, pythonApiKey: string | null, pythonUrl: string | null;
+
 // Helper function to create custom provider
 function createCustomProvider(providerName: string, apiKey: string) {
   const config = SUPPORTED_PROVIDERS[providerName as keyof typeof SUPPORTED_PROVIDERS];
@@ -577,7 +425,7 @@ function toOpenAIResponse(result: GenerateTextResult<any, any>, model: string) {
 
 function toOpenAIStream(result: any, model: string) {
   const encoder = new TextEncoder();
-  const excludedTools = ['code_execution', 'bash', 'javascript_executor', 'tavily_search', 'jina_reader', 'google_search', 'web_search_preview', 'another_tool', 'url_context'];
+  const excludedTools = ['code_execution', 'python_executor', 'tavily_search', 'jina_reader', 'google_search', 'web_search_preview', 'url_context'];
   const stream = new ReadableStream({
     async start(controller) {
       const now = Math.floor(Date.now() / 1000);
@@ -760,6 +608,10 @@ export async function POST(req: NextRequest) {
 
   let gateway;
   let useSearchGrounding = false;
+  jinaApiKey = req.headers.get('jina_api_key');
+  tavilyApiKey = req.headers.get('tavily_api_key');
+  pythonApiKey = req.headers.get('python_api_key');
+  pythonUrl = req.headers.get('python_url');
   const body = await req.json();
   const { model, messages = [], tools, stream, temperature, top_p, top_k, max_tokens, stop_sequences, seed, presence_penalty, frequency_penalty, tool_choice, reasoning_effort, thinking, extra_body } = body;
   // Get provider API keys from request headers
@@ -791,41 +643,33 @@ export async function POST(req: NextRequest) {
   let aiSdkTools: Record<string, any> = {};
   if (tools && Array.isArray(tools)) {
     if (model.startsWith('openai')) {
-      aiSdkTools = {
-        web_search_preview: openai.tools.webSearchPreview({}),
-        jina_reader: jinaReaderTool,
-        javascript_executor: javascriptExecutorTool,
-      };
+      aiSdkTools.web_search_preview = openai.tools.webSearchPreview({});
     } else if (model.startsWith('xai')) {
-      aiSdkTools = {
-        jina_reader: jinaReaderTool,
-        javascript_executor: javascriptExecutorTool,
-      };
-    } else if (model.startsWith('anthropic')) {
-      aiSdkTools = {
-        tavily_search: tavilySearchTool,
-        jina_reader: jinaReaderTool,
-        str_replace_based_edit_tool: textEditorTool,
-        bash: bashTool,
-      };
+      aiSdkTools.python_executor = pythonExecutorTool;
     } else if (!model.startsWith('google')) {
-      aiSdkTools = {
-        tavily_search: tavilySearchTool,
-        jina_reader: jinaReaderTool,
-        javascript_executor: javascriptExecutorTool,
-      };
+      if (tavilyApiKey) {
+        aiSdkTools.tavily_search = tavilySearchTool;
+      }
+    }
+    if (!model.startsWith('google')) {
+      aiSdkTools.jina_reader = jinaReaderTool;
+      if (pythonApiKey && pythonUrl) {
+        aiSdkTools.python_executor = pythonExecutorTool;
+      }
     }
     tools.forEach((userTool: any) => {
       if (userTool.type === 'function' && userTool.function) {
         if (userTool.function.name === 'googleSearch') {
+          useSearchGrounding = true;
           const lastMessage = contextMessages[contextMessages.length - 1];
           if (lastMessage && typeof lastMessage.content === 'string' && (lastMessage.content.includes('http://') || lastMessage.content.includes('https://'))) {
             aiSdkTools = {
               url_context: google.tools.urlContext({}),
-              tavily_search: tavilySearchTool,
               code_execution: google.tools.codeExecution({}),
             };
-            useSearchGrounding = true;
+            if (tavilyApiKey) {
+              aiSdkTools.tavily_search = tavilySearchTool;
+            }
           } else {
             aiSdkTools = {
               google_search: google.tools.googleSearch({}),
