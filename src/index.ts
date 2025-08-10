@@ -1419,4 +1419,8 @@ app.post('/v1/models', async (c: Context) => {
 	}
 })
 
+app.get('/*', (c: Context) => {
+	return c.text('Running')
+})
+
 export default app
