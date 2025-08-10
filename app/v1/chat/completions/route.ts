@@ -6,6 +6,8 @@ import { openai } from '@ai-sdk/openai';
 import { google } from '@ai-sdk/google';
 import { z } from 'zod';
 
+export const runtime = 'edge';
+
 const pythonExecutorTool = tool({
   description: 'Execute Python code remotely via a secure Python execution API. Installed packages include: numpy, pandas.',
   inputSchema: z.object({
@@ -196,7 +198,6 @@ const jinaReaderTool = tool({
 
       const headers: Record<string, string> = {
         'Accept': format === 'json' ? 'application/json' : 'text/plain',
-        'User-Agent': 'Vercel-AI-Gateway/1.0'
       };
 
       if (jinaApiKey) {
@@ -356,7 +357,7 @@ function parseModelName(model: string) {
   };
 }
 
-function getProviderKeys(req: NextRequest, authHeader: string | null) {
+function getProviderKeys(req: NextRequest, authHeader: string | null, isPasswordAuth: boolean = false) {
   const providerKeys: Record<string, string[]> = {};
 
   for (const provider of Object.keys(SUPPORTED_PROVIDERS)) {
@@ -365,11 +366,19 @@ function getProviderKeys(req: NextRequest, authHeader: string | null) {
     if (headerValue) {
       const keys = headerValue.split(',').map((k: string) => k.trim());
       providerKeys[provider] = keys;
+    } else if (isPasswordAuth) {
+      // If password auth is enabled and no header key found, try environment variable
+      const envKeyName = `${provider.toUpperCase()}_API_KEY`;
+      const envValue = process.env[envKeyName];
+      if (envValue) {
+        const keys = envValue.split(',').map(k => k.trim());
+        providerKeys[provider] = keys;
+      }
     }
   }
 
-  // If no provider keys in headers, use auth header for all providers
-  if (Object.keys(providerKeys).length === 0 && authHeader) {
+  // If no provider keys in headers, use auth header for all providers (unless password auth)
+  if (Object.keys(providerKeys).length === 0 && authHeader && !isPasswordAuth) {
     const headerKey = authHeader.split(' ')[1];
     if (headerKey) {
       const keys = headerKey.split(',').map(k => k.trim());
@@ -583,7 +592,6 @@ function toOpenAIStream(result: any, model: string) {
     headers: {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
       ...corsHeaders,
     },
   });
@@ -592,7 +600,10 @@ function toOpenAIStream(result: any, model: string) {
 
 export async function POST(req: NextRequest) {
   const authHeader = req.headers.get('Authorization');
-  const apiKey = authHeader?.split(' ')[1];
+  let apiKey = authHeader?.split(' ')[1];
+
+  const envPassword = process.env.PASSWORD;
+  const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
 
   if (!apiKey) {
     return new NextResponse('Unauthorized', { status: 401, headers: corsHeaders });
@@ -612,10 +623,17 @@ export async function POST(req: NextRequest) {
   tavilyApiKey = req.headers.get('tavily_api_key');
   pythonApiKey = req.headers.get('python_api_key');
   pythonUrl = req.headers.get('python_url');
+
+  if (isPasswordAuth) {
+    if (!jinaApiKey) jinaApiKey = process.env.JINA_API_KEY || null;
+    if (!tavilyApiKey) tavilyApiKey = process.env.TAVILY_API_KEY || null;
+    if (!pythonApiKey) pythonApiKey = process.env.PYTHON_API_KEY || null;
+    if (!pythonUrl) pythonUrl = process.env.PYTHON_URL || null;
+  }
   const body = await req.json();
   const { model, messages = [], tools, stream, temperature, top_p, top_k, max_tokens, stop_sequences, seed, presence_penalty, frequency_penalty, tool_choice, reasoning_effort, thinking, extra_body } = body;
   // Get provider API keys from request headers
-  const providerKeys = getProviderKeys(req, authHeader);
+  const providerKeys = getProviderKeys(req, authHeader, isPasswordAuth);
 
   const vercelCity = req.headers.get('x-vercel-ip-city');
 
@@ -754,8 +772,8 @@ export async function POST(req: NextRequest) {
           model: modelInfo.model
         });
       }
-    } else {
-      // If no specific provider keys, try using auth header keys
+    } else if (!isPasswordAuth) {
+      // If no specific provider keys and not password auth, try using auth header keys
       const apiKeys = apiKey.split(',').map(key => key.trim()) || [];
       for (const key of apiKeys) {
         providersToTry.push({
@@ -768,7 +786,18 @@ export async function POST(req: NextRequest) {
     }
   } else {
     // Use gateway with original model name
-    const apiKeys = apiKey.split(',').map(key => key.trim()) || [];
+    let apiKeys: string[] = [];
+
+    if (isPasswordAuth) {
+      const gatewayKey = process.env.GATEWAY_API_KEY;
+      if (gatewayKey) {
+        apiKeys = gatewayKey.split(',').map(key => key.trim());
+      }
+    } else {
+      // Use the provided API key
+      apiKeys = apiKey.split(',').map(key => key.trim());
+    }
+
     for (const key of apiKeys) {
       providersToTry.push({
         type: 'gateway',
@@ -850,26 +879,26 @@ export async function POST(req: NextRequest) {
           message.content = await Promise.all(
             message.content.map(async (part: any) => {
               if (part.type === 'image_url') {
-                const url = part.image_url.url;
-                if (url.startsWith('data:')) {
-                  const [mediaType, base64Data] = url.split(';base64,');
-                  const mimeType = mediaType.split(':')[1];
-                  const imageBuffer = Buffer.from(base64Data, 'base64');
-                  return {
-                    type: 'image',
-                    image: new Uint8Array(imageBuffer),
-                    mimeType: mimeType,
-                  };
-                } else {
-                  const response = await fetch(url);
-                  const imageBuffer = await response.arrayBuffer();
-                  const mimeType = response.headers.get('content-type');
-                  return {
-                    type: 'image',
-                    image: new Uint8Array(imageBuffer),
-                    mimeType: mimeType,
-                  };
+                return {
+                  type: 'image',
+                  image: part.image_url.url,
+                };
+              } else if (part.type === 'input_file') {
+                const base64Data = part.file_data;
+                let mediaType = 'application/pdf';
+
+                if (base64Data.startsWith('data:')) {
+                  const match = base64Data.match(/^data:([^;]+)/);
+                  if (match) {
+                    mediaType = match[1];
+                  }
                 }
+
+                return {
+                  type: 'file',
+                  data: base64Data,
+                  mediaType: mediaType
+                };
               }
               return part;
             }),
@@ -973,7 +1002,6 @@ export async function POST(req: NextRequest) {
             headers: {
               'Content-Type': 'text/event-stream',
               'Cache-Control': 'no-cache',
-              Connection: 'keep-alive',
               ...corsHeaders,
             },
             status: 499,
@@ -1048,7 +1076,6 @@ export async function POST(req: NextRequest) {
       headers: {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
         ...corsHeaders,
       },
       status: statusCode,

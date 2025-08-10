@@ -168,7 +168,7 @@ async function fetchProviderModels(providerName: string, apiKey: string) {
 }
 
 // Helper function to get provider API keys from request headers
-function getProviderKeysFromHeaders(req: NextRequest) {
+function getProviderKeysFromHeaders(req: NextRequest, isPasswordAuth: boolean = false) {
   const providerKeys: Record<string, string[]> = {};
 
   for (const provider of Object.keys(SUPPORTED_PROVIDERS)) {
@@ -177,6 +177,23 @@ function getProviderKeysFromHeaders(req: NextRequest) {
     if (headerValue) {
       const keys = headerValue.split(',').map((k: string) => k.trim());
       providerKeys[provider] = keys;
+    }
+  }
+
+  // If password auth is enabled, also check for environment variables for all providers
+  if (isPasswordAuth) {
+    for (const provider of Object.keys(SUPPORTED_PROVIDERS)) {
+      const envKeyName = `${provider.toUpperCase()}_API_KEY`;
+      const envValue = process.env[envKeyName];
+      if (envValue) {
+        const keys = envValue.split(',').map(k => k.trim());
+        // If provider already has header keys, merge them; otherwise add env keys
+        if (providerKeys[provider]) {
+          providerKeys[provider].push(...keys);
+        } else {
+          providerKeys[provider] = keys;
+        }
+      }
     }
   }
 
@@ -221,7 +238,11 @@ export async function OPTIONS(req: NextRequest) {
 
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get('Authorization');
-  const apiKey = authHeader?.split(' ')[1];
+  let apiKey = authHeader?.split(' ')[1];
+
+  // Check for password authentication
+  const envPassword = process.env.PASSWORD;
+  const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
 
   if (!apiKey) {
     return new NextResponse('Unauthorized', {
@@ -231,14 +252,18 @@ export async function GET(req: NextRequest) {
   }
 
   // Get provider API keys from headers
-  const providerKeys = getProviderKeysFromHeaders(req);
+  const providerKeys = getProviderKeysFromHeaders(req, isPasswordAuth);
 
-  return await getModelsResponse(apiKey, providerKeys);
+  return await getModelsResponse(apiKey, providerKeys, isPasswordAuth);
 }
 
 export async function POST(req: NextRequest) {
   const authHeader = req.headers.get('Authorization');
-  const apiKey = authHeader?.split(' ')[1];
+  let apiKey = authHeader?.split(' ')[1];
+
+  // Check for password authentication
+  const envPassword = process.env.PASSWORD;
+  const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
 
   if (!apiKey) {
     return new NextResponse('Unauthorized', {
@@ -248,52 +273,66 @@ export async function POST(req: NextRequest) {
   }
 
   // Get provider API keys from headers
-  const providerKeys = getProviderKeysFromHeaders(req);
-  return await getModelsResponse(apiKey, providerKeys);
+  const providerKeys = getProviderKeysFromHeaders(req, isPasswordAuth);
+  return await getModelsResponse(apiKey, providerKeys, isPasswordAuth);
 }
 
-async function getModelsResponse(apiKey: string, providerKeys: Record<string, string[]>) {
+async function getModelsResponse(apiKey: string, providerKeys: Record<string, string[]>, isPasswordAuth: boolean = false) {
   const allModels: any[] = [];
-  const apiKeys = apiKey.split(',').map(key => key.trim()) || [];
+  let gatewayApiKeys: string[] = [];
+
+  if (isPasswordAuth) {
+    // For password auth, try to get gateway API keys from environment variables
+    const gatewayKey = process.env.GATEWAY_API_KEY;
+    if (gatewayKey) {
+      gatewayApiKeys = gatewayKey.split(',').map(key => key.trim());
+    }
+  } else {
+    // Use the provided API key for gateway
+    gatewayApiKeys = apiKey.split(',').map(key => key.trim());
+  }
+
   let lastError: any;
 
-  // Get models from gateway first (default behavior)
-  for (let i = 0; i < apiKeys.length; i++) {
-    const currentApiKey = apiKeys[i];
+  // Get models from gateway first (if we have gateway keys)
+  if (gatewayApiKeys.length > 0) {
+    for (let i = 0; i < gatewayApiKeys.length; i++) {
+      const currentApiKey = gatewayApiKeys[i];
 
-    const gateway = createGateway({
-      apiKey: currentApiKey,
-      baseURL: 'https://ai-gateway.vercel.sh/v1/ai',
-    });
+      const gateway = createGateway({
+        apiKey: currentApiKey,
+        baseURL: 'https://ai-gateway.vercel.sh/v1/ai',
+      });
 
-    try {
-      const availableModels = await gateway.getAvailableModels();
+      try {
+        const availableModels = await gateway.getAvailableModels();
 
-      const now = Math.floor(Date.now() / 1000);
-      const gatewayModels = availableModels.models.map(model => ({
-        id: model.id,
-        name: model.name,
-        description: `${model.pricing
-          ? ` I: $${(Number(model.pricing.input) * 1000000).toFixed(2)}, O: $${(
-            Number(model.pricing.output) * 1000000
-          ).toFixed(2)};`
-          : ''
-          } ${model.description || ''}`,
-        object: 'model',
-        created: now,
-        owned_by: model.name.split('/')[0],
-        pricing: model.pricing || {},
-        source: 'gateway',
-      })).filter(model => shouldIncludeModel(model));
+        const now = Math.floor(Date.now() / 1000);
+        const gatewayModels = availableModels.models.map(model => ({
+          id: model.id,
+          name: model.name,
+          description: `${model.pricing
+            ? ` I: $${(Number(model.pricing.input) * 1000000).toFixed(2)}, O: $${(
+              Number(model.pricing.output) * 1000000
+            ).toFixed(2)};`
+            : ''
+            } ${model.description || ''}`,
+          object: 'model',
+          created: now,
+          owned_by: model.name.split('/')[0],
+          pricing: model.pricing || {},
+          source: 'gateway',
+        })).filter(model => shouldIncludeModel(model));
 
-      allModels.push(...gatewayModels);
-      break; // Successfully got gateway models
-    } catch (error: any) {
-      console.error(`Error with gateway API key ${i + 1}/${apiKeys.length}:`, error);
-      lastError = error;
+        allModels.push(...gatewayModels);
+        break; // Successfully got gateway models
+      } catch (error: any) {
+        console.error(`Error with gateway API key ${i + 1}/${gatewayApiKeys.length}:`, error);
+        lastError = error;
 
-      if (i < apiKeys.length - 1) {
-        continue;
+        if (i < gatewayApiKeys.length - 1) {
+          continue;
+        }
       }
     }
   }
