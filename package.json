@@ -2,6 +2,7 @@
   "name": "vercel-ai-gateway",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "node --watch dist/index.js",
     "build": "tsc",
