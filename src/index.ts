@@ -851,7 +851,11 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	pythonApiKey = c.req.header('python_api_key') || (isPasswordAuth ? process.env.PYTHON_API_KEY : null);
 	pythonUrl = c.req.header('python_url') || (isPasswordAuth ? process.env.PYTHON_URL : null);
 	semanticScholarApiKey = c.req.header('semantic_scholar_api_key') || (isPasswordAuth ? process.env.SEMANTIC_SCHOLAR_API_KEY : null);
-
+	const headersObj: Record<string, string> = {};
+	c.req.raw.headers.forEach((value, key) => {
+		headersObj[key] = value;
+	});
+	console.log(headersObj);
 	const geoHeader = c.req.header('x-nf-geo');
 	let geo: any = null;
 
