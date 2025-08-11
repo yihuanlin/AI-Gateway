@@ -851,22 +851,6 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	pythonApiKey = c.req.header('python_api_key') || (isPasswordAuth ? process.env.PYTHON_API_KEY : null);
 	pythonUrl = c.req.header('python_url') || (isPasswordAuth ? process.env.PYTHON_URL : null);
 	semanticScholarApiKey = c.req.header('semantic_scholar_api_key') || (isPasswordAuth ? process.env.SEMANTIC_SCHOLAR_API_KEY : null);
-	const headersObj: Record<string, string> = {};
-	c.req.raw.headers.forEach((value, key) => {
-		headersObj[key] = value;
-	});
-	console.log(headersObj);
-	const geoHeader = c.req.header('x-nf-geo');
-	let geo: any = null;
-
-	if (geoHeader) {
-		try {
-			geo = JSON.parse(geoHeader);
-			console.log(geo);
-		} catch (e) {
-			geo = null;
-		}
-	}
 
 	const body = await c.req.json();
 	const { model, messages = [], tools, stream, temperature, top_p, top_k, max_tokens, stop_sequences, seed, presence_penalty, frequency_penalty, tool_choice, reasoning_effort, thinking, extra_body } = body;
@@ -878,24 +862,22 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	})
 	const providerKeys = getProviderKeys(headers, authHeader || null, isPasswordAuth);
 
+	const country = c.req.header('x-country') || c.req.header('x-vercel-ip-country') || null;
+	const ip = c.req.header('x-forwarded-for') || null;
 	let contextMessages = messages;
 
-	if (geo) {
-		const ip = c.req.header('x-forwarded-for');
-		const contextInfo = [
-			geo.city && `City: ${geo.city}`,
-			geo.country.name && `Country: ${geo.country.name}`,
-			geo.timezone && `Time: ${new Date().toLocaleString('en-US', { timeZone: geo.timezone })}`,
-			ip && `IP: ${ip}`
-		].filter(Boolean).join(', ');
+	const contextInfo = [
+		country && `Country: ${country}`,
+		`Time: ${new Date().toLocaleString()}`,
+		ip && `IP: ${ip}`
+	].filter(Boolean).join(', ');
 
-		const systemMessage = {
-			role: 'system' as const,
-			content: `Context Information: ${contextInfo}`
-		};
+	const systemMessage = {
+		role: 'system' as const,
+		content: `Context Information: ${contextInfo}`
+	};
 
-		contextMessages = [systemMessage, ...messages];
-	}
+	contextMessages = [systemMessage, ...messages];
 
 	let aiSdkTools: Record<string, any> = {};
 	if (tools && Array.isArray(tools)) {
