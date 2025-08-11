@@ -845,7 +845,6 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	const abortController = new AbortController();
 
 	let gateway;
-	let useSearchGrounding = false;
 
 	// Get headers
 	tavilyApiKey = c.req.header('tavily_api_key') || (isPasswordAuth ? process.env.TAVILY_API_KEY : null);
@@ -853,11 +852,16 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	pythonUrl = c.req.header('python_url') || (isPasswordAuth ? process.env.PYTHON_URL : null);
 	semanticScholarApiKey = c.req.header('semantic_scholar_api_key') || (isPasswordAuth ? process.env.SEMANTIC_SCHOLAR_API_KEY : null);
 
-	// Read Vercel context headers
-	const vercelCity = c.req.header('x-vercel-ip-city');
-	const vercelCountry = c.req.header('x-vercel-ip-country');
-	const vercelTimezone = c.req.header('x-vercel-ip-timezone');
-	const forwardedFor = c.req.header('x-forwarded-for');
+	const geoHeader = c.req.header('x-nf-geo');
+	let geo: any = null;
+
+	if (geoHeader) {
+		try {
+			geo = JSON.parse(geoHeader);
+		} catch (e) {
+			geo = null;
+		}
+	}
 
 	const body = await c.req.json();
 	const { model, messages = [], tools, stream, temperature, top_p, top_k, max_tokens, stop_sequences, seed, presence_penalty, frequency_penalty, tool_choice, reasoning_effort, thinking, extra_body } = body;
@@ -871,12 +875,13 @@ app.post('/v1/chat/completions', async (c: Context) => {
 
 	let contextMessages = messages;
 
-	if (vercelCity) {
+	if (geo) {
+		const ip = c.req.header('x-forwarded-for');
 		const contextInfo = [
-			vercelCity && `City: ${vercelCity}`,
-			vercelCountry && `Country: ${vercelCountry}`,
-			vercelTimezone && `Time: ${new Date().toLocaleString('en-US', { timeZone: vercelTimezone })}`,
-			forwardedFor && `IP: ${forwardedFor}`
+			geo.city && `City: ${geo.city}`,
+			geo.country.name && `Country: ${geo.country.name}`,
+			geo.timezone && `Time: ${new Date().toLocaleString('en-US', { timeZone: geo.timezone })}`,
+			ip && `IP: ${ip}`
 		].filter(Boolean).join(', ');
 
 		const systemMessage = {
@@ -1179,7 +1184,6 @@ app.post('/v1/chat/completions', async (c: Context) => {
 					...(reasoning_effort && { reasoningEffort: reasoning_effort })
 				},
 				google: {
-					useSearchGrounding: useSearchGrounding,
 					...(extra_body?.google?.thinking_config && { thinking_config: extra_body.google.thinking_config })
 				},
 				custom: {
