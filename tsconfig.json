@@ -9,12 +9,7 @@
     "strict": false,
     "skipLibCheck": true,
     "moduleResolution": "node",
-    "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
-    "types": [
-      "node"
-    ],
-    "outDir": "./dist"
+    "allowSyntheticDefaultImports": true
   },
   "exclude": [
     "node_modules",

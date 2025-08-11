@@ -15,6 +15,11 @@ let tavilyApiKey: string | null = null;
 let pythonApiKey: string | null = null;
 let pythonUrl: string | null = null;
 let semanticScholarApiKey: string | null = null;
+let geo: {
+	city?: string;
+	country?: { code: string; name: string };
+	timezone?: string;
+} | null = null;
 
 // CORS middleware
 app.use('*', cors({
@@ -32,6 +37,10 @@ const pythonExecutorTool = tool({
 	execute: async ({ code }: { code: string }) => {
 		console.log(`Executing remote Python code: ${code.substring(0, 100)}...`);
 		try {
+			if (!pythonUrl) {
+				return { error: 'Python URL is not configured' };
+			}
+
 			const controller = new AbortController();
 			const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s
 
@@ -95,6 +104,10 @@ const tavilySearchTool = tool({
 	}) => {
 		console.log(`Tavily search with query: ${query}`);
 		try {
+			if (!tavilyApiKey) {
+				return { error: 'Tavily API key is not configured' };
+			}
+
 			const maxResults = max_results || 5;
 			const includeRawContent = include_raw_content || false;
 			const apiKeys = tavilyApiKey.split(',').map((key: string) => key.trim());
@@ -847,10 +860,10 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	let gateway;
 
 	// Get headers
-	tavilyApiKey = c.req.header('tavily_api_key') || (isPasswordAuth ? process.env.TAVILY_API_KEY : null);
-	pythonApiKey = c.req.header('python_api_key') || (isPasswordAuth ? process.env.PYTHON_API_KEY : null);
-	pythonUrl = c.req.header('python_url') || (isPasswordAuth ? process.env.PYTHON_URL : null);
-	semanticScholarApiKey = c.req.header('semantic_scholar_api_key') || (isPasswordAuth ? process.env.SEMANTIC_SCHOLAR_API_KEY : null);
+	tavilyApiKey = c.req.header('tavily_api_key') || (isPasswordAuth ? process.env.TAVILY_API_KEY || null : null);
+	pythonApiKey = c.req.header('python_api_key') || (isPasswordAuth ? process.env.PYTHON_API_KEY || null : null);
+	pythonUrl = c.req.header('python_url') || (isPasswordAuth ? process.env.PYTHON_URL || null : null);
+	semanticScholarApiKey = c.req.header('semantic_scholar_api_key') || (isPasswordAuth ? process.env.SEMANTIC_SCHOLAR_API_KEY || null : null);
 
 	const body = await c.req.json();
 	const { model, messages = [], tools, stream, temperature, top_p, top_k, max_tokens, stop_sequences, seed, presence_penalty, frequency_penalty, tool_choice, reasoning_effort, thinking, extra_body } = body;
@@ -860,24 +873,30 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	c.req.raw.headers.forEach((value, key) => {
 		headers[key.toLowerCase().replace(/-/g, '_')] = value
 	})
+
+	let contextMessages = messages;
 	const providerKeys = getProviderKeys(headers, authHeader || null, isPasswordAuth);
 
-	const country = c.req.header('x-country') || c.req.header('x-vercel-ip-country') || null;
-	const ip = c.req.header('x-forwarded-for') || null;
-	let contextMessages = messages;
+	if (geo) {
+		const country = geo.country || null;
+		const ip = c.req.header('x-forwarded-for') || null;
+		const now = new Date();
+		const city = geo.city || null;
+		const timezone = geo.timezone || undefined;
 
-	const contextInfo = [
-		country && `Country: ${country}`,
-		`Time: ${new Date().toLocaleString()}`,
-		ip && `IP: ${ip}`
-	].filter(Boolean).join(', ');
+		const contextInfo = [
+			(city && country) ? `Location: ${city} (${country?.name})` : country && `Country: ${country?.name}`,
+			`Time: ${now.toLocaleString(country?.code === 'GB' ? 'en-GB' : 'en-US', { timeZone: timezone }).replace(',', '')} (${now.toLocaleDateString('en-US', { weekday: 'long', timeZone: timezone })})`,
+			ip && `IP: ${ip}`
+		].filter(Boolean).join(', ');
 
-	const systemMessage = {
-		role: 'system' as const,
-		content: `Context Information: ${contextInfo}`
-	};
+		const systemMessage = {
+			role: 'system' as const,
+			content: `Context Information: ${contextInfo}`
+		};
 
-	contextMessages = [systemMessage, ...messages];
+		contextMessages = [systemMessage, ...messages];
+	}
 
 	let aiSdkTools: Record<string, any> = {};
 	if (tools && Array.isArray(tools)) {
@@ -1640,4 +1659,7 @@ app.get('/*', (c: Context) => {
 	return c.text('Running')
 })
 
-export default (request: Request) => app.fetch(request)
+export default (request: Request, context: any) => {
+	geo = context.geo || null;
+	return app.fetch(request);
+}
