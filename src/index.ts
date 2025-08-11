@@ -858,6 +858,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	if (geoHeader) {
 		try {
 			geo = JSON.parse(geoHeader);
+			console.log(geo);
 		} catch (e) {
 			geo = null;
 		}
