@@ -495,6 +495,10 @@ const SUPPORTED_PROVIDERS = {
 		name: 'gemini',
 		baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
 	},
+	chatgpt: {
+		name: 'chatgpt',
+		baseURL: 'https://api.openai.com/v1',
+	},
 	doubao: {
 		name: 'doubao',
 		baseURL: 'https://ark.cn-beijing.volces.com/api/v3',
@@ -1020,50 +1024,67 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	const modelInfo = parseModelName(model);
 	let providersToTry: Array<{ type: 'gateway' | 'custom', name?: string, apiKey: string, model: string }> = [];
 
+	// If the model explicitly names a supported provider (provider/model), target that provider only.
 	if (modelInfo.useCustomProvider && modelInfo.provider) {
-		// Model is in format provider/model, try custom provider first
-		const customProviderKeys = providerKeys[modelInfo.provider];
-		if (customProviderKeys && customProviderKeys.length > 0) {
-			for (const key of customProviderKeys) {
+		// Try to get keys specifically for that provider first
+		let keys: string[] = providerKeys[modelInfo.provider] || [];
+
+		// If no header/provider keys, try falling back to the auth header keys (when not password auth)
+		if (keys.length === 0) {
+			if (!isPasswordAuth && apiKey) {
+				keys = apiKey.split(',').map((k: string) => k.trim()).filter(Boolean);
+			} else if (isPasswordAuth) {
+				const envKeyName = `${modelInfo.provider.toUpperCase()}_API_KEY`;
+				const envVal = process.env[envKeyName];
+				if (envVal) keys = envVal.split(',').map((k: string) => k.trim()).filter(Boolean);
+			}
+		}
+
+		if (keys.length > 0) {
+			const shuffledKeys = keys.slice().sort(() => Math.random() - 0.5);
+			for (const key of shuffledKeys) {
 				providersToTry.push({
 					type: 'custom',
 					name: modelInfo.provider,
 					apiKey: key,
-					model: modelInfo.model
+					model: modelInfo.model,
 				});
 			}
-		} else if (!isPasswordAuth) {
-			// If no specific provider keys and not password auth, try using auth header keys
-			const apiKeys = apiKey.split(',').map((key: string) => key.trim()) || [];
-			for (const key of apiKeys) {
-				providersToTry.push({
-					type: 'custom',
-					name: modelInfo.provider,
-					apiKey: key,
-					model: modelInfo.model
-				});
+		} else {
+			let gatewayKeys: string[] = [];
+			if (isPasswordAuth) {
+				const gatewayKey = process.env.GATEWAY_API_KEY;
+				if (gatewayKey) gatewayKeys = gatewayKey.split(',').map(k => k.trim()).filter(Boolean);
+			} else if (apiKey) {
+				gatewayKeys = apiKey.split(',').map((k: string) => k.trim()).filter(Boolean);
+			}
+
+			if (gatewayKeys.length > 0) {
+				const start = Math.floor(Math.random() * gatewayKeys.length);
+				for (let idx = 0; idx < gatewayKeys.length; idx++) {
+					const k = gatewayKeys[(start + idx) % gatewayKeys.length];
+					providersToTry.push({ type: 'gateway', apiKey: k, model: modelInfo.model });
+				}
 			}
 		}
 	} else {
-		// Use gateway with original model name
-		let apiKeys: string[] = [];
-
+		// Model does not map to a custom provider we handle — use the gateway only.
+		let gatewayKeys: string[] = [];
 		if (isPasswordAuth) {
 			const gatewayKey = process.env.GATEWAY_API_KEY;
-			if (gatewayKey) {
-				apiKeys = gatewayKey.split(',').map(key => key.trim());
-			}
-		} else {
-			// Use the provided API key
-			apiKeys = apiKey.split(',').map((key: string) => key.trim());
+			if (gatewayKey) gatewayKeys = gatewayKey.split(',').map(k => k.trim()).filter(Boolean);
+		} else if (apiKey) {
+			gatewayKeys = apiKey.split(',').map((k: string) => k.trim()).filter(Boolean);
 		}
 
-		for (const key of apiKeys) {
-			providersToTry.push({
-				type: 'gateway',
-				apiKey: key,
-				model: modelInfo.model
-			});
+		// Select a random start index so we don't always use the same gateway key first. If there are multiple keys
+		// we'll try the others only if the first fails.
+		if (gatewayKeys.length > 0) {
+			const start = Math.floor(Math.random() * gatewayKeys.length);
+			for (let idx = 0; idx < gatewayKeys.length; idx++) {
+				const k = gatewayKeys[(start + idx) % gatewayKeys.length];
+				providersToTry.push({ type: 'gateway', apiKey: k, model: modelInfo.model });
+			}
 		}
 	}
 
@@ -1430,7 +1451,12 @@ function getProviderKeysFromHeaders(headers: Record<string, string>, isPasswordA
 function shouldIncludeModel(model: any, providerName?: string) {
 	const modelId = model.id.toLowerCase();
 	// Common exclusions for all providers
-	const commonExclusions = ['gemma', 'rerank', 'distill', 'parse', 'embed', 'bge-', 'tts', 'phi', 'live', 'audio', 'lite', 'qwen2', 'qwen-2', 'qwen1', 'qwq', 'qvq', 'gemini-2.0', 'gemini-1', 'learnlm', 'gemini-exp', 'turbo', 'claude-3', 'voxtral', 'pixtral', 'mixtral', 'ministral', '-24', 'moderation', 'saba', '-ocr-'];
+	const commonExclusions = [
+		'gemma', 'rerank', 'distill', 'parse', 'embed', 'bge-', 'tts', 'phi', 'live', 'audio', 'lite',
+		'qwen2', 'qwen-2', 'qwen1', 'qwq', 'qvq', 'gemini-2.0', 'gemini-1', 'learnlm', 'gemini-exp',
+		'turbo', 'claude-3', 'voxtral', 'pixtral', 'mixtral', 'ministral', '-24', 'moderation', 'saba', '-ocr-',
+		'transcribe', 'image', 'dall', 'davinci', 'babbage'
+	];
 	if (commonExclusions.some(exclusion => modelId.includes(exclusion))) {
 		return false;
 	}
@@ -1444,6 +1470,8 @@ function shouldIncludeModel(model: any, providerName?: string) {
 	} else if (providerName === 'openrouter' && !modelId.includes(':free')) {
 		return false;
 	} else if (providerName !== 'mistral' && modelId.includes('mistral')) {
+		return false;
+	} else if (providerName === 'chatgpt' && (modelId.split('-').length - 1) > 2) {
 		return false;
 	}
 
