@@ -12,6 +12,68 @@ import { z } from 'zod'
 export const config = { runtime: 'edge' };
 const app = new Hono()
 
+const SUPPORTED_PROVIDERS = {
+	cerebras: {
+		name: 'cerebras',
+		baseURL: 'https://api.cerebras.ai/v1',
+	},
+	groq: {
+		name: 'groq',
+		baseURL: 'https://api.groq.com/openai/v1',
+	},
+	gemini: {
+		name: 'gemini',
+		baseURL: 'https://generativelanguage.googleapis.com/v1beta',
+	},
+	chatgpt: {
+		name: 'chatgpt',
+		baseURL: 'https://api.openai.com/v1',
+	},
+	doubao: {
+		name: 'doubao',
+		baseURL: 'https://ark.cn-beijing.volces.com/api/v3',
+	},
+	modelscope: {
+		name: 'modelscope',
+		baseURL: 'https://api-inference.modelscope.cn/v1',
+	},
+	github: {
+		name: 'github',
+		baseURL: 'https://models.github.ai/inference',
+	},
+	openrouter: {
+		name: 'openrouter',
+		baseURL: 'https://openrouter.ai/api/v1',
+	},
+	nvidia: {
+		name: 'nvidia',
+		baseURL: 'https://integrate.api.nvidia.com/v1',
+	},
+	mistral: {
+		name: 'mistral',
+		baseURL: 'https://api.mistral.ai/v1',
+	},
+	cohere: {
+		name: 'cohere',
+		baseURL: 'https://api.cohere.ai/compatibility/v1',
+	},
+	infini: {
+		name: 'infini',
+		baseURL: 'https://cloud.infini-ai.com/maas/v1',
+	},
+	poixe: {
+		name: 'poixe',
+		baseURL: 'https://api.poixe.com/v1',
+	},
+};
+
+// Pre-compiled constants for /v1/chat/completions
+const TEXT_ENCODER = new TextEncoder();
+const EXCLUDED_TOOLS = new Set(['code_execution', 'python_executor', 'tavily_search', 'jina_reader', 'google_search', 'web_search_preview', 'url_context', 'browser_search']);
+const PROVIDER_KEYS = Object.keys(SUPPORTED_PROVIDERS);
+const RESEARCH_KEYWORDS = ['scientific', 'biolog', 'research', 'paper'];
+const MAX_ATTEMPTS = 3;
+
 let tavilyApiKey: string | null = null;
 let pythonApiKey: string | null = null;
 let pythonUrl: string | null = null;
@@ -22,12 +84,234 @@ let geo: {
 	timezone?: string;
 } | null = null;
 
-// CORS middleware
-app.use('*', cors({
-	origin: '*',
-	allowMethods: ['GET', 'POST', 'OPTIONS'],
-	allowHeaders: ['*'],
-}))
+// Helper functions
+function parseModelName(model: string) {
+	const parts = model.split('/');
+	if (parts.length >= 2) {
+		const [providerName, ...modelParts] = parts;
+		const modelName = modelParts.join('/');
+		if (SUPPORTED_PROVIDERS[providerName as keyof typeof SUPPORTED_PROVIDERS]) {
+			return {
+				provider: providerName,
+				model: modelName,
+				useCustomProvider: true
+			};
+		}
+	}
+
+	return {
+		provider: null,
+		model: model,
+		useCustomProvider: false
+	};
+}
+
+function parseModelDisplayName(model: string) {
+	let baseName = model.split('/').pop() || model;
+
+	if (baseName.endsWith(':free')) {
+		baseName = baseName.slice(0, -5);
+	}
+
+	let displayName = baseName.replace(/-/g, ' ');
+	displayName = displayName.split(' ').map(word => {
+		const lowerWord = word.toLowerCase();
+		if (lowerWord === 'deepseek') {
+			return 'DeepSeek';
+		} else if (lowerWord === 'ernie') {
+			return 'ERNIE';
+		} else if (lowerWord === 'mai' || lowerWord === 'ds' || lowerWord === 'r1') {
+			return word.toUpperCase();
+		} else if (lowerWord === 'gpt') {
+			return 'GPT';
+		} else if (lowerWord === 'oss') {
+			return 'OSS';
+		} else if (lowerWord === 'glm') {
+			return 'GLM';
+		} else if (lowerWord.startsWith('o') && lowerWord.length > 1 && /^\d/.test(lowerWord.slice(1))) {
+			// Check if word starts with 'o' followed by a number (OpenAI o models)
+			return word.toLowerCase();
+		} else if (/^a?\d+[bkmae]$/.test(lowerWord)) {
+			return word.toUpperCase();
+		} else {
+			return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+		}
+	}).join(' ');
+
+	// Handle special cases that need to keep hyphens
+	if (displayName === 'MAI DS R1') {
+		displayName = 'MAI-DS-R1';
+	} else if (displayName.startsWith('GPT ')) {
+		// Replace spaces after GPT with hyphens
+		displayName = displayName.replace(/^GPT /, 'GPT-');
+	}
+	return displayName;
+}
+
+async function getProviderKeys(headers: any, authHeader: string | null, isPasswordAuth: boolean = false): Promise<Record<string, string[]>> {
+	const providerKeys: Record<string, string[]> = {};
+	const headerEntries: Record<string, string | null> = {};
+
+	// Batch read all provider headers at once for better performance
+	for (const provider of PROVIDER_KEYS) {
+		const keyName = `${provider}_api_key`;
+		headerEntries[provider] = headers[keyName] || null;
+	}
+
+	for (const provider of PROVIDER_KEYS) {
+		const headerValue = headerEntries[provider];
+		if (headerValue) {
+			providerKeys[provider] = headerValue.split(',').map((k: string) => k.trim());
+		} else if (isPasswordAuth) {
+			// If password auth is enabled and no header key found, try environment variable
+			const envKeyName = `${provider.toUpperCase()}_API_KEY`;
+			const envValue = process.env[envKeyName];
+			if (envValue) {
+				providerKeys[provider] = envValue.split(',').map((k: string) => k.trim());
+			}
+		}
+	}
+
+	// If no provider keys in headers, use auth header for all providers (unless password auth)
+	if (Object.keys(providerKeys).length === 0 && authHeader && !isPasswordAuth) {
+		const headerKey = authHeader.split(' ')[1];
+		if (headerKey) {
+			const keys = headerKey.split(',').map(k => k.trim());
+			for (const provider of PROVIDER_KEYS) {
+				providerKeys[provider] = keys;
+			}
+		}
+	}
+
+	return providerKeys;
+}
+
+async function toOpenAIResponse(result: GenerateTextResult<any, any>, model: string) {
+	const now = Math.floor(Date.now() / 1000);
+	const choices = result.text
+		? [
+			{
+				index: 0,
+				message: {
+					role: 'assistant',
+					content: result.text,
+					reasoning_content: result.reasoningText,
+					tool_calls: result.toolCalls,
+					metadata: {
+						sources: result.sources
+					}
+				},
+				finish_reason: result.finishReason,
+			},
+		]
+		: [];
+
+	return {
+		id: `chatcmpl-${now}`,
+		object: 'chat.completion',
+		created: now,
+		model: model,
+		choices: choices,
+		usage: {
+			prompt_tokens: result.usage.inputTokens,
+			completion_tokens: result.usage.outputTokens,
+			total_tokens: result.usage.totalTokens,
+		},
+	};
+}
+
+async function processMessages(contextMessages: any[]): Promise<any[]> {
+	const processedMessages: any[] = [];
+
+	// First pass: process tool calls and assistant messages
+	for (let mi = 0; mi < contextMessages.length; mi++) {
+		const message = contextMessages[mi];
+		if (message.role === 'tool') continue;
+
+		if (message.role === 'assistant' && message.tool_calls && Array.isArray(message.tool_calls)) {
+			let assistantContent = message.content || '';
+			for (const toolCall of message.tool_calls) {
+				const toolName = toolCall.function.name;
+				const args = toolCall.function.arguments;
+				assistantContent += `\n<tool_use_result>\n  <name>${toolName}</name>\n  <arguments>${args}</arguments>\n`;
+				const toolResultMessage = contextMessages.find((m: any) => m.role === 'tool' && m.tool_call_id === toolCall.id);
+				if (toolResultMessage) {
+					let resultText = toolResultMessage.content;
+					if (typeof resultText === 'string') {
+						try {
+							const parsed = JSON.parse(resultText);
+							if (Array.isArray(parsed) && parsed[0] && parsed[0].text) {
+								resultText = parsed[0].text;
+							}
+						} catch { }
+					}
+					assistantContent += `\n  <result>${resultText}</result>\n</tool_use_result>`;
+				}
+			}
+			processedMessages.push({ role: 'assistant', content: assistantContent });
+		} else {
+			processedMessages.push(message);
+		}
+	}
+
+	// Second pass: process content arrays asynchronously
+	await Promise.all(
+		processedMessages.map(async (message) => {
+			if (message.role === 'user' && Array.isArray(message.content)) {
+				message.content = await Promise.all(
+					message.content.map(async (part: any) => {
+						if (part.type === 'image_url') {
+							return { type: 'image', image: part.image_url.url };
+						} else if (part.type === 'input_file') {
+							const base64Data = part.file_data;
+							let mediaType = 'application/pdf';
+							if (base64Data.startsWith('data:')) {
+								const match = base64Data.match(/^data:([^;]+)/);
+								if (match) mediaType = match[1];
+							}
+							return { type: 'file', data: base64Data, mediaType };
+						}
+						return part;
+					}),
+				);
+			}
+		})
+	);
+
+	return processedMessages;
+}
+
+function createCustomProvider(providerName: string, apiKey: string) {
+	const config = SUPPORTED_PROVIDERS[providerName as keyof typeof SUPPORTED_PROVIDERS];
+	if (!config) {
+		throw new Error(`Unsupported provider: ${providerName}`);
+	}
+	switch (config.name) {
+		case 'chatgpt':
+			return createOpenAI({
+				name: 'custom',
+				apiKey: apiKey,
+				baseURL: config.baseURL,
+			}).responses;
+		case 'gemini':
+			return createGoogleGenerativeAI({
+				apiKey: apiKey,
+				baseURL: config.baseURL,
+			});
+		case 'groq':
+			return createGroq({
+				apiKey: apiKey,
+				baseURL: config.baseURL,
+			});
+		default:
+			return createOpenAICompatible({
+				name: 'custom',
+				apiKey: apiKey,
+				baseURL: config.baseURL,
+				includeUsage: true,
+			});
+	}
+}
 
 // Tools definitions
 const pythonExecutorTool = tool({
@@ -96,13 +380,8 @@ const tavilySearchTool = tool({
 		include_domains: z.array(z.string()).optional().describe('List of domains to include in the search'),
 		exclude_domains: z.array(z.string()).optional().describe('List of domains to exclude from the search'),
 	}),
-	execute: async ({ query, max_results, include_domains, exclude_domains, include_raw_content }: {
-		query: string;
-		max_results?: number;
-		include_domains?: string[];
-		exclude_domains?: string[];
-		include_raw_content?: boolean;
-	}) => {
+	execute: async (params) => {
+		const { query, max_results, include_domains, exclude_domains, include_raw_content } = params;
 		console.log(`Tavily search with query: ${query}`);
 		try {
 			if (!tavilyApiKey) {
@@ -291,18 +570,8 @@ const semanticScholarSearchTool = tool({
 		minCitationCount: z.number().optional().describe('Minimum number of citations required'),
 		publicationTypes: z.string().optional().describe('Filter by publication types (e.g., "Review,JournalArticle")'),
 	}),
-	execute: async ({ query, type = 'paper', fields, limit = 10, offset = 0, year, venue, fieldsOfStudy, minCitationCount, publicationTypes }: {
-		query: string;
-		type?: 'paper' | 'author';
-		fields?: string;
-		limit?: number;
-		offset?: number;
-		year?: string;
-		venue?: string;
-		fieldsOfStudy?: string;
-		minCitationCount?: number;
-		publicationTypes?: string;
-	}) => {
+	execute: async (params) => {
+		const { query, type = 'paper', fields, limit = 10, offset = 0, year, venue, fieldsOfStudy, minCitationCount, publicationTypes } = params;
 		console.log(`Semantic Scholar ${type} search: ${query}`);
 		try {
 			const baseUrl = 'https://api.semanticscholar.org/graph/v1';
@@ -356,7 +625,7 @@ const semanticScholarSearchTool = tool({
 				};
 			}
 
-			const data = await response.json();
+			const data = await response.json() as any;
 			return {
 				query: query,
 				type: type,
@@ -389,14 +658,8 @@ const semanticScholarRecommendationsTool = tool({
 		limit: z.number().optional().describe('Maximum number of recommendations (default: 10, max: 100)'),
 		from: z.enum(['recent', 'all-cs']).optional().describe('Pool of papers to recommend from (default: recent)'),
 	}),
-	execute: async ({ paperId, positivePaperIds, negativePaperIds, fields, limit = 10, from = 'recent' }: {
-		paperId?: string;
-		positivePaperIds?: string[];
-		negativePaperIds?: string[];
-		fields?: string;
-		limit?: number;
-		from?: 'recent' | 'all-cs';
-	}) => {
+	execute: async (params) => {
+		const { paperId, positivePaperIds, negativePaperIds, fields, limit = 10, from = 'recent' } = params;
 		console.log(`Semantic Scholar recommendations for: ${paperId || `${positivePaperIds?.length || 0} positive papers`}`);
 		try {
 			const baseUrl = 'https://api.semanticscholar.org/recommendations/v1';
@@ -465,7 +728,7 @@ const semanticScholarRecommendationsTool = tool({
 				};
 			}
 
-			const data = await response.json();
+			const data = await response.json() as any;
 			return {
 				url: url,
 				method: method,
@@ -482,235 +745,12 @@ const semanticScholarRecommendationsTool = tool({
 	},
 });
 
-// Supported custom providers configuration
-const SUPPORTED_PROVIDERS = {
-	cerebras: {
-		name: 'cerebras',
-		baseURL: 'https://api.cerebras.ai/v1',
-	},
-	groq: {
-		name: 'groq',
-		baseURL: 'https://api.groq.com/openai/v1',
-	},
-	gemini: {
-		name: 'gemini',
-		baseURL: 'https://generativelanguage.googleapis.com/v1beta',
-	},
-	chatgpt: {
-		name: 'chatgpt',
-		baseURL: 'https://api.openai.com/v1',
-	},
-	doubao: {
-		name: 'doubao',
-		baseURL: 'https://ark.cn-beijing.volces.com/api/v3',
-	},
-	modelscope: {
-		name: 'modelscope',
-		baseURL: 'https://api-inference.modelscope.cn/v1',
-	},
-	github: {
-		name: 'github',
-		baseURL: 'https://models.github.ai/inference',
-	},
-	openrouter: {
-		name: 'openrouter',
-		baseURL: 'https://openrouter.ai/api/v1',
-	},
-	nvidia: {
-		name: 'nvidia',
-		baseURL: 'https://integrate.api.nvidia.com/v1',
-	},
-	mistral: {
-		name: 'mistral',
-		baseURL: 'https://api.mistral.ai/v1',
-	},
-	cohere: {
-		name: 'cohere',
-		baseURL: 'https://api.cohere.ai/compatibility/v1',
-	},
-	infini: {
-		name: 'infini',
-		baseURL: 'https://cloud.infini-ai.com/maas/v1',
-	},
-	poixe: {
-		name: 'poixe',
-		baseURL: 'https://api.poixe.com/v1',
-	},
-};
-
-// Pre-compiled constants for performance
-const PROVIDER_KEYS = Object.keys(SUPPORTED_PROVIDERS);
-
-// Helper function to create custom provider
-function createCustomProvider(providerName: string, apiKey: string) {
-	const config = SUPPORTED_PROVIDERS[providerName as keyof typeof SUPPORTED_PROVIDERS];
-	if (!config) {
-		throw new Error(`Unsupported provider: ${providerName}`);
-	}
-
-	switch (config.name) {
-		case 'chatgpt':
-			return createOpenAI({
-				name: 'custom',
-				apiKey: apiKey,
-				baseURL: config.baseURL,
-			}).responses;
-		case 'gemini':
-			return createGoogleGenerativeAI({
-				apiKey: apiKey,
-				baseURL: config.baseURL,
-			});
-		case 'groq':
-			return createGroq({
-				apiKey: apiKey,
-				baseURL: config.baseURL,
-			});
-		default:
-			return createOpenAICompatible({
-				name: 'custom',
-				apiKey: apiKey,
-				baseURL: config.baseURL,
-				includeUsage: true,
-			});
-	}
-}
-
-// Helper function to parse model and determine provider
-function parseModelName(model: string) {
-	const parts = model.split('/');
-	if (parts.length >= 2) {
-		const [providerName, ...modelParts] = parts;
-		const modelName = modelParts.join('/');
-		if (SUPPORTED_PROVIDERS[providerName as keyof typeof SUPPORTED_PROVIDERS]) {
-			return {
-				provider: providerName,
-				model: modelName,
-				useCustomProvider: true
-			};
-		}
-	}
-
-	return {
-		provider: null,
-		model: model,
-		useCustomProvider: false
-	};
-}
-
-// Helper function to parse model name for display
-function parseModelDisplayName(model: string) {
-	let baseName = model.split('/').pop() || model;
-
-	if (baseName.endsWith(':free')) {
-		baseName = baseName.slice(0, -5);
-	}
-
-	let displayName = baseName.replace(/-/g, ' ');
-	displayName = displayName.split(' ').map(word => {
-		const lowerWord = word.toLowerCase();
-		if (lowerWord === 'deepseek') {
-			return 'DeepSeek';
-		} else if (lowerWord === 'ernie') {
-			return 'ERNIE';
-		} else if (lowerWord === 'mai' || lowerWord === 'ds' || lowerWord === 'r1') {
-			return word.toUpperCase();
-		} else if (lowerWord === 'gpt') {
-			return 'GPT';
-		} else if (lowerWord === 'oss') {
-			return 'OSS';
-		} else if (lowerWord === 'glm') {
-			return 'GLM';
-		} else if (lowerWord.startsWith('o') && lowerWord.length > 1 && /^\d/.test(lowerWord.slice(1))) {
-			// Check if word starts with 'o' followed by a number (OpenAI o models)
-			return word.toLowerCase();
-		} else if (/^a?\d+[bkmae]$/.test(lowerWord)) {
-			return word.toUpperCase();
-		} else {
-			return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
-		}
-	}).join(' ');
-
-	// Handle special cases that need to keep hyphens
-	if (displayName === 'MAI DS R1') {
-		displayName = 'MAI-DS-R1';
-	} else if (displayName.startsWith('GPT ')) {
-		// Replace spaces after GPT with hyphens
-		displayName = displayName.replace(/^GPT /, 'GPT-');
-	}
-	return displayName;
-}
-
-function getProviderKeys(headers: any, authHeader: string | null, isPasswordAuth: boolean = false) {
-	const providerKeys: Record<string, string[]> = {};
-	const headerEntries: Record<string, string | null> = {};
-
-	// Read all provider headers at once
-	for (const provider of PROVIDER_KEYS) {
-		const keyName = `${provider}_api_key`;
-		headerEntries[provider] = headers[keyName] || null;
-	}
-
-	for (const provider of PROVIDER_KEYS) {
-		const headerValue = headerEntries[provider];
-		if (headerValue) {
-			providerKeys[provider] = headerValue.split(',').map((k: string) => k.trim());
-		} else if (isPasswordAuth) {
-			// If password auth is enabled and no header key found, try environment variable
-			const envKeyName = `${provider.toUpperCase()}_API_KEY`;
-			const envValue = process.env[envKeyName];
-			if (envValue) {
-				providerKeys[provider] = envValue.split(',').map((k: string) => k.trim());
-			}
-		}
-	}
-
-	// If no provider keys in headers, use auth header for all providers (unless password auth)
-	if (Object.keys(providerKeys).length === 0 && authHeader && !isPasswordAuth) {
-		const headerKey = authHeader.split(' ')[1];
-		if (headerKey) {
-			const keys = headerKey.split(',').map(k => k.trim());
-			for (const provider of PROVIDER_KEYS) {
-				providerKeys[provider] = keys;
-			}
-		}
-	}
-
-	return providerKeys;
-}
-
-function toOpenAIResponse(result: GenerateTextResult<any, any>, model: string) {
-	const now = Math.floor(Date.now() / 1000);
-	const choices = result.text
-		? [
-			{
-				index: 0,
-				message: {
-					role: 'assistant',
-					content: result.text,
-					reasoning_content: result.reasoningText,
-					tool_calls: result.toolCalls,
-					metadata: {
-						sources: result.sources
-					}
-				},
-				finish_reason: result.finishReason,
-			},
-		]
-		: [];
-
-	return {
-		id: `chatcmpl-${now}`,
-		object: 'chat.completion',
-		created: now,
-		model: model,
-		choices: choices,
-		usage: {
-			prompt_tokens: result.usage.inputTokens,
-			completion_tokens: result.usage.outputTokens,
-			total_tokens: result.usage.totalTokens,
-		},
-	};
-}
+// CORS middleware
+app.use('*', cors({
+	origin: '*',
+	allowMethods: ['GET', 'POST', 'OPTIONS'],
+	allowHeaders: ['*'],
+}))
 
 // Chat completions endpoint
 app.post('/v1/chat/completions', async (c: Context) => {
@@ -743,29 +783,30 @@ app.post('/v1/chat/completions', async (c: Context) => {
 		headers[key.toLowerCase().replace(/-/g, '_')] = value
 	})
 
+	// Optimize context message creation
 	let contextMessages = messages;
-	const providerKeys = getProviderKeys(headers, authHeader || null, isPasswordAuth);
-
 	if (geo) {
-		const country = geo.country || null;
-		const ip = c.req.header('x-forwarded-for') || null;
+		const { country, city, timezone } = geo;
+		const ip = c.req.header('x-forwarded-for');
 		const now = new Date();
-		const city = geo.city || null;
-		const timezone = geo.timezone || undefined;
 
-		const contextInfo = [
-			(city && country) ? `Location: ${city} (${country?.name})` : country && `Country: ${country?.name}`,
+		const contextParts = [
+			(city && country) ? `Location: ${city} (${country.name})` : country && `Country: ${country.name}`,
 			`Time: ${now.toLocaleString(country?.code === 'GB' ? 'en-GB' : 'en-US', { timeZone: timezone }).replace(',', '')} (${now.toLocaleDateString('en-US', { weekday: 'long', timeZone: timezone })})`,
 			ip && `IP: ${ip}`
-		].filter(Boolean).join(', ');
+		].filter(Boolean);
 
-		const systemMessage = {
-			role: 'system' as const,
-			content: `Context Information: ${contextInfo}`
-		};
-
-		contextMessages = [systemMessage, ...messages];
+		if (contextParts.length > 0) {
+			const systemMessage = {
+				role: 'system' as const,
+				content: `Context Information: ${contextParts.join(', ')}`
+			};
+			contextMessages = [systemMessage, ...messages];
+		}
 	}
+
+	// Use async provider keys function for better performance
+	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
 
 	let aiSdkTools: Record<string, any> = {};
 	if (tools && Array.isArray(tools)) {
@@ -832,15 +873,11 @@ app.post('/v1/chat/completions', async (c: Context) => {
 
 		const googleIncompatible = (!['google', 'gemini'].some(prefix => model.startsWith(prefix)) || Object.keys(aiSdkTools).length > 0);
 
-		const researchKeywords = [
-			'scientific', 'biolog', 'research', 'paper'
-		];
-
 		const messageText = contextMessages.map((msg: any) =>
 			typeof msg.content === 'string' ? msg.content.toLowerCase() : ''
 		).join(' ');
 
-		const containsResearchKeywords = researchKeywords.some(keyword =>
+		const containsResearchKeywords = RESEARCH_KEYWORDS.some(keyword =>
 			messageText.includes(keyword)
 		);
 
@@ -917,7 +954,9 @@ app.post('/v1/chat/completions', async (c: Context) => {
 				const start = Math.floor(Math.random() * gatewayKeys.length);
 				for (let idx = 0; idx < gatewayKeys.length; idx++) {
 					const k = gatewayKeys[(start + idx) % gatewayKeys.length];
-					providersToTry.push({ type: 'gateway', apiKey: k, model: modelInfo.model });
+					if (k) {
+						providersToTry.push({ type: 'gateway', apiKey: k, model: modelInfo.model });
+					}
 				}
 			}
 		}
@@ -931,69 +970,19 @@ app.post('/v1/chat/completions', async (c: Context) => {
 			gatewayKeys = apiKey.split(',').map((k: string) => k.trim()).filter(Boolean);
 		}
 
-		// Select a random start index so we don't always use the same gateway key first. If there are multiple keys
-		// we'll try the others only if the first fails.
 		if (gatewayKeys.length > 0) {
 			const start = Math.floor(Math.random() * gatewayKeys.length);
 			for (let idx = 0; idx < gatewayKeys.length; idx++) {
 				const k = gatewayKeys[(start + idx) % gatewayKeys.length];
-				providersToTry.push({ type: 'gateway', apiKey: k, model: modelInfo.model });
-			}
-		}
-	}
-
-	// Preprocess messages once (remove tool roles and flatten tool calls) so we can reuse across retries
-	const processedMessages: any[] = [];
-	for (let mi = 0; mi < contextMessages.length; mi++) {
-		const message = contextMessages[mi];
-		if (message.role === 'tool') continue;
-		if (message.role === 'assistant' && message.tool_calls && Array.isArray(message.tool_calls)) {
-			let assistantContent = message.content || '';
-			for (const toolCall of message.tool_calls) {
-				const toolName = toolCall.function.name;
-				const args = toolCall.function.arguments;
-				assistantContent += `\n<tool_use_result>\n  <name>${toolName}</name>\n  <arguments>${args}</arguments>\n`;
-				const toolResultMessage = contextMessages.find((m: any) => m.role === 'tool' && m.tool_call_id === toolCall.id);
-				if (toolResultMessage) {
-					let resultText = toolResultMessage.content;
-					if (typeof resultText === 'string') {
-						try {
-							const parsed = JSON.parse(resultText);
-							if (Array.isArray(parsed) && parsed[0] && parsed[0].text) {
-								resultText = parsed[0].text;
-							}
-						} catch { }
-					}
-					assistantContent += `\n  <result>${resultText}</result>\n</tool_use_result>`;
+				if (k) {
+					providersToTry.push({ type: 'gateway', apiKey: k, model: modelInfo.model });
 				}
 			}
-			processedMessages.push({ role: 'assistant', content: assistantContent });
-		} else {
-			processedMessages.push(message);
-		}
-	}
-	for (const message of processedMessages) {
-		if (message.role === 'user' && Array.isArray(message.content)) {
-			message.content = await Promise.all(
-				message.content.map(async (part: any) => {
-					if (part.type === 'image_url') {
-						return { type: 'image', image: part.image_url.url };
-					} else if (part.type === 'input_file') {
-						const base64Data = part.file_data;
-						let mediaType = 'application/pdf';
-						if (base64Data.startsWith('data:')) {
-							const match = base64Data.match(/^data:([^;]+)/);
-							if (match) mediaType = match[1];
-						}
-						return { type: 'file', data: base64Data, mediaType };
-					}
-					return part;
-				}),
-			);
 		}
 	}
 
-	// Provider options are constant across retries
+	const processedMessages = await processMessages(contextMessages);
+
 	const providerOptionsHeader = c.req.header('provider_options');
 	const providerOptions = providerOptionsHeader ? JSON.parse(providerOptionsHeader) : {
 		anthropic: {
@@ -1055,23 +1044,25 @@ app.post('/v1/chat/completions', async (c: Context) => {
 		abortSignal: abortController.signal,
 		providerOptions,
 		stopWhen: [stepCountIs(20)],
+		onError: () => { }
 	}) as any;
 
 	// If streaming, handle retries within a single ReadableStream so we can switch keys on error mid-stream
 	if (stream) {
-		const TEXT_ENCODER = new TextEncoder();
-		const EXCLUDED_TOOLS = new Set(['code_execution', 'python_executor', 'tavily_search', 'jina_reader', 'google_search', 'web_search_preview', 'url_context', 'browser_search']);
 		const streamResponse = new ReadableStream({
 			async start(controller) {
 				const now = Math.floor(Date.now() / 1000);
 				const chunkId = `chatcmpl-${now}`;
 				const baseChunk = { id: chunkId, object: 'chat.completion.chunk', created: now, model } as any;
-
+				const maxAttempts = Math.min(providersToTry.length, MAX_ATTEMPTS);
+				let attemptsTried = 0;
 				let lastStreamError: any = null;
-				for (let i = 0; i < providersToTry.length; i++) {
+				for (let i = 0; i < maxAttempts; i++) {
 					if (abortController.signal.aborted) break;
 					const attempt = providersToTry[i];
+					if (!attempt) continue;
 					try {
+						attemptsTried++;
 						const gw = getGatewayForAttempt(attempt);
 						const commonOptions = buildCommonOptions(gw, attempt);
 
@@ -1083,7 +1074,13 @@ app.post('/v1/chat/completions', async (c: Context) => {
 							let chunk: any;
 							switch (part.type) {
 								case 'error':
-									throw new Error((part as any)?.error?.message || 'Streaming provider error');
+									if ([429, 401].includes((part as any)?.error?.statusCode)) {
+										throw new Error((part as any)?.error || 'Streaming provider error');
+									} else {
+										chunk = { ...baseChunk, choices: [{ index: 0, delta: { error: part.error }, finish_reason: null }] };
+										controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+									}
+									break;
 								case 'reasoning-delta':
 									chunk = { ...baseChunk, choices: [{ index: 0, delta: { reasoning_content: part.text }, finish_reason: null }] };
 									controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
@@ -1138,7 +1135,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 				// If all attempts failed
 				const statusCode = lastStreamError?.statusCode || 500;
 				const errMsg = lastStreamError?.message || 'An unknown error occurred';
-				const errorPayload = { error: { message: `All ${providersToTry.length} provider(s) failed. Last error: ${errMsg}`, type: lastStreamError?.type, statusCode } };
+				const errorPayload = { error: { message: `All ${attemptsTried} attempt(s) failed. Last error: ${errMsg}`, type: lastStreamError?.type, statusCode } };
 				const errorChunk = { ...baseChunk, choices: [{ index: 0, delta: { content: JSON.stringify(errorPayload) }, finish_reason: 'stop' }] };
 				controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(errorChunk)}\n\n`));
 				controller.enqueue(TEXT_ENCODER.encode('data: [DONE]\n\n'));
@@ -1150,29 +1147,31 @@ app.post('/v1/chat/completions', async (c: Context) => {
 
 	// Non-streaming: try providers sequentially and return first success
 	let lastError: any;
-	for (let i = 0; i < providersToTry.length; i++) {
+	const maxAttempts = Math.min(providersToTry.length, MAX_ATTEMPTS);
+	let attemptsTried = 0;
+	for (let i = 0; i < maxAttempts; i++) {
 		const provider = providersToTry[i];
+		if (!provider) continue;
 		try {
+			attemptsTried++;
 			const gw = getGatewayForAttempt(provider);
 			const commonOptions = buildCommonOptions(gw, provider);
 
 			const result = await generateText(commonOptions);
-			const openAIResponse = toOpenAIResponse(result, model);
+			const openAIResponse = await toOpenAIResponse(result, model);
 			return c.json(openAIResponse);
 		} catch (error: any) {
-			console.error(`Error with provider ${i + 1}/${providersToTry.length} (${provider.type}${provider.name ? ':' + provider.name : ''}):`, error);
+			console.error(`Error with provider ${i + 1}/${providersToTry.length} (${provider.type}${provider.name ? ':' + provider.name : ''}):`, error.message || error);
 			lastError = error;
 
 			if (error.name === 'AbortError' || abortController.signal.aborted) {
 				const abortPayload = { error: { message: 'Request was aborted by the user', type: 'request_aborted', statusCode: 499 } };
 				return c.json(abortPayload, 499 as any);
 			}
-			if (i < providersToTry.length - 1) continue;
+			if (i < maxAttempts - 1) continue;
 			break;
 		}
 	}
-
-	console.error('All providers failed. Last error:', lastError);
 
 	let errorMessage = lastError.message || 'An unknown error occurred';
 	let errorType = lastError.type;
@@ -1192,365 +1191,311 @@ app.post('/v1/chat/completions', async (c: Context) => {
 
 	const errorPayload = {
 		error: {
-			message: `All ${providersToTry.length} provider(s) failed. Last error: ${errorMessage}`,
+			message: `All ${attemptsTried} attempt(s) failed. Last error: ${errorMessage}`,
 			type: errorType,
 			statusCode: statusCode,
 		},
 	};
+	return c.json(errorPayload, statusCode);
+})
 
-	if (stream) {
-		const encoder = new TextEncoder();
-		const errorChunk = {
-			id: `chatcmpl-error-${Date.now()}`,
-			object: 'chat.completion.chunk',
-			created: Math.floor(Date.now() / 1000),
-			model: model || 'unknown',
-			choices: [
-				{
-					index: 0,
-					delta: { content: JSON.stringify(errorPayload) },
-					finish_reason: 'stop',
+// Shared models handler function
+async function handleModelsRequest(c: Context) {
+	// Helper function to fetch models from custom provider
+	async function fetchProviderModels(providerName: string, apiKey: string) {
+		const config = SUPPORTED_PROVIDERS[providerName as keyof typeof SUPPORTED_PROVIDERS];
+		if (!config) {
+			throw new Error(`Unsupported provider: ${providerName}`);
+		}
+		let modelsEndpoint;
+		if (providerName === 'github') {
+			modelsEndpoint = config.baseURL.replace('inference', 'catalog/models');
+		} else {
+			modelsEndpoint = `${config.baseURL}/models`;
+		}
+
+		let response;
+		if (providerName === 'gemini') {
+			modelsEndpoint = modelsEndpoint + '?key=' + apiKey;
+			response = await fetch(modelsEndpoint);
+		} else {
+			response = await fetch(modelsEndpoint, {
+				method: 'GET',
+				headers: {
+					'Authorization': `Bearer ${apiKey}`,
+					'Content-Type': 'application/json',
 				},
-			],
-		};
-		const errorStream = new ReadableStream({
-			start(controller) {
-				controller.enqueue(
-					encoder.encode(`data: ${JSON.stringify(errorChunk)}\n\n`)
-				);
-				controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-				controller.close();
-			},
-		});
-		return new Response(errorStream, {
-			headers: {
-				'Content-Type': 'text/event-stream',
-				'Cache-Control': 'no-cache',
-			},
-			status: statusCode,
-		});
-	} else {
-		return c.json(errorPayload, statusCode);
-	}
-})
-
-// Helper function to fetch models from custom provider
-async function fetchProviderModels(providerName: string, apiKey: string) {
-	const config = SUPPORTED_PROVIDERS[providerName as keyof typeof SUPPORTED_PROVIDERS];
-	if (!config) {
-		throw new Error(`Unsupported provider: ${providerName}`);
-	}
-	let modelsEndpoint;
-	if (providerName === 'github') {
-		modelsEndpoint = config.baseURL.replace('inference', 'catalog/models');
-	} else {
-		modelsEndpoint = `${config.baseURL}/models`;
-	}
-
-	let response;
-	if (providerName === 'gemini') {
-		modelsEndpoint = modelsEndpoint + '?key=' + apiKey;
-		response = await fetch(modelsEndpoint);
-	} else {
-		response = await fetch(modelsEndpoint, {
-			method: 'GET',
-			headers: {
-				'Authorization': `Bearer ${apiKey}`,
-				'Content-Type': 'application/json',
-			},
-		});
-	}
-
-	if (!response.ok) {
-		throw new Error(`Provider ${providerName} models API failed: ${response.status} ${response.statusText}`);
-	}
-
-	const data = await response.json();
-	if (providerName === 'gemini') {
-		return {
-			data: data.models.map((model: any) => ({
-				id: model.name,
-				name: model.displayName,
-				description: model.description || '',
-			}))
+			});
 		}
-	} else if (providerName === 'github') {
-		return {
-			data: data
+
+		if (!response.ok) {
+			throw new Error(`Provider ${providerName} models API failed: ${response.status} ${response.statusText}`);
 		}
+
+		const data = await response.json() as any;
+		if (providerName === 'gemini') {
+			return {
+				data: data.models.map((model: any) => ({
+					id: model.name,
+					name: model.displayName,
+					description: model.description || '',
+				}))
+			}
+		} else if (providerName === 'github') {
+			return {
+				data: data
+			}
+		}
+
+		return data;
 	}
 
-	return data;
-}
+	// Helper function to get provider API keys from request headers
+	function getProviderKeysFromHeaders(headers: Record<string, string>, isPasswordAuth: boolean = false) {
+		const providerKeys: Record<string, string[]> = {};
 
-// Helper function to get provider API keys from request headers
-function getProviderKeysFromHeaders(headers: Record<string, string>, isPasswordAuth: boolean = false) {
-	const providerKeys: Record<string, string[]> = {};
-
-	for (const provider of Object.keys(SUPPORTED_PROVIDERS)) {
-		const keyName = `${provider}_api_key`;
-		const headerValue = headers[keyName];
-		if (headerValue) {
-			const keys = headerValue.split(',').map((k: string) => k.trim());
-			providerKeys[provider] = keys;
-		}
-	}
-
-	// If password auth is enabled, also check for environment variables for all providers
-	if (isPasswordAuth) {
 		for (const provider of Object.keys(SUPPORTED_PROVIDERS)) {
-			const envKeyName = `${provider.toUpperCase()}_API_KEY`;
-			const envValue = process.env[envKeyName];
-			if (envValue) {
-				const keys = envValue.split(',').map((k: string) => k.trim());
-				// If provider already has header keys, merge them; otherwise add env keys
-				if (providerKeys[provider]) {
-					providerKeys[provider].push(...keys);
-				} else {
-					providerKeys[provider] = keys;
+			const keyName = `${provider}_api_key`;
+			const headerValue = headers[keyName];
+			if (headerValue) {
+				const keys = headerValue.split(',').map((k: string) => k.trim());
+				providerKeys[provider] = keys;
+			}
+		}
+
+		// If password auth is enabled, also check for environment variables for all providers
+		if (isPasswordAuth) {
+			for (const provider of Object.keys(SUPPORTED_PROVIDERS)) {
+				const envKeyName = `${provider.toUpperCase()}_API_KEY`;
+				const envValue = process.env[envKeyName];
+				if (envValue) {
+					const keys = envValue.split(',').map((k: string) => k.trim());
+					// If provider already has header keys, merge them; otherwise add env keys
+					if (providerKeys[provider]) {
+						providerKeys[provider].push(...keys);
+					} else {
+						providerKeys[provider] = keys;
+					}
 				}
 			}
 		}
+
+		return providerKeys;
 	}
 
-	return providerKeys;
-}
-
-// Helper function to filter out unwanted models
-function shouldIncludeModel(model: any, providerName?: string) {
-	const modelId = model.id.toLowerCase();
-	// Common exclusions for all providers
-	const commonExclusions = [
-		'gemma', 'rerank', 'distill', 'parse', 'embed', 'bge-', 'tts', 'phi', 'live', 'audio', 'lite',
-		'qwen2', 'qwen-2', 'qwen1', 'qwq', 'qvq', 'gemini-2.0', 'gemini-1', 'learnlm', 'gemini-exp',
-		'turbo', 'claude-3', 'voxtral', 'pixtral', 'mixtral', 'ministral', '-24', 'moderation', 'saba', '-ocr-',
-		'transcribe', 'image', 'dall', 'davinci', 'babbage'
-	];
-	if (commonExclusions.some(exclusion => modelId.includes(exclusion))) {
-		return false;
-	}
-	if (!modelId.includes('super') && ((['nemotron', 'llama'].some(exclusion => modelId.includes(exclusion))) || modelId.includes('nvidia'))) {
-		return false;
-	}
-
-	// Provider-specific exclusions
-	if (providerName === 'gemini' && ['veo', 'imagen'].some(exclusion => modelId.includes(exclusion))) {
-		return false;
-	} else if (providerName === 'openrouter' && !modelId.includes(':free')) {
-		return false;
-	} else if (providerName !== 'mistral' && modelId.includes('mistral')) {
-		return false;
-	} else if (providerName === 'chatgpt' && (modelId.split('-').length - 1) > 2) {
-		return false;
-	}
-
-	if (!providerName && ['mistral', 'alibaba', 'cohere', 'deepseek', 'moonshotai', 'morph', 'zai'].some(exclusion => modelId.includes(exclusion))) {
-		return false;
-	}
-
-	return true;
-}
-
-async function getModelsResponse(apiKey: string, providerKeys: Record<string, string[]>, isPasswordAuth: boolean = false) {
-	let gatewayApiKeys: string[] = [];
-
-	if (isPasswordAuth) {
-		const gatewayKey = process.env.GATEWAY_API_KEY;
-		if (gatewayKey) {
-			gatewayApiKeys = gatewayKey.split(',').map((key: string) => key.trim());
+	// Helper function to filter out unwanted models
+	function shouldIncludeModel(model: any, providerName?: string) {
+		const modelId = model.id.toLowerCase();
+		// Common exclusions for all providers
+		const commonExclusions = [
+			'gemma', 'rerank', 'distill', 'parse', 'embed', 'bge-', 'tts', 'phi', 'live', 'audio', 'lite',
+			'qwen2', 'qwen-2', 'qwen1', 'qwq', 'qvq', 'gemini-2.0', 'gemini-1', 'learnlm', 'gemini-exp',
+			'turbo', 'claude-3', 'voxtral', 'pixtral', 'mixtral', 'ministral', '-24', 'moderation', 'saba', '-ocr-',
+			'transcribe', 'image', 'dall', 'davinci', 'babbage'
+		];
+		if (commonExclusions.some(exclusion => modelId.includes(exclusion))) {
+			return false;
 		}
-	} else {
-		gatewayApiKeys = apiKey.split(',').map((key: string) => key.trim());
+		if (!modelId.includes('super') && ((['nemotron', 'llama'].some(exclusion => modelId.includes(exclusion))) || modelId.includes('nvidia'))) {
+			return false;
+		}
+
+		// Provider-specific exclusions
+		if (providerName === 'gemini' && ['veo', 'imagen'].some(exclusion => modelId.includes(exclusion))) {
+			return false;
+		} else if (providerName === 'openrouter' && !modelId.includes(':free')) {
+			return false;
+		} else if (providerName !== 'mistral' && modelId.includes('mistral')) {
+			return false;
+		} else if (providerName === 'chatgpt' && (modelId.split('-').length - 1) > 2) {
+			return false;
+		}
+
+		if (!providerName && ['mistral', 'alibaba', 'cohere', 'deepseek', 'moonshotai', 'morph', 'zai'].some(exclusion => modelId.includes(exclusion))) {
+			return false;
+		}
+
+		return true;
 	}
 
-	const fetchPromises: Promise<any[]>[] = [];
+	async function getModelsResponse(apiKey: string, providerKeys: Record<string, string[]>, isPasswordAuth: boolean = false) {
+		let gatewayApiKeys: string[] = [];
 
-	if (gatewayApiKeys.length > 0) {
-		const randomIndex = Math.floor(Math.random() * gatewayApiKeys.length);
-		const currentApiKey = gatewayApiKeys[randomIndex];
-
-		const gatewayPromise = (async () => {
-			try {
-				const gateway = createGateway({
-					apiKey: currentApiKey,
-					baseURL: 'https://ai-gateway.vercel.sh/v1/ai',
-				});
-
-				const availableModels = await gateway.getAvailableModels();
-				const now = Math.floor(Date.now() / 1000);
-
-				return availableModels.models.map(model => ({
-					id: model.id,
-					name: model.name,
-					description: `${model.pricing
-						? ` I: $${(Number(model.pricing.input) * 1000000).toFixed(2)}, O: $${(
-							Number(model.pricing.output) * 1000000
-						).toFixed(2)};`
-						: ''
-						} ${model.description || ''}`,
-					object: 'model',
-					created: now,
-					owned_by: model.name.split('/')[0],
-				})).filter(model => shouldIncludeModel(model));
-			} catch (error: any) {
-				console.error(`Error with gateway API key:`, error);
-				return [];
+		if (isPasswordAuth) {
+			const gatewayKey = process.env.GATEWAY_API_KEY;
+			if (gatewayKey) {
+				gatewayApiKeys = gatewayKey.split(',').map((key: string) => key.trim());
 			}
-		})();
+		} else {
+			gatewayApiKeys = apiKey.split(',').map((key: string) => key.trim());
+		}
 
-		fetchPromises.push(gatewayPromise);
-	}
+		const fetchPromises: Promise<any[]>[] = [];
 
-	// Add provider fetch promises
-	for (const [providerName, keys] of Object.entries(providerKeys)) {
-		if (keys.length === 0) continue;
+		if (gatewayApiKeys.length > 0) {
+			const randomIndex = Math.floor(Math.random() * gatewayApiKeys.length);
+			const currentApiKey = gatewayApiKeys[randomIndex];
 
-		// Randomly select one API key for this provider
-		const randomIndex = Math.floor(Math.random() * keys.length);
-		const providerApiKey = keys[randomIndex];
+			const gatewayPromise = (async () => {
+				try {
+					if (!currentApiKey) {
+						throw new Error('No valid gateway API key found');
+					}
 
-		const providerPromise = (async () => {
-			try {
-				let formattedModels: any[] = [];
+					const gateway = createGateway({
+						apiKey: currentApiKey,
+						baseURL: 'https://ai-gateway.vercel.sh/v1/ai',
+					});
 
-				// Check if this provider has a custom model list (doesn't support /models endpoint)
-				if (CUSTOM_MODEL_LISTS[providerName as keyof typeof CUSTOM_MODEL_LISTS]) {
-					const customModels = CUSTOM_MODEL_LISTS[providerName as keyof typeof CUSTOM_MODEL_LISTS];
-					formattedModels = customModels.map(model => ({
-						id: `${providerName}/${model.id}`,
+					const availableModels = await gateway.getAvailableModels();
+					const now = Math.floor(Date.now() / 1000);
+
+					return availableModels.models.map(model => ({
+						id: model.id,
 						name: model.name,
+						description: `${model.pricing
+							? ` I: $${(Number(model.pricing.input) * 1000000).toFixed(2)}, O: $${(
+								Number(model.pricing.output) * 1000000
+							).toFixed(2)};`
+							: ''
+							} ${model.description || ''}`,
 						object: 'model',
-						created: 0,
-						owned_by: providerName,
-					})).filter(model => shouldIncludeModel(model, providerName));
-				} else {
-					// Use regular API call for providers that support /models endpoint
-					const providerModels = await fetchProviderModels(providerName, providerApiKey);
-					formattedModels = (providerModels as any).data?.map((model: any) => ({
-						id: `${providerName}/${model.id.replace('models/', '')}`,
-						name: `${model.name?.replace(' (free)', '') || parseModelDisplayName(model.id)}`,
-						description: model.description || model.summary || '',
-						object: 'model',
-						created: model.created || 0,
-						owned_by: model.owned_by || providerName,
-					})).filter((model: any) => {
-						if (!shouldIncludeModel(model, providerName)) {
-							return false;
-						}
-						return true;
-					}) || [];
+						created: now,
+						owned_by: model.name.split('/')[0],
+					})).filter(model => shouldIncludeModel(model));
+				} catch (error: any) {
+					console.error(`Error with gateway API key:`, error);
+					return [];
 				}
+			})();
 
-				return formattedModels;
-			} catch (error: any) {
-				console.error(`Error with ${providerName} API key:`, error);
-				return [];
-			}
-		})();
-
-		fetchPromises.push(providerPromise);
-	}
-
-	// Fetch all providers in parallel
-	const results = await Promise.allSettled(fetchPromises);
-
-	// Collect all successful results
-	const allModels: any[] = [];
-	results.forEach((result) => {
-		if (result.status === 'fulfilled' && result.value.length > 0) {
-			allModels.push(...result.value);
+			fetchPromises.push(gatewayPromise);
 		}
-	});
 
-	// If we have models from any source, return them
-	if (allModels.length > 0) {
-		return {
-			object: 'list',
-			data: allModels,
-		};
+		// Add provider fetch promises
+		for (const [providerName, keys] of Object.entries(providerKeys)) {
+			if (keys.length === 0) continue;
+
+			// Randomly select one API key for this provider
+			const randomIndex = Math.floor(Math.random() * keys.length);
+			const providerApiKey = keys[randomIndex];
+
+			const providerPromise = (async () => {
+				try {
+					if (!providerApiKey) {
+						throw new Error(`No valid API key found for provider: ${providerName}`);
+					}
+
+					let formattedModels: any[] = [];
+
+					// Check if this provider has a custom model list (doesn't support /models endpoint)
+					if (CUSTOM_MODEL_LISTS[providerName as keyof typeof CUSTOM_MODEL_LISTS]) {
+						const customModels = CUSTOM_MODEL_LISTS[providerName as keyof typeof CUSTOM_MODEL_LISTS];
+						formattedModels = customModels.map(model => ({
+							id: `${providerName}/${model.id}`,
+							name: model.name,
+							object: 'model',
+							created: 0,
+							owned_by: providerName,
+						})).filter(model => shouldIncludeModel(model, providerName));
+					} else {
+						// Use regular API call for providers that support /models endpoint
+						const providerModels = await fetchProviderModels(providerName, providerApiKey);
+						formattedModels = (providerModels as any).data?.map((model: any) => ({
+							id: `${providerName}/${model.id.replace('models/', '')}`,
+							name: `${model.name?.replace(' (free)', '') || parseModelDisplayName(model.id)}`,
+							description: model.description || model.summary || '',
+							object: 'model',
+							created: model.created || 0,
+							owned_by: model.owned_by || providerName,
+						})).filter((model: any) => {
+							if (!shouldIncludeModel(model, providerName)) {
+								return false;
+							}
+							return true;
+						}) || [];
+					}
+
+					return formattedModels;
+				} catch (error: any) {
+					console.error(`Error with ${providerName} API key:`, error);
+					return [];
+				}
+			})();
+
+			fetchPromises.push(providerPromise);
+		}
+
+		// Fetch all providers in parallel
+		const results = await Promise.allSettled(fetchPromises);
+
+		// Collect all successful results
+		const allModels: any[] = [];
+		results.forEach((result) => {
+			if (result.status === 'fulfilled' && result.value.length > 0) {
+				allModels.push(...result.value);
+			}
+		});
+
+		// If we have models from any source, return them
+		if (allModels.length > 0) {
+			return {
+				object: 'list',
+				data: allModels,
+			};
+		}
+
+		throw new Error('All provider(s) failed to return models');
 	}
 
-	throw new Error('All provider(s) failed to return models');
+	// Custom model lists for providers that don't support /models endpoint
+	const CUSTOM_MODEL_LISTS = {
+		poixe: [
+			{ id: 'gpt-5:free', name: 'GPT-5' },
+			{ id: 'grok-3-mini:free', name: 'Grok 3 Mini' },
+			{ id: 'grok-4:free', name: 'Grok 4' },
+		],
+		doubao: [
+			{ id: 'doubao-seed-1-6-flash-250715', name: 'Doubao Seed 1.6 Flash' },
+			{ id: 'doubao-seed-1-6-thinking-250715', name: 'Doubao Seed 1.6 Thinking' },
+			{ id: 'deepseek-r1-250528', name: 'DeepSeek R1' },
+			{ id: 'deepseek-v3-250324', name: 'DeepSeek V3' },
+			{ id: 'kimi-k2-250711', name: 'Kimi K2' },
+		],
+		cohere: [
+			{ id: 'command-a-03-2025', name: 'Command A' },
+			{ id: 'command-a-vision-07-2025', name: 'Cohere A Vision' },
+		],
+	};
+	const authHeader = c.req.header('Authorization');
+	let apiKey = authHeader?.split(' ')[1];
+
+	// Check for password authentication
+	const envPassword = process.env.PASSWORD;
+	const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
+
+	if (!apiKey) {
+		return c.text('Unauthorized', 401);
+	}
+
+	// Get provider API keys from headers
+	const headers: Record<string, string> = {}
+	c.req.raw.headers.forEach((value, key) => {
+		headers[key.toLowerCase().replace(/-/g, '_')] = value
+	})
+	const providerKeys = getProviderKeysFromHeaders(headers, isPasswordAuth);
+
+	try {
+		const modelsResponse = await getModelsResponse(apiKey, providerKeys, isPasswordAuth);
+		return c.json(modelsResponse);
+	} catch (error: any) {
+		return c.json({
+			error: error.message || 'All provider(s) failed to return models'
+		}, 500);
+	}
 }
-
-// Custom model lists for providers that don't support /models endpoint
-const CUSTOM_MODEL_LISTS = {
-	poixe: [
-		{ id: 'gpt-5:free', name: 'GPT-5' },
-		{ id: 'grok-3-mini:free', name: 'Grok 3 Mini' },
-		{ id: 'grok-4:free', name: 'Grok 4' },
-	],
-	doubao: [
-		{ id: 'doubao-seed-1-6-flash-250715', name: 'Doubao Seed 1.6 Flash' },
-		{ id: 'doubao-seed-1-6-thinking-250715', name: 'Doubao Seed 1.6 Thinking' },
-		{ id: 'deepseek-r1-250528', name: 'DeepSeek R1' },
-		{ id: 'deepseek-v3-250324', name: 'DeepSeek V3' },
-		{ id: 'kimi-k2-250711', name: 'Kimi K2' },
-	],
-	cohere: [
-		{ id: 'command-a-03-2025', name: 'Command A' },
-		{ id: 'command-a-vision-07-2025', name: 'Cohere A Vision' },
-	],
-};
-
-// Models endpoint
-app.get('/v1/models', async (c: Context) => {
-	const authHeader = c.req.header('Authorization');
-	let apiKey = authHeader?.split(' ')[1];
-
-	// Check for password authentication
-	const envPassword = process.env.PASSWORD;
-	const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
-
-	if (!apiKey) {
-		return c.text('Unauthorized', 401);
-	}
-
-	// Get provider API keys from headers
-	const headers: Record<string, string> = {}
-	c.req.raw.headers.forEach((value, key) => {
-		headers[key.toLowerCase().replace(/-/g, '_')] = value
-	})
-	const providerKeys = getProviderKeysFromHeaders(headers, isPasswordAuth);
-
-	try {
-		const modelsResponse = await getModelsResponse(apiKey, providerKeys, isPasswordAuth);
-		return c.json(modelsResponse);
-	} catch (error: any) {
-		return c.json({
-			error: error.message || 'All provider(s) failed to return models'
-		}, 500);
-	}
-})
-
-app.post('/v1/models', async (c: Context) => {
-	const authHeader = c.req.header('Authorization');
-	let apiKey = authHeader?.split(' ')[1];
-
-	// Check for password authentication
-	const envPassword = process.env.PASSWORD;
-	const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
-
-	if (!apiKey) {
-		return c.text('Unauthorized', 401);
-	}
-
-	// Get provider API keys from headers
-	const headers: Record<string, string> = {}
-	c.req.raw.headers.forEach((value, key) => {
-		headers[key.toLowerCase().replace(/-/g, '_')] = value
-	})
-	const providerKeys = getProviderKeysFromHeaders(headers, isPasswordAuth);
-
-	try {
-		const modelsResponse = await getModelsResponse(apiKey, providerKeys, isPasswordAuth);
-		return c.json(modelsResponse);
-	} catch (error: any) {
-		return c.json({
-			error: error.message || 'All provider(s) failed to return models'
-		}, 500);
-	}
-})
+app.get('/v1/models', handleModelsRequest);
+app.post('/v1/models', handleModelsRequest);
 
 app.get('/*', (c: Context) => {
 	return c.text('Running')
