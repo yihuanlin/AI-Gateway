@@ -769,53 +769,6 @@ app.post('/v1/chat/completions', async (c: Context) => {
 
 	let aiSdkTools: Record<string, any> = {};
 	if (tools && Array.isArray(tools)) {
-		// Check if messages contain scientific research keywords
-		const researchKeywords = [
-			'scientific', 'biolog', 'research', 'paper'
-		];
-
-		const messageText = contextMessages.map((msg: any) =>
-			typeof msg.content === 'string' ? msg.content.toLowerCase() : ''
-		).join(' ');
-
-		const containsResearchKeywords = researchKeywords.some(keyword =>
-			messageText.includes(keyword)
-		);
-
-		if (model.startsWith('openai')) {
-			aiSdkTools.web_search_preview = openai.tools.webSearchPreview({});
-		} else if (model.startsWith('xai')) {
-			aiSdkTools.python_executor = pythonExecutorTool;
-		} else if (model.startsWith('groq/openai')) {
-			aiSdkTools.browser_search = groq.tools.browserSearch({});
-		} else if (!['google', 'gemini', 'perplexity'].some(prefix => model.startsWith(prefix))) {
-			if (tavilyApiKey) {
-				aiSdkTools.tavily_search = tavilySearchTool;
-			}
-		}
-		if (!['google', 'gemini', 'perplexity'].some(prefix => model.startsWith(prefix))) {
-			aiSdkTools.jina_reader = jinaReaderTool;
-			if (pythonApiKey && pythonUrl) {
-				aiSdkTools.python_executor = pythonExecutorTool;
-			}
-		} else {
-			const lastMessage = contextMessages[contextMessages.length - 1];
-			if (lastMessage && typeof lastMessage.content === 'string' && (lastMessage.content.includes('http://') || lastMessage.content.includes('https://'))) {
-				aiSdkTools = {
-					url_context: google.tools.urlContext({}),
-					code_execution: google.tools.codeExecution({}),
-				};
-				if (tavilyApiKey) {
-					aiSdkTools.tavily_search = tavilySearchTool;
-				}
-			} else {
-				aiSdkTools = {
-					google_search: google.tools.googleSearch({}),
-					jina_reader: jinaReaderTool,
-					code_execution: google.tools.codeExecution({}),
-				};
-			}
-		}
 		tools.forEach((userTool: any) => {
 			if (userTool.type === 'function' && userTool.function) {
 				let clientParameters = userTool.function.parameters || userTool.function.inputSchema;
@@ -876,10 +829,48 @@ app.post('/v1/chat/completions', async (c: Context) => {
 				});
 			}
 		});
+
+		const googleIncompatible = (!['google', 'gemini'].some(prefix => model.startsWith(prefix)) || Object.keys(aiSdkTools).length > 0);
+
+		const researchKeywords = [
+			'scientific', 'biolog', 'research', 'paper'
+		];
+
+		const messageText = contextMessages.map((msg: any) =>
+			typeof msg.content === 'string' ? msg.content.toLowerCase() : ''
+		).join(' ');
+
+		const containsResearchKeywords = researchKeywords.some(keyword =>
+			messageText.includes(keyword)
+		);
+
+		if (model.startsWith('openai')) {
+			aiSdkTools.web_search_preview = openai.tools.webSearchPreview({});
+			aiSdkTools.code_interpreter = openai.tools.codeInterpreter({});
+		} else if (model.startsWith('groq/openai')) {
+			aiSdkTools.browser_search = groq.tools.browserSearch({});
+		} else if (googleIncompatible && !model.startsWith('xai')) {
+			if (tavilyApiKey) {
+				aiSdkTools.tavily_search = tavilySearchTool;
+			}
+		}
 		if (containsResearchKeywords) {
 			aiSdkTools.ensembl_api = ensemblApiTool;
 			aiSdkTools.semantic_scholar_search = semanticScholarSearchTool;
 			aiSdkTools.semantic_scholar_recommendations = semanticScholarRecommendationsTool;
+		}
+
+		if (googleIncompatible) {
+			aiSdkTools.jina_reader = jinaReaderTool;
+			if (!model.startsWith('openai') && pythonApiKey && pythonUrl) {
+				aiSdkTools.python_executor = pythonExecutorTool;
+			}
+		} else {
+			aiSdkTools = {
+				google_search: google.tools.googleSearch({}),
+				url_context: google.tools.urlContext({}),
+				code_execution: google.tools.codeExecution({}),
+			};
 		}
 	}
 
