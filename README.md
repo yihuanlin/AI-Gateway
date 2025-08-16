@@ -1,4 +1,4 @@
-# Vercel AI Gateway - Hono Version
+# Vercel AI Gateway
 
 A high-performance AI Gateway built with [Hono](https://hono.dev/) for edge computing environments. This gateway provides unified access to multiple AI providers with intelligent fallback, streaming support, and advanced tools integration.
 
@@ -43,7 +43,6 @@ PYTHON_URL=your-python-execution-url
 
 # Provider-specific keys
 OPENAI_API_KEY=your-openai-key
-ANTHROPIC_API_KEY=your-anthropic-key
 GROQ_API_KEY=your-groq-key
 # ... etc for other providers
 ```
@@ -51,7 +50,7 @@ GROQ_API_KEY=your-groq-key
 ## 🔌 Supported Providers
 
 - **Gateway**: Vercel AI Gateway
-- **Direct Providers**: Google, Groq, Cerebras, etc.
+- **Direct Providers**: Google, OpenAI, Groq, Cerebras, etc.
 - **Tools**: Python execution, web search, content extraction
 
 ## 📊 Architecture
@@ -67,5 +66,7 @@ GROQ_API_KEY=your-groq-key
                        │ • Python Exec    │
                        │ • Web Search     │
                        │ • Content Read   │
+                       │ • Ensembl API    │
+                       │ • Scholar API    │
                        └──────────────────┘
 ```

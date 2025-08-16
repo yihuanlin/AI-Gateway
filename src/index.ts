@@ -4,8 +4,9 @@ import type { Context } from 'hono'
 import { generateText, stepCountIs, streamText, tool, type GenerateTextResult } from 'ai'
 import { createGateway } from '@ai-sdk/gateway'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
-import { openai } from '@ai-sdk/openai'
-import { google } from '@ai-sdk/google'
+import { openai, createOpenAI } from '@ai-sdk/openai'
+import { google, createGoogleGenerativeAI } from '@ai-sdk/google'
+import { groq, createGroq } from '@ai-sdk/groq';
 import { z } from 'zod'
 
 export const config = { runtime: 'edge' };
@@ -493,7 +494,7 @@ const SUPPORTED_PROVIDERS = {
 	},
 	gemini: {
 		name: 'gemini',
-		baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
+		baseURL: 'https://generativelanguage.googleapis.com/v1beta',
 	},
 	chatgpt: {
 		name: 'chatgpt',
@@ -547,12 +548,31 @@ function createCustomProvider(providerName: string, apiKey: string) {
 		throw new Error(`Unsupported provider: ${providerName}`);
 	}
 
-	return createOpenAICompatible({
-		name: 'custom',
-		apiKey: apiKey,
-		baseURL: config.baseURL,
-		includeUsage: true,
-	});
+	switch (config.name) {
+		case 'chatgpt':
+			return createOpenAI({
+				name: 'custom',
+				apiKey: apiKey,
+				baseURL: config.baseURL,
+			}).responses;
+		case 'gemini':
+			return createGoogleGenerativeAI({
+				apiKey: apiKey,
+				baseURL: config.baseURL,
+			});
+		case 'groq':
+			return createGroq({
+				apiKey: apiKey,
+				baseURL: config.baseURL,
+			});
+		default:
+			return createOpenAICompatible({
+				name: 'custom',
+				apiKey: apiKey,
+				baseURL: config.baseURL,
+				includeUsage: true,
+			});
+	}
 }
 
 // Helper function to parse model and determine provider
@@ -694,7 +714,7 @@ function toOpenAIResponse(result: GenerateTextResult<any, any>, model: string) {
 
 function toOpenAIStream(result: any, model: string) {
 	const TEXT_ENCODER = new TextEncoder();
-	const EXCLUDED_TOOLS = new Set(['code_execution', 'python_executor', 'tavily_search', 'jina_reader', 'google_search', 'web_search_preview', 'url_context']);
+	const EXCLUDED_TOOLS = new Set(['code_execution', 'python_executor', 'tavily_search', 'jina_reader', 'google_search', 'web_search_preview', 'url_context', 'browser_search']);
 
 	const stream = new ReadableStream({
 		async start(controller) {
@@ -870,7 +890,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	semanticScholarApiKey = c.req.header('semantic_scholar_api_key') || (isPasswordAuth ? process.env.SEMANTIC_SCHOLAR_API_KEY || null : null);
 
 	const body = await c.req.json();
-	const { model, messages = [], tools, stream, temperature, top_p, top_k, max_tokens, stop_sequences, seed, presence_penalty, frequency_penalty, tool_choice, reasoning_effort, thinking, extra_body } = body;
+	const { model, messages = [], tools, stream, temperature, top_p, top_k, max_tokens, stop_sequences, seed, presence_penalty, frequency_penalty, tool_choice, reasoning_effort, thinking, extra_body, text_verbosity, service_tier } = body;
 
 	// Get provider API keys from request headers
 	const headers: Record<string, string> = {}
@@ -921,44 +941,42 @@ app.post('/v1/chat/completions', async (c: Context) => {
 			aiSdkTools.web_search_preview = openai.tools.webSearchPreview({});
 		} else if (model.startsWith('xai')) {
 			aiSdkTools.python_executor = pythonExecutorTool;
-		} else if (!model.startsWith('google')) {
+		} else if (model.startsWith('groq/openai')) {
+			aiSdkTools.browser_search = groq.tools.browserSearch({});
+		} else if (!['google', 'gemini', 'perplexity'].some(prefix => model.startsWith(prefix))) {
 			if (tavilyApiKey) {
 				aiSdkTools.tavily_search = tavilySearchTool;
 			}
 		}
-		if (!model.startsWith('google')) {
+		if (!['google', 'gemini', 'perplexity'].some(prefix => model.startsWith(prefix))) {
 			aiSdkTools.jina_reader = jinaReaderTool;
 			if (pythonApiKey && pythonUrl) {
 				aiSdkTools.python_executor = pythonExecutorTool;
 			}
+		} else {
+			const lastMessage = contextMessages[contextMessages.length - 1];
+			if (lastMessage && typeof lastMessage.content === 'string' && (lastMessage.content.includes('http://') || lastMessage.content.includes('https://'))) {
+				aiSdkTools = {
+					url_context: google.tools.urlContext({}),
+					code_execution: google.tools.codeExecution({}),
+				};
+				if (tavilyApiKey) {
+					aiSdkTools.tavily_search = tavilySearchTool;
+				}
+			} else {
+				aiSdkTools = {
+					google_search: google.tools.googleSearch({}),
+					jina_reader: jinaReaderTool,
+					code_execution: google.tools.codeExecution({}),
+				};
+			}
 		}
 		tools.forEach((userTool: any) => {
 			if (userTool.type === 'function' && userTool.function) {
-				if (userTool.function.name === 'googleSearch') {
-					if (!model.startsWith('google')) {
-						return;
-					}
-					const lastMessage = contextMessages[contextMessages.length - 1];
-					if (lastMessage && typeof lastMessage.content === 'string' && (lastMessage.content.includes('http://') || lastMessage.content.includes('https://'))) {
-						aiSdkTools = {
-							url_context: google.tools.urlContext({}),
-							code_execution: google.tools.codeExecution({}),
-						};
-						if (tavilyApiKey) {
-							aiSdkTools.tavily_search = tavilySearchTool;
-						}
-					} else {
-						aiSdkTools = {
-							google_search: google.tools.googleSearch({}),
-							jina_reader: jinaReaderTool,
-							code_execution: google.tools.codeExecution({}),
-						};
-					}
+				let clientParameters = userTool.function.parameters || userTool.function.inputSchema;
+				if (!clientParameters) {
 					return;
 				}
-
-				let clientParameters = userTool.function.parameters || userTool.function.inputSchema || {};
-
 				const finalParameters: Record<string, any> = {
 					type: "object",
 					properties: clientParameters.properties || clientParameters,
@@ -1201,7 +1219,11 @@ app.post('/v1/chat/completions', async (c: Context) => {
 				},
 				openai: {
 					reasoningEffort: reasoning_effort || "medium",
-					reasoningSummary: "auto"
+					reasoningSummary: "auto",
+					textVerbosity: text_verbosity || "medium",
+					serviceTier: service_tier || "auto",
+					store: false,
+					promptCacheKey: 'ai-gateway'
 				},
 				xai: {
 					searchParameters: {
@@ -1211,11 +1233,16 @@ app.post('/v1/chat/completions', async (c: Context) => {
 					...(reasoning_effort && { reasoningEffort: reasoning_effort })
 				},
 				google: {
-					...(extra_body?.google?.thinking_config && { thinking_config: extra_body.google.thinking_config })
+					...(extra_body?.google && {
+						thinkingConfig: {
+							thinkingBudget: extra_body.google.thinking_config.thinking_budget || 4000,
+							includeThoughts: true
+						}
+					})
 				},
 				custom: {
 					reasoning_effort: reasoning_effort || "medium",
-					extra_body: extra_body,
+					extra_body: extra_body
 				},
 			};
 
@@ -1380,7 +1407,7 @@ async function fetchProviderModels(providerName: string, apiKey: string) {
 
 	let response;
 	if (providerName === 'gemini') {
-		modelsEndpoint = config.baseURL.replace('openai', 'models?key=' + apiKey);
+		modelsEndpoint = modelsEndpoint + '?key=' + apiKey;
 		response = await fetch(modelsEndpoint);
 	} else {
 		response = await fetch(modelsEndpoint, {

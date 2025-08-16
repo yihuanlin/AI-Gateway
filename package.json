@@ -13,16 +13,17 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@ai-sdk/gateway": "^1.0.4",
-    "@ai-sdk/google": "^2.0.3",
-    "@ai-sdk/openai": "^2.0.8",
-    "@ai-sdk/openai-compatible": "^1.0.4",
-    "ai": "^5.0.9",
-    "hono": "^4.6.3",
+    "@ai-sdk/gateway": "^1.0.7",
+    "@ai-sdk/google": "^2.0.6",
+    "@ai-sdk/groq": "^2.0.10",
+    "@ai-sdk/openai": "^2.0.15",
+    "@ai-sdk/openai-compatible": "^1.0.7",
+    "ai": "^5.0.15",
+    "hono": "^4.9.2",
     "zod": "^4.0.17"
   },
   "devDependencies": {
-    "@types/node": "^24.2.1",
+    "@types/node": "^24.3.0",
     "typescript": "^5.9.2"
   }
 }
