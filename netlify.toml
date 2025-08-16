@@ -1,5 +1,5 @@
 [build]
-  command = "pnpm run build:netlify && rm -rf src readme.md"
+  command = "pnpm run build:netlify && rm -rf src README.md"
 
 [[edge_functions]]
   function = "index"
