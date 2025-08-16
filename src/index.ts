@@ -7,7 +7,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { openai, createOpenAI } from '@ai-sdk/openai'
 import { google, createGoogleGenerativeAI } from '@ai-sdk/google'
 import { groq, createGroq } from '@ai-sdk/groq';
-import { z } from 'zod'
+import { string, number, boolean, array, object, optional, int, enum as zenum } from 'zod/mini'
 
 export const config = { runtime: 'edge' };
 const app = new Hono()
@@ -316,8 +316,8 @@ function createCustomProvider(providerName: string, apiKey: string) {
 // Tools definitions
 const pythonExecutorTool = tool({
 	description: 'Execute Python code remotely via a secure Python execution API. Installed packages include: numpy, pandas.',
-	inputSchema: z.object({
-		code: z.string().describe('The Python code to execute.'),
+	inputSchema: object({
+		code: string({ message: 'The Python code to execute.' }),
 	}),
 	execute: async ({ code }: { code: string }) => {
 		console.log(`Executing remote Python code: ${code.substring(0, 100)}...`);
@@ -373,12 +373,12 @@ const pythonExecutorTool = tool({
 
 const tavilySearchTool = tool({
 	description: 'Web search tool using Tavily AI search engine',
-	inputSchema: z.object({
-		query: z.string().describe('Search query'),
-		max_results: z.number().optional().describe('Maximum number of results to return (default: 5, max: 20)'),
-		include_raw_content: z.boolean().optional().describe('Include the cleaned and parsed HTML content of each search result (default: false)'),
-		include_domains: z.array(z.string()).optional().describe('List of domains to include in the search'),
-		exclude_domains: z.array(z.string()).optional().describe('List of domains to exclude from the search'),
+	inputSchema: object({
+		query: string({ message: 'Search query' }),
+		max_results: optional(number({ message: 'Maximum number of results to return (default: 5, max: 20)' })),
+		include_raw_content: optional(boolean({ message: 'Include the cleaned and parsed HTML content of each search result (default: false)' })),
+		include_domains: optional(array(string({ message: 'Domain to include' }), { message: 'List of domains to include in the search' })),
+		exclude_domains: optional(array(string({ message: 'Domain to exclude' }), { message: 'List of domains to exclude from the search' })),
 	}),
 	execute: async (params) => {
 		const { query, max_results, include_domains, exclude_domains, include_raw_content } = params;
@@ -460,8 +460,8 @@ const tavilySearchTool = tool({
 
 const jinaReaderTool = tool({
 	description: 'Fetch and extract clean content from web pages using Jina Reader API',
-	inputSchema: z.object({
-		url: z.string().describe('The URL of the webpage to fetch content from'),
+	inputSchema: object({
+		url: string({ message: 'The URL of the webpage to fetch content from' }),
 	}),
 	execute: async ({ url }: {
 		url: string;
@@ -511,8 +511,8 @@ const jinaReaderTool = tool({
 
 const ensemblApiTool = tool({
 	description: 'Access Ensembl REST API for genomic data and bioinformatics information',
-	inputSchema: z.object({
-		path: z.string().describe('API endpoint path (without base URL). Examples: xrefs/symbol/Danio_rerio/sox6_201?object_type=transcript, lookup/id/ENSG00000139618, sequence/id/ENSG00000139618, genetree/id/ENSGT00390000003602, ontology/id/GO:0060227, ontology/name/Notch%20signalling%20pathway'),
+	inputSchema: object({
+		path: string({ message: 'API endpoint path (without base URL). Examples: xrefs/symbol/Danio_rerio/sox6_201?object_type=transcript, lookup/id/ENSG00000139618, sequence/id/ENSG00000139618' }),
 	}),
 	execute: async ({ path }: { path: string }) => {
 		console.log(`Ensembl API request to path: ${path}`);
@@ -558,17 +558,17 @@ const ensemblApiTool = tool({
 
 const semanticScholarSearchTool = tool({
 	description: 'Search Semantic Scholar for academic papers or authors',
-	inputSchema: z.object({
-		query: z.string().describe('Search query text'),
-		type: z.enum(['paper', 'author']).optional().default('paper').describe('Type of search: "paper" for papers or "author" for authors (default: "paper")'),
-		fields: z.string().optional().describe('Comma-separated list of fields to return (e.g., "title,authors,year,abstract")'),
-		limit: z.number().optional().describe('Maximum number of results (default: 10, max: 100 for papers, max: 1000 for authors)'),
-		offset: z.number().optional().describe('Used for pagination to get more results (default: 0)'),
-		year: z.string().optional().describe('Filter by publication year or range (e.g., "2020", "2018-2022")'),
-		venue: z.string().optional().describe('Filter by publication venue (e.g., "Nature", "Science")'),
-		fieldsOfStudy: z.string().optional().describe('Filter by fields of study (e.g., "Computer Science,Biology")'),
-		minCitationCount: z.number().optional().describe('Minimum number of citations required'),
-		publicationTypes: z.string().optional().describe('Filter by publication types (e.g., "Review,JournalArticle")'),
+	inputSchema: object({
+		query: string({ message: 'Search query text' }),
+		type: optional(zenum(['paper', 'author'], { message: 'Type of search: "paper" for papers or "author" for authors (default: "paper")' })),
+		fields: optional(string({ message: 'Comma-separated list of fields to return (e.g., "title,authors,year,abstract")' })),
+		limit: optional(number({ message: 'Maximum number of results (default: 10, max: 100 for papers, max: 1000 for authors)' })),
+		offset: optional(number({ message: 'Used for pagination to get more results (default: 0)' })),
+		year: optional(string({ message: 'Filter by publication year or range (e.g., "2020", "2018-2022")' })),
+		venue: optional(string({ message: 'Filter by publication venue (e.g., "Nature", "Science")' })),
+		fieldsOfStudy: optional(string({ message: 'Filter by fields of study (e.g., "Computer Science,Biology")' })),
+		minCitationCount: optional(number({ message: 'Minimum number of citations required' })),
+		publicationTypes: optional(string({ message: 'Filter by publication types (e.g., "Review,JournalArticle")' })),
 	}),
 	execute: async (params) => {
 		const { query, type = 'paper', fields, limit = 10, offset = 0, year, venue, fieldsOfStudy, minCitationCount, publicationTypes } = params;
@@ -650,13 +650,13 @@ const semanticScholarSearchTool = tool({
 
 const semanticScholarRecommendationsTool = tool({
 	description: 'Get paper recommendations from Semantic Scholar based on example papers',
-	inputSchema: z.object({
-		paperId: z.string().optional().describe('Single paper ID to get recommendations for'),
-		positivePaperIds: z.array(z.string()).optional().describe('Array of paper IDs that represent positive examples (for batch recommendations)'),
-		negativePaperIds: z.array(z.string()).optional().describe('Array of paper IDs that represent negative examples (for batch recommendations)'),
-		fields: z.string().optional().describe('Comma-separated list of fields to return (e.g., "title,authors,year,abstract")'),
-		limit: z.number().optional().describe('Maximum number of recommendations (default: 10, max: 100)'),
-		from: z.enum(['recent', 'all-cs']).optional().describe('Pool of papers to recommend from (default: recent)'),
+	inputSchema: object({
+		paperId: optional(string({ message: 'Single paper ID to get recommendations for' })),
+		positivePaperIds: optional(array(string({ message: 'Paper ID' }), { message: 'Array of paper IDs that represent positive examples (for batch recommendations)' })),
+		negativePaperIds: optional(array(string({ message: 'Paper ID' }), { message: 'Array of paper IDs that represent negative examples (for batch recommendations)' })),
+		fields: optional(string({ message: 'Comma-separated list of fields to return (e.g., "title,authors,year,abstract")' })),
+		limit: optional(number({ message: 'Maximum number of recommendations (default: 10, max: 100)' })),
+		from: optional(zenum(['recent', 'all-cs'], { message: 'Pool of papers to recommend from (default: recent)' })),
 	}),
 	execute: async (params) => {
 		const { paperId, positivePaperIds, negativePaperIds, fields, limit = 10, from = 'recent' } = params;
@@ -823,42 +823,39 @@ app.post('/v1/chat/completions', async (c: Context) => {
 				};
 				const properties = finalParameters.properties || {};
 				const required = finalParameters.required || [];
-				const zodFields: Record<string, z.ZodTypeAny> = {};
+				const zodFields: Record<string, any> = {};
 
 				for (const [key, prop] of Object.entries(properties)) {
 					const propDef = prop as any;
-					let zodType: z.ZodTypeAny;
+					let zodType: any;
 
-					// Map OpenAI parameter types to Zod types
+					// Map OpenAI parameter types to Zod 4 Mini functional syntax
 					switch (propDef.type) {
 						case 'string':
-							zodType = z.string();
+							zodType = string({ message: propDef.description || 'String parameter' });
 							break;
 						case 'number':
-							zodType = z.number();
+							zodType = number({ message: propDef.description || 'Number parameter' });
 							break;
 						case 'integer':
-							zodType = z.number().int();
+							// Use int() for Zod 4 Mini syntax
+							zodType = int({ message: propDef.description || 'Integer parameter' });
 							break;
 						case 'boolean':
-							zodType = z.boolean();
+							zodType = boolean({ message: propDef.description || 'Boolean parameter' });
 							break;
 						case 'array':
-							zodType = z.array(z.any());
+							zodType = array(string({ message: 'Array item' }), { message: propDef.description || 'Array parameter' });
 							break;
 						case 'object':
-							zodType = z.object({});
+							zodType = object({}, { message: propDef.description || 'Object parameter' });
 							break;
 						default:
-							zodType = z.any();
-					}
-
-					if (propDef.description) {
-						zodType = zodType.describe(propDef.description);
+							zodType = string({ message: 'Any parameter' });
 					}
 
 					if (!required.includes(key)) {
-						zodType = zodType.optional();
+						zodType = optional(zodType);
 					}
 
 					zodFields[key] = zodType;
@@ -866,7 +863,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 
 				aiSdkTools[userTool.function.name] = tool({
 					description: userTool.function.description || `Function ${userTool.function.name}`,
-					inputSchema: z.object(zodFields),
+					inputSchema: object(zodFields),
 				});
 			}
 		});
