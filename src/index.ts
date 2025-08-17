@@ -14,57 +14,48 @@ const app = new Hono()
 
 const SUPPORTED_PROVIDERS = {
 	cerebras: {
-		name: 'cerebras',
 		baseURL: 'https://api.cerebras.ai/v1',
 	},
 	groq: {
-		name: 'groq',
 		baseURL: 'https://api.groq.com/openai/v1',
 	},
 	gemini: {
-		name: 'gemini',
 		baseURL: 'https://generativelanguage.googleapis.com/v1beta',
 	},
 	chatgpt: {
-		name: 'chatgpt',
 		baseURL: 'https://api.openai.com/v1',
 	},
 	doubao: {
-		name: 'doubao',
 		baseURL: 'https://ark.cn-beijing.volces.com/api/v3',
 	},
 	modelscope: {
-		name: 'modelscope',
 		baseURL: 'https://api-inference.modelscope.cn/v1',
 	},
 	github: {
-		name: 'github',
 		baseURL: 'https://models.github.ai/inference',
 	},
 	openrouter: {
-		name: 'openrouter',
 		baseURL: 'https://openrouter.ai/api/v1',
 	},
 	nvidia: {
-		name: 'nvidia',
 		baseURL: 'https://integrate.api.nvidia.com/v1',
 	},
 	mistral: {
-		name: 'mistral',
 		baseURL: 'https://api.mistral.ai/v1',
 	},
 	cohere: {
-		name: 'cohere',
 		baseURL: 'https://api.cohere.ai/compatibility/v1',
 	},
 	infini: {
-		name: 'infini',
 		baseURL: 'https://cloud.infini-ai.com/maas/v1',
 	},
 	poixe: {
-		name: 'poixe',
 		baseURL: 'https://api.poixe.com/v1',
 	},
+	copilot: {
+		baseURL: 'https://api.githubcopilot.com',
+		tokenURL: 'https://api.github.com/copilot_internal/v2/token',
+	}
 };
 
 // Pre-compiled constants for /v1/chat/completions
@@ -377,12 +368,32 @@ async function processMessages(contextMessages: any[]): Promise<any[]> {
 	return processedMessages;
 }
 
-function createCustomProvider(providerName: string, apiKey: string) {
+// Helper function to fetch Copilot token
+async function fetchCopilotToken(apiKey: string): Promise<string> {
+	const config = SUPPORTED_PROVIDERS.copilot;
+	const response = await fetch(config.tokenURL, {
+		method: 'GET',
+		headers: {
+			'Authorization': `Token ${apiKey}`,
+			'Accept': 'application/json',
+		},
+	});
+
+	if (!response.ok) {
+		throw new Error(`Failed to fetch Copilot token: ${response.status} ${response.statusText}`);
+	}
+
+	const data = await response.json() as any;
+	return data.token;
+}
+
+async function createCustomProvider(providerName: string, apiKey: string) {
 	const config = SUPPORTED_PROVIDERS[providerName as keyof typeof SUPPORTED_PROVIDERS];
 	if (!config) {
 		throw new Error(`Unsupported provider: ${providerName}`);
 	}
-	switch (config.name) {
+
+	switch (providerName) {
 		case 'chatgpt':
 			return createOpenAI({
 				name: 'custom',
@@ -398,6 +409,20 @@ function createCustomProvider(providerName: string, apiKey: string) {
 			return createGroq({
 				apiKey: apiKey,
 				baseURL: config.baseURL,
+			});
+		case 'copilot':
+			const copilotToken = await fetchCopilotToken(apiKey);
+			return createOpenAICompatible({
+				name: 'custom',
+				apiKey: copilotToken,
+				baseURL: config.baseURL,
+				includeUsage: true,
+				headers: {
+					"editor-version": "vscode/1.103.1",
+					"copilot-vision-request": "true",
+					"editor-plugin-version": "copilot-chat/0.30.1",
+					"user-agent": "GitHubCopilotChat/0.30.1"
+				},
 			});
 		default:
 			return createOpenAICompatible({
@@ -416,8 +441,9 @@ function buildDefaultProviderOptions(args: {
 	extra_body?: any,
 	text_verbosity?: any,
 	service_tier?: any,
+	reasoning_summary?: any,
 }) {
-	const { providerOptionsHeader, thinking, reasoning_effort, extra_body, text_verbosity, service_tier } = args;
+	const { providerOptionsHeader, thinking, reasoning_effort, extra_body, text_verbosity, service_tier, reasoning_summary } = args;
 	const providerOptions = providerOptionsHeader ? JSON.parse(providerOptionsHeader) : {
 		anthropic: {
 			thinking: thinking || { type: "enabled", budgetTokens: 4000 },
@@ -425,7 +451,7 @@ function buildDefaultProviderOptions(args: {
 		},
 		openai: {
 			reasoningEffort: reasoning_effort || "medium",
-			reasoningSummary: "auto",
+			reasoningSummary: reasoning_summary || "auto",
 			textVerbosity: text_verbosity || "medium",
 			serviceTier: service_tier || "auto",
 			store: false,
@@ -436,7 +462,6 @@ function buildDefaultProviderOptions(args: {
 			...(reasoning_effort && { reasoningEffort: reasoning_effort }),
 		},
 		google: {
-			// Provide sensible defaults; allow extra_body.google to override
 			thinkingConfig: {
 				thinkingBudget: extra_body?.google?.thinking_config?.thinking_budget || 4000,
 				includeThoughts: true,
@@ -451,7 +476,8 @@ function buildDefaultProviderOptions(args: {
 }
 
 type Attempt = { type: 'gateway' | 'custom', name?: string, apiKey: string, model: string };
-const getGatewayForAttempt = (attempt: Attempt) => {
+
+const getGatewayForAttempt = async (attempt: Attempt) => {
 	if (attempt.type === 'gateway') {
 		const gatewayOptions: any = { apiKey: attempt.apiKey, baseURL: 'https://ai-gateway.vercel.sh/v1/ai' };
 		if (attempt.model === 'anthropic/claude-sonnet-4') {
@@ -459,7 +485,7 @@ const getGatewayForAttempt = (attempt: Attempt) => {
 		}
 		return createGateway(gatewayOptions);
 	}
-	return createCustomProvider(attempt.name!, attempt.apiKey);
+	return await createCustomProvider(attempt.name!, attempt.apiKey);
 };
 
 function prepareProvidersToTry(args: {
@@ -1205,242 +1231,6 @@ app.use('*', cors({
 	allowHeaders: ['*'],
 }))
 
-app.post('/v1/chat/completions', async (c: Context) => {
-	const authHeader = c.req.header('Authorization');
-	let apiKey = authHeader?.split(' ')[1];
-
-	const envPassword = process.env.PASSWORD;
-	const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
-
-	if (!apiKey) {
-		return c.text('Unauthorized', 401);
-	}
-
-	const abortController = new AbortController();
-
-	let gateway;
-
-	// Get headers
-	tavilyApiKey = c.req.header('x-tavily-api-key') || (isPasswordAuth ? process.env.TAVILY_API_KEY || null : null);
-	pythonApiKey = c.req.header('x-python-api-key') || (isPasswordAuth ? process.env.PYTHON_API_KEY || null : null);
-	pythonUrl = c.req.header('x-python-url') || (isPasswordAuth ? process.env.PYTHON_URL || null : null);
-	semanticScholarApiKey = c.req.header('x-semantic-scholar-api-key') || (isPasswordAuth ? process.env.SEMANTIC_SCHOLAR_API_KEY || null : null);
-
-	const body = await c.req.json();
-	const { model, messages = [], tools, stream, temperature, top_p, top_k, max_tokens, stop_sequences, seed, presence_penalty, frequency_penalty, tool_choice, reasoning_effort, thinking, extra_body, text_verbosity, service_tier } = body;
-
-	// Get provider API keys from request headers
-	const headers: Record<string, string> = {}
-	c.req.raw.headers.forEach((value, key) => {
-		headers[key.toLowerCase().replace(/-/g, '_')] = value
-	})
-
-	// Add context messages using shared function
-	const contextMessages = addContextMessages(messages, c);
-
-	// Use async provider keys function for better performance
-	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
-	const aiSdkTools: Record<string, any> = buildAiSdkTools(model, tools, contextMessages);
-
-	// Parse the model name to determine provider(s)
-	const { providersToTry } = prepareProvidersToTry({ model, providerKeys, isPasswordAuth, authApiKey: apiKey });
-
-	const processedMessages = await processMessages(contextMessages);
-
-	const providerOptionsHeader = c.req.header('x-provider-options');
-	const providerOptions = buildDefaultProviderOptions({ providerOptionsHeader: providerOptionsHeader ?? null, thinking, reasoning_effort, extra_body, text_verbosity, service_tier });
-
-	// If streaming, handle retries within a single ReadableStream so we can switch keys on error mid-stream
-	if (stream) {
-		const streamResponse = new ReadableStream({
-			async start(controller) {
-				const now = Math.floor(Date.now() / 1000);
-				const chunkId = `chatcmpl-${now}`;
-				const baseChunk = { id: chunkId, object: 'chat.completion.chunk', created: now, model } as any;
-				const maxAttempts = Math.min(providersToTry.length, MAX_ATTEMPTS);
-				let attemptsTried = 0;
-				let lastStreamError: any = null;
-				let accumulatedCitations: Array<{ type: string, url_citation: { url: string, title: string } }> = [];
-				for (let i = 0; i < maxAttempts; i++) {
-					if (abortController.signal.aborted) break;
-					const attempt = providersToTry[i];
-					if (!attempt) continue;
-					try {
-						attemptsTried++;
-						const gw = getGatewayForAttempt(attempt);
-						const commonOptions = buildCommonOptions(gw, attempt, {
-							messages: processedMessages,
-							aiSdkTools,
-							temperature,
-							top_p,
-							top_k,
-							max_tokens,
-							seed,
-							stop_sequences,
-							presence_penalty,
-							frequency_penalty,
-							tool_choice,
-							abortSignal: abortController.signal,
-							providerOptions,
-						});
-
-						const result = streamText(commonOptions);
-						// Forward chunks; on error, try next key/provider
-						for await (const rawPart of (result as any).fullStream) {
-							const part: any = rawPart;
-							if (abortController.signal.aborted) throw new Error('aborted');
-							let chunk: any;
-							switch (part.type) {
-								case 'error':
-									if ([429, 401].includes((part as any)?.error?.statusCode)) {
-										throw new Error((part as any)?.error || 'Streaming provider error');
-									} else {
-										chunk = { ...baseChunk, choices: [{ index: 0, delta: { error: part.error }, finish_reason: null }] };
-										controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
-									}
-									break;
-								case 'reasoning-delta':
-									chunk = { ...baseChunk, choices: [{ index: 0, delta: { reasoning_content: part.text }, finish_reason: null }] };
-									controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
-									break;
-								case 'text-delta':
-									chunk = { ...baseChunk, choices: [{ index: 0, delta: { content: part.text }, finish_reason: null }] };
-									controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
-									break;
-								case 'source':
-									// Accumulate citations for later inclusion in finish
-									accumulatedCitations.push({
-										type: part.sourceType + '_citation',
-										url_citation: {
-											url: part.url || '',
-											title: part.title || ''
-										}
-									});
-									break;
-								case 'tool-call':
-									if (!EXCLUDED_TOOLS.has(part.toolName)) {
-										chunk = { ...baseChunk, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: part.toolCallId, type: 'function', function: { name: part.toolName, arguments: JSON.stringify(part.input) } }] }, finish_reason: null }] };
-										controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
-									}
-									break;
-								case 'tool-result':
-									if (!EXCLUDED_TOOLS.has(part.toolName)) {
-										chunk = { ...baseChunk, choices: [{ index: 0, delta: { role: 'tool', content: [{ type: 'tool_call_output', call_id: part.toolCallId, output: typeof part.result === 'string' ? part.result : JSON.stringify(part.result) }] }, finish_reason: null }] };
-										controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
-									}
-									break;
-								case 'finish':
-									if (accumulatedCitations.length > 0) {
-										const citationsChunk = { ...baseChunk, choices: [{ index: 0, delta: { annotations: accumulatedCitations }, finish_reason: null }] };
-										controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(citationsChunk)}\n\n`));
-									}
-									chunk = { ...baseChunk, choices: [{ index: 0, delta: {}, finish_reason: part.finishReason }], usage: { prompt_tokens: part.totalUsage.inputTokens, completion_tokens: part.totalUsage.outputTokens, total_tokens: part.totalUsage.totalTokens } };
-									controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
-									break;
-							}
-						}
-						// If finished streaming without throwing, end the SSE and return
-						controller.enqueue(TEXT_ENCODER.encode('data: [DONE]\n\n'));
-						controller.close();
-						return;
-					} catch (error: any) {
-						if (abortController.signal.aborted || error?.message === 'aborted' || error?.name === 'AbortError') {
-							// Aborted by client
-							const abortPayload = { error: { message: 'Request was aborted by the user', type: 'request_aborted', statusCode: 499 } };
-							const abortChunk = { ...baseChunk, choices: [{ index: 0, delta: { content: JSON.stringify(abortPayload) }, finish_reason: 'stop' }] };
-							controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(abortChunk)}\n\n`));
-							controller.enqueue(TEXT_ENCODER.encode('data: [DONE]\n\n'));
-							controller.close();
-							return;
-						}
-						lastStreamError = error;
-						console.error(`Streaming error with provider ${i + 1}/${providersToTry.length} (${attempt.type}${attempt.name ? ':' + attempt.name : ''}):`, error);
-						// Otherwise, try next key/provider in the next loop iteration
-						continue;
-					}
-				}
-
-				// If all attempts failed
-				const statusCode = lastStreamError?.statusCode || 500;
-				const errMsg = lastStreamError?.message || 'An unknown error occurred';
-				const errorPayload = { error: { message: `All ${attemptsTried} attempt(s) failed. Last error: ${errMsg}`, type: lastStreamError?.type, statusCode } };
-				const errorChunk = { ...baseChunk, choices: [{ index: 0, delta: { content: JSON.stringify(errorPayload) }, finish_reason: 'stop' }] };
-				controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(errorChunk)}\n\n`));
-				controller.enqueue(TEXT_ENCODER.encode('data: [DONE]\n\n'));
-				controller.close();
-			},
-		});
-		return new Response(streamResponse, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
-	}
-
-	// Non-streaming: try providers sequentially and return first success
-	let lastError: any;
-	const maxAttempts = Math.min(providersToTry.length, MAX_ATTEMPTS);
-	let attemptsTried = 0;
-	for (let i = 0; i < maxAttempts; i++) {
-		const provider = providersToTry[i];
-		if (!provider) continue;
-		try {
-			attemptsTried++;
-			const gw = getGatewayForAttempt(provider);
-			const commonOptions = buildCommonOptions(gw, provider, {
-				messages: processedMessages,
-				aiSdkTools,
-				temperature,
-				top_p,
-				top_k,
-				max_tokens,
-				seed,
-				stop_sequences,
-				presence_penalty,
-				frequency_penalty,
-				tool_choice,
-				abortSignal: abortController.signal,
-				providerOptions,
-			});
-
-			const result = await generateText(commonOptions);
-			const openAIResponse = await toOpenAIResponse(result, model);
-			return c.json(openAIResponse);
-		} catch (error: any) {
-			console.error(`Error with provider ${i + 1}/${providersToTry.length} (${provider.type}${provider.name ? ':' + provider.name : ''}):`, error.message || error);
-			lastError = error;
-
-			if (error.name === 'AbortError' || abortController.signal.aborted) {
-				const abortPayload = { error: { message: 'Request was aborted by the user', type: 'request_aborted', statusCode: 499 } };
-				return c.json(abortPayload, 499 as any);
-			}
-			if (i < maxAttempts - 1) continue;
-			break;
-		}
-	}
-
-	let errorMessage = lastError.message || 'An unknown error occurred';
-	let errorType = lastError.type;
-	const statusCode = lastError.statusCode || 500;
-
-	if (lastError.cause && lastError.cause.responseBody) {
-		try {
-			const body = JSON.parse(lastError.cause.responseBody);
-			if (body.error) {
-				errorMessage = body.error.message || errorMessage;
-				errorType = body.error.type || errorType;
-			}
-		} catch (e) {
-			// ignore parsing error
-		}
-	}
-
-	const errorPayload = {
-		error: {
-			message: `All ${attemptsTried} attempt(s) failed. Last error: ${errorMessage}`,
-			type: errorType,
-			statusCode: statusCode,
-		},
-	};
-	return c.json(errorPayload, statusCode);
-})
-
 app.post('/v1/responses', async (c: Context) => {
 	const authHeader = c.req.header('Authorization');
 	const apiKey = authHeader?.split(' ')[1] || null;
@@ -1464,12 +1254,7 @@ app.post('/v1/responses', async (c: Context) => {
 		stream = false,
 		temperature,
 		top_p,
-		top_k,
 		max_output_tokens,
-		stop_sequences,
-		seed,
-		presence_penalty,
-		frequency_penalty,
 		tool_choice,
 		tools,
 		// Reasoning: body.reasoning?.effort
@@ -1477,7 +1262,7 @@ app.post('/v1/responses', async (c: Context) => {
 		previous_response_id,
 		request_id,
 		extra_body,
-		text_verbosity,
+		text,
 		service_tier,
 	} = body || {};
 
@@ -1522,14 +1307,14 @@ app.post('/v1/responses', async (c: Context) => {
 
 	// Provider options (map differences)
 	const providerOptionsHeader = c.req.header('x-provider-options');
-	const reasoning_effort = reasoning?.effort ?? undefined;
 	const providerOptions = buildDefaultProviderOptions({
 		providerOptionsHeader: providerOptionsHeader ?? null,
 		thinking: undefined,
-		reasoning_effort,
+		reasoning_effort: reasoning?.effort || undefined,
 		extra_body,
-		text_verbosity,
+		text_verbosity: text?.verbosity || undefined,
 		service_tier,
+		reasoning_summary: reasoning?.summary || undefined,
 	});
 
 	// Rebuild tools based on actual messages context
@@ -1543,17 +1328,11 @@ app.post('/v1/responses', async (c: Context) => {
 		aiSdkTools,
 		temperature,
 		top_p,
-		top_k,
 		max_tokens: max_output_tokens,
-		seed,
-		stop_sequences,
-		presence_penalty,
-		frequency_penalty,
 		tool_choice,
 		abortSignal: abortController.signal,
 		providerOptions,
 	};
-
 	// Storage preparation
 	const responseId = request_id || randomId('resp');
 
@@ -1581,16 +1360,13 @@ app.post('/v1/responses', async (c: Context) => {
 					output: outputItems,
 					parallel_tool_calls: true,
 					previous_response_id: previous_response_id || null,
-					prompt_cache_key: null,
-					reasoning: { effort: reasoning_effort ?? null, summary: null },
-					safety_identifier: null,
-					service_tier: "priority",
+					prompt_cache_key: 'ai-gateway',
+					reasoning: reasoning,
 					store: true,
 					temperature: temperature ?? 1,
-					text: { format: { type: 'text' }, verbosity: "medium" },
+					text: text || { format: { type: 'text' }, verbosity: 'medium' },
 					tool_choice: tool_choice || 'auto',
 					tools: tools || [],
-					top_logprobs: 0,
 					top_p: top_p ?? 1,
 					truncation: 'disabled',
 					usage: null,
@@ -1630,7 +1406,7 @@ app.post('/v1/responses', async (c: Context) => {
 					if (!attempt) continue;
 					try {
 						attemptsTried++;
-						const gw = getGatewayForAttempt(attempt);
+						const gw = await getGatewayForAttempt(attempt);
 						const commonOptions = buildCommonOptions(gw, attempt, commonParams);
 						const result = streamText(commonOptions);
 
@@ -1797,10 +1573,9 @@ app.post('/v1/responses', async (c: Context) => {
 								}
 								case 'tool-input-start': {
 									if (!EXCLUDED_TOOLS.has(part.toolName)) {
-										// Use a unique tracking key that won't conflict
-										const trackingKey = part.toolCallId || part.id;
+										const trackingKey = part.id;
 										const funcItemId = randomId('fc');
-										const callId = part.toolCallId || randomId('call');
+										const callId = randomId('call');
 										const currentOutputIndex = outputIndex + 1;
 
 										const functionItem = {
@@ -1833,7 +1608,7 @@ app.post('/v1/responses', async (c: Context) => {
 								case 'tool-call': {
 									// Final tool call with complete input - finalize arguments
 									if (!EXCLUDED_TOOLS.has(part.toolName)) {
-										const trackingKey = part.toolCallId || part.id;
+										const trackingKey = part.toolCallId;
 										const funcCall = functionCallItems.get(trackingKey);
 
 										if (funcCall) {
@@ -1867,7 +1642,7 @@ app.post('/v1/responses', async (c: Context) => {
 								}
 								case 'tool-input-delta': {
 									// Find the function call by tool call ID or part ID
-									const trackingKey = part.toolCallId || part.id;
+									const trackingKey = part.id;
 									const funcCall = functionCallItems.get(trackingKey);
 
 									if (funcCall && !EXCLUDED_TOOLS.has(funcCall.name)) {
@@ -1886,7 +1661,7 @@ app.post('/v1/responses', async (c: Context) => {
 								}
 								case 'tool-result': {
 									// Find the function call by tool call ID or tool name
-									const trackingKey = part.toolCallId || part.id;
+									const trackingKey = part.toolCallId;
 									const funcCall = functionCallItems.get(trackingKey);
 
 									if (funcCall && !EXCLUDED_TOOLS.has(funcCall.name)) {
@@ -2042,7 +1817,7 @@ app.post('/v1/responses', async (c: Context) => {
 		const attempt = providersToTry[i];
 		if (!attempt) continue;
 		try {
-			const gw = getGatewayForAttempt(attempt);
+			const gw = await getGatewayForAttempt(attempt);
 			const commonOptions = buildCommonOptions(gw, attempt, commonParams);
 			const result = await generateText(commonOptions);
 			// Transform result.sources to annotations format  
@@ -2075,7 +1850,7 @@ app.post('/v1/responses', async (c: Context) => {
 				model,
 				output,
 				previous_response_id: previous_response_id || null,
-				reasoning: { effort: reasoning_effort ?? null, summary: null },
+				reasoning: reasoning,
 				parallel_tool_calls: true,
 				store: true,
 				temperature: temperature ?? 1,
@@ -2108,6 +1883,242 @@ app.post('/v1/responses', async (c: Context) => {
 	return c.json(errorPayload, statusCode);
 });
 
+app.post('/v1/chat/completions', async (c: Context) => {
+	const authHeader = c.req.header('Authorization');
+	let apiKey = authHeader?.split(' ')[1];
+
+	const envPassword = process.env.PASSWORD;
+	const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
+
+	if (!apiKey) {
+		return c.text('Unauthorized', 401);
+	}
+
+	const abortController = new AbortController();
+
+	let gateway;
+
+	// Get headers
+	tavilyApiKey = c.req.header('x-tavily-api-key') || (isPasswordAuth ? process.env.TAVILY_API_KEY || null : null);
+	pythonApiKey = c.req.header('x-python-api-key') || (isPasswordAuth ? process.env.PYTHON_API_KEY || null : null);
+	pythonUrl = c.req.header('x-python-url') || (isPasswordAuth ? process.env.PYTHON_URL || null : null);
+	semanticScholarApiKey = c.req.header('x-semantic-scholar-api-key') || (isPasswordAuth ? process.env.SEMANTIC_SCHOLAR_API_KEY || null : null);
+
+	const body = await c.req.json();
+	const { model, messages = [], tools, stream, temperature, top_p, top_k, max_tokens, stop_sequences, seed, presence_penalty, frequency_penalty, tool_choice, reasoning_effort, thinking, extra_body, text_verbosity, service_tier } = body;
+
+	// Get provider API keys from request headers
+	const headers: Record<string, string> = {}
+	c.req.raw.headers.forEach((value, key) => {
+		headers[key.toLowerCase().replace(/-/g, '_')] = value
+	})
+
+	// Add context messages using shared function
+	const contextMessages = addContextMessages(messages, c);
+
+	// Use async provider keys function for better performance
+	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
+	const aiSdkTools: Record<string, any> = buildAiSdkTools(model, tools, contextMessages);
+
+	// Parse the model name to determine provider(s)
+	const { providersToTry } = prepareProvidersToTry({ model, providerKeys, isPasswordAuth, authApiKey: apiKey });
+
+	const processedMessages = await processMessages(contextMessages);
+
+	const providerOptionsHeader = c.req.header('x-provider-options');
+	const providerOptions = buildDefaultProviderOptions({ providerOptionsHeader: providerOptionsHeader ?? null, thinking, reasoning_effort, extra_body, text_verbosity, service_tier });
+
+	// If streaming, handle retries within a single ReadableStream so we can switch keys on error mid-stream
+	if (stream) {
+		const streamResponse = new ReadableStream({
+			async start(controller) {
+				const now = Math.floor(Date.now() / 1000);
+				const chunkId = `chatcmpl-${now}`;
+				const baseChunk = { id: chunkId, object: 'chat.completion.chunk', created: now, model } as any;
+				const maxAttempts = Math.min(providersToTry.length, MAX_ATTEMPTS);
+				let attemptsTried = 0;
+				let lastStreamError: any = null;
+				let accumulatedCitations: Array<{ type: string, url_citation: { url: string, title: string } }> = [];
+				for (let i = 0; i < maxAttempts; i++) {
+					if (abortController.signal.aborted) break;
+					const attempt = providersToTry[i];
+					if (!attempt) continue;
+					try {
+						attemptsTried++;
+						const gw = await getGatewayForAttempt(attempt);
+						const commonOptions = buildCommonOptions(gw, attempt, {
+							messages: processedMessages,
+							aiSdkTools,
+							temperature,
+							top_p,
+							top_k,
+							max_tokens,
+							seed,
+							stop_sequences,
+							presence_penalty,
+							frequency_penalty,
+							tool_choice,
+							abortSignal: abortController.signal,
+							providerOptions,
+						});
+
+						const result = streamText(commonOptions);
+						// Forward chunks; on error, try next key/provider
+						for await (const rawPart of (result as any).fullStream) {
+							const part: any = rawPart;
+							if (abortController.signal.aborted) throw new Error('aborted');
+							let chunk: any;
+							switch (part.type) {
+								case 'error':
+									if ([429, 401].includes((part as any)?.error?.statusCode)) {
+										throw new Error((part as any)?.error || 'Streaming provider error');
+									} else {
+										chunk = { ...baseChunk, choices: [{ index: 0, delta: { error: part.error }, finish_reason: null }] };
+										controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+									}
+									break;
+								case 'reasoning-delta':
+									chunk = { ...baseChunk, choices: [{ index: 0, delta: { reasoning_content: part.text }, finish_reason: null }] };
+									controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+									break;
+								case 'text-delta':
+									chunk = { ...baseChunk, choices: [{ index: 0, delta: { content: part.text }, finish_reason: null }] };
+									controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+									break;
+								case 'source':
+									// Accumulate citations for later inclusion in finish
+									accumulatedCitations.push({
+										type: part.sourceType + '_citation',
+										url_citation: {
+											url: part.url || '',
+											title: part.title || ''
+										}
+									});
+									break;
+								case 'tool-call':
+									if (!EXCLUDED_TOOLS.has(part.toolName)) {
+										chunk = { ...baseChunk, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: part.toolCallId, type: 'function', function: { name: part.toolName, arguments: JSON.stringify(part.input) } }] }, finish_reason: null }] };
+										controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+									}
+									break;
+								case 'tool-result':
+									if (!EXCLUDED_TOOLS.has(part.toolName)) {
+										chunk = { ...baseChunk, choices: [{ index: 0, delta: { role: 'tool', content: [{ type: 'tool_call_output', call_id: part.toolCallId, output: typeof part.result === 'string' ? part.result : JSON.stringify(part.result) }] }, finish_reason: null }] };
+										controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+									}
+									break;
+								case 'finish':
+									if (accumulatedCitations.length > 0) {
+										const citationsChunk = { ...baseChunk, choices: [{ index: 0, delta: { annotations: accumulatedCitations }, finish_reason: null }] };
+										controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(citationsChunk)}\n\n`));
+									}
+									chunk = { ...baseChunk, choices: [{ index: 0, delta: {}, finish_reason: part.finishReason }], usage: { prompt_tokens: part.totalUsage.inputTokens, completion_tokens: part.totalUsage.outputTokens, total_tokens: part.totalUsage.totalTokens } };
+									controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+									break;
+							}
+						}
+						// If finished streaming without throwing, end the SSE and return
+						controller.enqueue(TEXT_ENCODER.encode('data: [DONE]\n\n'));
+						controller.close();
+						return;
+					} catch (error: any) {
+						if (abortController.signal.aborted || error?.message === 'aborted' || error?.name === 'AbortError') {
+							// Aborted by client
+							const abortPayload = { error: { message: 'Request was aborted by the user', type: 'request_aborted', statusCode: 499 } };
+							const abortChunk = { ...baseChunk, choices: [{ index: 0, delta: { content: JSON.stringify(abortPayload) }, finish_reason: 'stop' }] };
+							controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(abortChunk)}\n\n`));
+							controller.enqueue(TEXT_ENCODER.encode('data: [DONE]\n\n'));
+							controller.close();
+							return;
+						}
+						lastStreamError = error;
+						console.error(`Streaming error with provider ${i + 1}/${providersToTry.length} (${attempt.type}${attempt.name ? ':' + attempt.name : ''}):`, error);
+						// Otherwise, try next key/provider in the next loop iteration
+						continue;
+					}
+				}
+
+				// If all attempts failed
+				const statusCode = lastStreamError?.statusCode || 500;
+				const errMsg = lastStreamError?.message || 'An unknown error occurred';
+				const errorPayload = { error: { message: `All ${attemptsTried} attempt(s) failed. Last error: ${errMsg}`, type: lastStreamError?.type, statusCode } };
+				const errorChunk = { ...baseChunk, choices: [{ index: 0, delta: { content: JSON.stringify(errorPayload) }, finish_reason: 'stop' }] };
+				controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(errorChunk)}\n\n`));
+				controller.enqueue(TEXT_ENCODER.encode('data: [DONE]\n\n'));
+				controller.close();
+			},
+		});
+		return new Response(streamResponse, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
+	}
+
+	// Non-streaming: try providers sequentially and return first success
+	let lastError: any;
+	const maxAttempts = Math.min(providersToTry.length, MAX_ATTEMPTS);
+	let attemptsTried = 0;
+	for (let i = 0; i < maxAttempts; i++) {
+		const provider = providersToTry[i];
+		if (!provider) continue;
+		try {
+			attemptsTried++;
+			const gw = await getGatewayForAttempt(provider);
+			const commonOptions = buildCommonOptions(gw, provider, {
+				messages: processedMessages,
+				aiSdkTools,
+				temperature,
+				top_p,
+				top_k,
+				max_tokens,
+				seed,
+				stop_sequences,
+				presence_penalty,
+				frequency_penalty,
+				tool_choice,
+				abortSignal: abortController.signal,
+				providerOptions,
+			});
+
+			const result = await generateText(commonOptions);
+			const openAIResponse = await toOpenAIResponse(result, model);
+			return c.json(openAIResponse);
+		} catch (error: any) {
+			console.error(`Error with provider ${i + 1}/${providersToTry.length} (${provider.type}${provider.name ? ':' + provider.name : ''}):`, error.message || error);
+			lastError = error;
+
+			if (error.name === 'AbortError' || abortController.signal.aborted) {
+				const abortPayload = { error: { message: 'Request was aborted by the user', type: 'request_aborted', statusCode: 499 } };
+				return c.json(abortPayload, 499 as any);
+			}
+			if (i < maxAttempts - 1) continue;
+			break;
+		}
+	}
+
+	let errorMessage = lastError.message || 'An unknown error occurred';
+	let errorType = lastError.type;
+	const statusCode = lastError.statusCode || 500;
+
+	if (lastError.cause && lastError.cause.responseBody) {
+		try {
+			const body = JSON.parse(lastError.cause.responseBody);
+			if (body.error) {
+				errorMessage = body.error.message || errorMessage;
+				errorType = body.error.type || errorType;
+			}
+		} catch (e) {
+			// ignore parsing error
+		}
+	}
+
+	const errorPayload = {
+		error: {
+			message: `All ${attemptsTried} attempt(s) failed. Last error: ${errorMessage}`,
+			type: errorType,
+			statusCode: statusCode,
+		},
+	};
+	return c.json(errorPayload, statusCode);
+})
+
 // Shared models handler function
 async function handleModelsRequest(c: Context) {
 	// Helper function to fetch models from custom provider
@@ -2127,6 +2138,19 @@ async function handleModelsRequest(c: Context) {
 		if (providerName === 'gemini') {
 			modelsEndpoint = modelsEndpoint + '?key=' + apiKey;
 			response = await fetch(modelsEndpoint);
+		} else if (providerName === 'copilot') {
+			const copilotToken = await fetchCopilotToken(apiKey);
+			response = await fetch(modelsEndpoint, {
+				method: 'GET',
+				headers: {
+					'Authorization': `Bearer ${copilotToken}`,
+					'Content-Type': 'application/json',
+					"editor-version": "vscode/1.103.1",
+					"copilot-vision-request": "true",
+					"editor-plugin-version": "copilot-chat/0.30.1",
+					"user-agent": "GitHubCopilotChat/0.30.1"
+				},
+			});
 		} else {
 			response = await fetch(modelsEndpoint, {
 				method: 'GET',
@@ -2360,9 +2384,12 @@ async function handleModelsRequest(c: Context) {
 	// Custom model lists for providers that don't support /models endpoint
 	const CUSTOM_MODEL_LISTS = {
 		poixe: [
-			{ id: 'gpt-5:free', name: 'GPT-5' },
-			{ id: 'grok-3-mini:free', name: 'Grok 3 Mini' },
-			{ id: 'grok-4:free', name: 'Grok 4' },
+			{ id: 'gpt-5:free', name: 'GPT-5 4K/2K' },
+			{ id: 'gpt-5-mini:free', name: 'GPT-5 Mini 4K' },
+			{ id: 'grok-3-mini:free', name: 'Grok 3 Mini 4K' },
+			{ id: 'grok-4:free', name: 'Grok 4 4K/2K' },
+			{ id: 'claude-sonnet-4-20250514:free', name: 'Claude Sonnet 4 4K/2K' },
+			{ id: 'doubao-seed-1-6-thinking-250615:free', name: 'Doubao Seed 1.6 Thinking 4K/2K' },
 		],
 		doubao: [
 			{ id: 'doubao-seed-1-6-flash-250715', name: 'Doubao Seed 1.6 Flash' },
@@ -2406,6 +2433,385 @@ async function handleModelsRequest(c: Context) {
 
 app.get('/v1/models', handleModelsRequest);
 app.post('/v1/models', handleModelsRequest);
+
+// Get a model response
+app.get('/v1/responses/:response_id', async (c: Context) => {
+	const authHeader = c.req.header('Authorization');
+	const apiKey = authHeader?.split(' ')[1];
+	const envPassword = process.env.PASSWORD;
+	const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
+
+	if (!isPasswordAuth) {
+		return c.text('Unauthorized', 401);
+	}
+
+	const responseId = c.req.param('response_id');
+	const stream = c.req.query('stream') === 'true';
+
+	try {
+		// Get headers for store configuration
+		const headers: Record<string, string> = {};
+		c.req.raw.headers.forEach((value, key) => {
+			headers[key.toLowerCase().replace(/-/g, '_')] = value;
+		});
+
+		const store = getStoreWithConfig('responses', headers);
+		const storedResponse: any = await store.get(responseId, { type: 'json' as any });
+
+		if (!storedResponse) {
+			return c.json({
+				error: {
+					message: `Response with ID '${responseId}' not found.`,
+					type: 'invalid_request_error',
+					code: 'response_not_found'
+				}
+			}, 404);
+		}
+
+		// Build response object based on stored data
+		// Convert all messages from the conversation to output format
+		const output = [];
+
+		if (storedResponse.messages && Array.isArray(storedResponse.messages)) {
+			for (const message of storedResponse.messages) {
+				const outputMessage: any = {
+					type: 'message',
+					id: randomId('msg'),
+					status: 'completed',
+					role: message.role,
+					content: []
+				};
+
+				// Handle different content types
+				if (typeof message.content === 'string') {
+					// Check if this is a tool use result format
+					if (message.content.includes('<tool_use_result>')) {
+						// Parse tool use results and convert to function_call_output format
+						const toolResultMatch = message.content.match(/<tool_use_result>\s*<result>(.*?)<\/result>\s*<\/tool_use_result>/s);
+						if (toolResultMatch) {
+							let resultContent = toolResultMatch[1];
+							try {
+								// Try to parse JSON result
+								const parsed = JSON.parse(resultContent);
+								resultContent = JSON.stringify(parsed, null, 2);
+							} catch {
+								// Keep as string if not valid JSON
+							}
+
+							outputMessage.type = 'function_call_output';
+							outputMessage.call_id = randomId('call');
+							outputMessage.output = resultContent;
+							delete outputMessage.content; // function_call_output doesn't use content array
+						} else {
+							// Regular assistant message
+							outputMessage.content.push({
+								type: 'output_text',
+								text: message.content,
+								annotations: []
+							});
+						}
+					} else {
+						// Regular text message
+						outputMessage.content.push({
+							type: message.role === 'assistant' ? 'output_text' : 'input_text',
+							text: message.content,
+							annotations: []
+						});
+					}
+				} else if (Array.isArray(message.content)) {
+					// Handle structured content (images, files, etc.)
+					outputMessage.content = message.content.map((part: any) => {
+						if (part.type === 'text') {
+							return {
+								type: message.role === 'assistant' ? 'output_text' : 'input_text',
+								text: part.text,
+								annotations: []
+							};
+						} else if (part.type === 'image') {
+							return {
+								type: 'input_image',
+								image_url: { url: part.image },
+								...(part.mediaType && { media_type: part.mediaType })
+							};
+						} else if (part.type === 'file') {
+							return {
+								type: 'input_file',
+								data: part.data,
+								media_type: part.mediaType
+							};
+						}
+						return part;
+					});
+				}
+
+				output.push(outputMessage);
+			}
+		}
+
+		const response = {
+			id: responseId,
+			object: 'response',
+			created_at: Math.floor(Date.now() / 1000),
+			status: 'completed',
+			output,
+			store: true,
+		};
+
+		if (stream) {
+			// For streaming, return as server-sent events
+			const streamResponse = new ReadableStream({
+				start(controller) {
+					let sequenceNumber = 0;
+					const emit = (obj: any) => controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(obj)}\n\n`));
+
+					// Emit response events
+					emit({
+						type: 'response.created',
+						sequence_number: sequenceNumber++,
+						response: { ...response, status: 'completed' }
+					});
+
+					emit({
+						type: 'response.completed',
+						sequence_number: sequenceNumber++,
+						response
+					});
+
+					controller.enqueue(TEXT_ENCODER.encode('data: [DONE]\n\n'));
+					controller.close();
+				}
+			});
+
+			return new Response(streamResponse, {
+				headers: {
+					'Content-Type': 'text/event-stream; charset=utf-8',
+					'Cache-Control': 'no-cache',
+					'Connection': 'keep-alive'
+				}
+			});
+		}
+
+		return c.json(response);
+
+	} catch (error: any) {
+		console.error('Error retrieving response:', error);
+		return c.json({
+			error: {
+				message: 'Failed to retrieve response',
+				type: 'server_error'
+			}
+		}, 500);
+	}
+});
+
+// List responses
+app.get('/v1/responses', async (c: Context) => {
+	const authHeader = c.req.header('Authorization');
+	const apiKey = authHeader?.split(' ')[1];
+	const envPassword = process.env.PASSWORD;
+	const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
+
+	if (!isPasswordAuth) {
+		return c.text('Unauthorized', 401);
+	}
+
+	const directories = c.req.query('directories') === 'true';
+	const prefix = c.req.query('prefix') || '';
+	const limit = parseInt(c.req.query('limit') || '20');
+
+	try {
+		// Get headers for store configuration
+		const headers: Record<string, string> = {};
+		c.req.raw.headers.forEach((value, key) => {
+			headers[key.toLowerCase().replace(/-/g, '_')] = value;
+		});
+
+		const store = getStoreWithConfig('responses', headers);
+
+		// List blobs with optional parameters
+		const listOptions: any = {
+			directories,
+			...(prefix && { prefix })
+		};
+
+		try {
+			const listResult = await store.list(listOptions);
+
+			// Handle the AsyncIterable result
+			let blobs: any[] = [];
+			let dirs: string[] = [];
+
+			if (listResult && 'blobs' in listResult && Array.isArray((listResult as any).blobs)) {
+				blobs = (listResult as any).blobs;
+				dirs = (listResult as any).directories || [];
+			} else {
+				// Handle AsyncIterable case - iterate through results
+				for await (const item of listResult as any) {
+					if (item.blobs) {
+						blobs.push(...item.blobs);
+					}
+					if (item.directories) {
+						dirs.push(...item.directories);
+					}
+				}
+			}
+
+			// Format the response to match expected structure
+			const responseList = {
+				object: 'list',
+				data: blobs.slice(0, limit).map((blob: any) => ({
+					id: blob.key,
+					object: 'response',
+					etag: blob.etag,
+					key: blob.key,
+					created_at: Math.floor(Date.now() / 1000) // Could be extracted from etag if needed
+				})),
+				has_more: blobs.length > limit,
+				...(dirs && dirs.length > 0 && { directories: dirs })
+			};
+
+			return c.json(responseList);
+		} catch (listError: any) {
+			// Fallback: try to get individual keys if list fails
+			console.warn('List operation failed, attempting fallback:', listError);
+			return c.json({
+				object: 'list',
+				data: [],
+				has_more: false,
+				error: 'List operation not fully supported'
+			});
+		}
+
+	} catch (error: any) {
+		console.error('Error listing responses:', error);
+		return c.json({
+			error: {
+				message: 'Failed to list responses',
+				type: 'server_error'
+			}
+		}, 500);
+	}
+});
+
+// Delete all responses
+app.delete('/v1/responses/all', async (c: Context) => {
+	const authHeader = c.req.header('Authorization');
+	const apiKey = authHeader?.split(' ')[1];
+	const envPassword = process.env.PASSWORD;
+	const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
+
+	if (!isPasswordAuth) {
+		return c.text('Unauthorized', 401);
+	}
+
+	try {
+		// Get headers for store configuration
+		const headers: Record<string, string> = {};
+		c.req.raw.headers.forEach((value, key) => {
+			headers[key.toLowerCase().replace(/-/g, '_')] = value;
+		});
+
+		const store = getStoreWithConfig('responses', headers);
+
+		// List all responses and delete them
+		try {
+			const listResult = await store.list();
+			let blobs: any[] = [];
+
+			// Handle the AsyncIterable result
+			if (listResult && 'blobs' in listResult && Array.isArray((listResult as any).blobs)) {
+				blobs = (listResult as any).blobs;
+			} else {
+				// Handle AsyncIterable case - iterate through results
+				for await (const item of listResult as any) {
+					if (item.blobs) {
+						blobs.push(...item.blobs);
+					}
+				}
+			}
+
+			const deletePromises = blobs.map((blob: any) => store.delete(blob.key));
+			await Promise.all(deletePromises);
+
+			return c.json({
+				message: `Successfully deleted ${blobs.length} responses`,
+				deleted_count: blobs.length
+			});
+		} catch (listError: any) {
+			// If list fails, we can't delete all, but we can return an appropriate error
+			console.error('Failed to list responses for deletion:', listError);
+			return c.json({
+				error: {
+					message: 'Failed to list responses for deletion',
+					type: 'server_error'
+				}
+			}, 500);
+		}
+
+	} catch (error: any) {
+		console.error('Error deleting all responses:', error);
+		return c.json({
+			error: {
+				message: 'Failed to delete all responses',
+				type: 'server_error'
+			}
+		}, 500);
+	}
+});
+
+// Delete a model response
+app.delete('/v1/responses/:response_id', async (c: Context) => {
+	const authHeader = c.req.header('Authorization');
+	const apiKey = authHeader?.split(' ')[1];
+	const envPassword = process.env.PASSWORD;
+	const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
+
+	if (!isPasswordAuth) {
+		return c.text('Unauthorized', 401);
+	}
+
+	const responseId = c.req.param('response_id');
+
+	try {
+		// Get headers for store configuration
+		const headers: Record<string, string> = {};
+		c.req.raw.headers.forEach((value, key) => {
+			headers[key.toLowerCase().replace(/-/g, '_')] = value;
+		});
+
+		const store = getStoreWithConfig('responses', headers);
+
+		// Check if response exists before deleting
+		const existingResponse: any = await store.get(responseId, { type: 'json' as any });
+		if (!existingResponse) {
+			return c.json({
+				error: {
+					message: `Response with ID '${responseId}' not found.`,
+					type: 'invalid_request_error',
+					code: 'response_not_found'
+				}
+			}, 404);
+		}
+
+		// Delete the response
+		await store.delete(responseId);
+
+		return c.json({
+			id: responseId,
+			object: 'response',
+			deleted: true
+		});
+
+	} catch (error: any) {
+		console.error('Error deleting response:', error);
+		return c.json({
+			error: {
+				message: 'Failed to delete response',
+				type: 'server_error'
+			}
+		}, 500);
+	}
+});
 
 app.get('/*', (c: Context) => {
 	return c.text('Running')
