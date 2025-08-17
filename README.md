@@ -7,13 +7,13 @@ A high-performance AI Gateway built with [Hono](https://hono.dev/) for edge comp
 ### Development
 ```bash
 # Install dependencies
-pnpm install
+bun install
 
 # Start development server
-pnpm dev
+bun dev
 
 # Build for production
-pnpm build
+bun build
 ```
 
 ## 📡 API Endpoints

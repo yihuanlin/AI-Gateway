@@ -9,7 +9,6 @@ import { google, createGoogleGenerativeAI } from '@ai-sdk/google'
 import { groq, createGroq } from '@ai-sdk/groq';
 import { string, number, boolean, array, object, optional, int, enum as zenum } from 'zod/mini'
 
-export const config = { runtime: 'edge' };
 const app = new Hono()
 
 const SUPPORTED_PROVIDERS = {
@@ -319,6 +318,11 @@ const pythonExecutorTool = tool({
 	inputSchema: object({
 		code: string({ message: 'The Python code to execute.' }),
 	}),
+	providerOptions: {
+		anthropic: {
+			cacheControl: { type: 'ephemeral' },
+		},
+	},
 	execute: async ({ code }: { code: string }) => {
 		console.log(`Executing remote Python code: ${code.substring(0, 100)}...`);
 		try {
@@ -380,6 +384,11 @@ const tavilySearchTool = tool({
 		include_domains: optional(array(string({ message: 'Domain to include' }), { message: 'List of domains to include in the search' })),
 		exclude_domains: optional(array(string({ message: 'Domain to exclude' }), { message: 'List of domains to exclude from the search' })),
 	}),
+	providerOptions: {
+		anthropic: {
+			cacheControl: { type: 'ephemeral' },
+		},
+	},
 	execute: async (params) => {
 		const { query, max_results, include_domains, exclude_domains, include_raw_content } = params;
 		console.log(`Tavily search with query: ${query}`);
@@ -463,6 +472,11 @@ const jinaReaderTool = tool({
 	inputSchema: object({
 		url: string({ message: 'The URL of the webpage to fetch content from' }),
 	}),
+	providerOptions: {
+		anthropic: {
+			cacheControl: { type: 'ephemeral' },
+		},
+	},
 	execute: async ({ url }: {
 		url: string;
 	}) => {
@@ -514,6 +528,11 @@ const ensemblApiTool = tool({
 	inputSchema: object({
 		path: string({ message: 'API endpoint path (without base URL). Examples: xrefs/symbol/Danio_rerio/sox6_201?object_type=transcript, lookup/id/ENSG00000139618, sequence/id/ENSG00000139618' }),
 	}),
+	providerOptions: {
+		anthropic: {
+			cacheControl: { type: 'ephemeral' },
+		},
+	},
 	execute: async ({ path }: { path: string }) => {
 		console.log(`Ensembl API request to path: ${path}`);
 		try {
@@ -570,6 +589,11 @@ const semanticScholarSearchTool = tool({
 		minCitationCount: optional(number({ message: 'Minimum number of citations required' })),
 		publicationTypes: optional(string({ message: 'Filter by publication types (e.g., "Review,JournalArticle")' })),
 	}),
+	providerOptions: {
+		anthropic: {
+			cacheControl: { type: 'ephemeral' },
+		},
+	},
 	execute: async (params) => {
 		const { query, type = 'paper', fields, limit = 10, offset = 0, year, venue, fieldsOfStudy, minCitationCount, publicationTypes } = params;
 		console.log(`Semantic Scholar ${type} search: ${query}`);
@@ -658,6 +682,11 @@ const semanticScholarRecommendationsTool = tool({
 		limit: optional(number({ message: 'Maximum number of recommendations (default: 10, max: 100)' })),
 		from: optional(zenum(['recent', 'all-cs'], { message: 'Pool of papers to recommend from (default: recent)' })),
 	}),
+	providerOptions: {
+		anthropic: {
+			cacheControl: { type: 'ephemeral' },
+		},
+	},
 	execute: async (params) => {
 		const { paperId, positivePaperIds, negativePaperIds, fields, limit = 10, from = 'recent' } = params;
 		console.log(`Semantic Scholar recommendations for: ${paperId || `${positivePaperIds?.length || 0} positive papers`}`);
