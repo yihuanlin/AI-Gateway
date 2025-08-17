@@ -1,4 +1,4 @@
-# Vercel AI Gateway
+# AI Gateway
 
 A high-performance AI Gateway built with [Hono](https://hono.dev/) for edge computing environments. This gateway provides unified access to multiple AI providers with intelligent fallback, streaming support, and advanced tools integration.
 
@@ -21,6 +21,11 @@ bun build
 ### Chat Completions
 ```
 POST /v1/chat/completions
+```
+
+### Responses
+```
+POST /v1/responses
 ```
 
 ### Models List

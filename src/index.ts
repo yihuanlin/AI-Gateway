@@ -7,6 +7,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { openai, createOpenAI } from '@ai-sdk/openai'
 import { google, createGoogleGenerativeAI } from '@ai-sdk/google'
 import { groq, createGroq } from '@ai-sdk/groq';
+import { getStore } from '@netlify/blobs'
 import { string, number, boolean, array, object, optional, int, enum as zenum } from 'zod/mini'
 
 const app = new Hono()
@@ -84,6 +85,29 @@ let geo: {
 } | null = null;
 
 // Helper functions
+function getStoreWithConfig(name: string, headers?: Record<string, string>) {
+	// Check for NETLIFY_SITE_ID and NETLIFY_TOKEN in environment variables
+	const siteID = process.env.NETLIFY_SITE_ID;
+	const token = process.env.NETLIFY_TOKEN;
+
+	// Check for corresponding headers if environment variables are not found
+	const headerSiteID = headers?.['x-netlify-site-id'];
+	const headerToken = headers?.['x-netlify-token'];
+
+	if ((siteID && token) || (headerSiteID && headerToken)) {
+		return getStore({
+			name,
+			siteID: siteID || headerSiteID!,
+			token: token || headerToken!
+		});
+	} else if (process.env.NETLIFY_BLOBS_CONTEXT) {
+		return getStore(name);
+	} else {
+		// Fallback to default getStore call
+		return getStore(name);
+	}
+}
+
 function parseModelName(model: string) {
 	const parts = model.split('/');
 	if (parts.length >= 2) {
@@ -147,13 +171,26 @@ function parseModelDisplayName(model: string) {
 	return displayName;
 }
 
+function randomId(prefix: string) {
+	try {
+		// Prefer Web Crypto for consistency across runtimes
+		const bytes = crypto.getRandomValues(new Uint8Array(16));
+		const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+		return `${prefix}_${hex}`;
+	} catch {
+		// Fallback
+		const hex = Array.from({ length: 16 }, () => Math.floor(Math.random() * 256).toString(16).padStart(2, '0')).join('');
+		return `${prefix}_${hex}`;
+	}
+}
+
 async function getProviderKeys(headers: any, authHeader: string | null, isPasswordAuth: boolean = false): Promise<Record<string, string[]>> {
 	const providerKeys: Record<string, string[]> = {};
 	const headerEntries: Record<string, string | null> = {};
 
 	// Batch read all provider headers at once for better performance
 	for (const provider of PROVIDER_KEYS) {
-		const keyName = `${provider}_api_key`;
+		const keyName = `x-${provider}-api-key`;
 		headerEntries[provider] = headers[keyName] || null;
 	}
 
@@ -187,6 +224,15 @@ async function getProviderKeys(headers: any, authHeader: string | null, isPasswo
 
 async function toOpenAIResponse(result: GenerateTextResult<any, any>, model: string) {
 	const now = Math.floor(Date.now() / 1000);
+
+	const annotations = result.sources ? result.sources.map((source: any) => ({
+		type: (source.sourceType || 'url') + '_citation',
+		url_citation: {
+			url: source.url || '',
+			title: source.title || ''
+		}
+	})) : [];
+
 	const choices = result.text
 		? [
 			{
@@ -196,9 +242,7 @@ async function toOpenAIResponse(result: GenerateTextResult<any, any>, model: str
 					content: result.text,
 					reasoning_content: result.reasoningText,
 					tool_calls: result.toolCalls,
-					metadata: {
-						sources: result.sources
-					}
+					...(annotations.length > 0 ? { annotations } : {})
 				},
 				finish_reason: result.finishReason,
 			},
@@ -219,13 +263,59 @@ async function toOpenAIResponse(result: GenerateTextResult<any, any>, model: str
 	};
 }
 
+function addContextMessages(messages: any[], c: Context): any[] {
+	if (!geo) return messages;
+
+	const { country, city, timezone } = geo;
+	const ip = c.req.header('x-forwarded-for');
+	const now = new Date();
+
+	const contextParts = [
+		(city && country) ? `Location: ${city} (${country.name})` : country && `Country: ${country.name}`,
+		`Time: ${now.toLocaleString(country?.code === 'GB' ? 'en-GB' : 'en-US', { timeZone: timezone }).replace(',', '')} (${now.toLocaleDateString('en-US', { weekday: 'long', timeZone: timezone })})`,
+		ip && `IP: ${ip}`
+	].filter(Boolean);
+
+	if (contextParts.length > 0) {
+		const systemMessage = {
+			role: 'system' as const,
+			content: `Context Information: ${contextParts.join(', ')}`
+		};
+		return [systemMessage, ...messages];
+	}
+
+	return messages;
+}
+
 async function processMessages(contextMessages: any[]): Promise<any[]> {
 	const processedMessages: any[] = [];
 
 	// First pass: process tool calls and assistant messages
 	for (let mi = 0; mi < contextMessages.length; mi++) {
 		const message = contextMessages[mi];
+
+		// Skip tool messages (chat completions format) 
 		if (message.role === 'tool') continue;
+
+		// Handle function_call_output (responses format)
+		if (message.type === 'function_call_output') {
+			let resultText = message.output;
+			if (typeof resultText === 'string') {
+				try {
+					const parsed = JSON.parse(resultText);
+					if (Array.isArray(parsed) && parsed[0] && parsed[0].text) {
+						resultText = parsed[0].text;
+					}
+				} catch { }
+			}
+
+			// Add a tool use message format that AI SDK understands
+			processedMessages.push({
+				role: 'assistant',
+				content: `<tool_use_result>\n  <result>${resultText}</result>\n</tool_use_result>`
+			});
+			continue;
+		}
 
 		if (message.role === 'assistant' && message.tool_calls && Array.isArray(message.tool_calls)) {
 			let assistantContent = message.content || '';
@@ -233,9 +323,18 @@ async function processMessages(contextMessages: any[]): Promise<any[]> {
 				const toolName = toolCall.function.name;
 				const args = toolCall.function.arguments;
 				assistantContent += `\n<tool_use_result>\n  <name>${toolName}</name>\n  <arguments>${args}</arguments>\n`;
-				const toolResultMessage = contextMessages.find((m: any) => m.role === 'tool' && m.tool_call_id === toolCall.id);
+
+				// Look for tool result in both formats
+				let toolResultMessage = contextMessages.find((m: any) => m.role === 'tool' && m.tool_call_id === toolCall.id);
+
+				// If not found in chat completions format, look for responses format
+				if (!toolResultMessage) {
+					toolResultMessage = contextMessages.find((m: any) => m.type === 'function_call_output' && m.call_id === toolCall.id);
+				}
+
 				if (toolResultMessage) {
-					let resultText = toolResultMessage.content;
+					// Handle both content (chat completions) and output (responses) fields
+					let resultText = toolResultMessage.content || toolResultMessage.output;
 					if (typeof resultText === 'string') {
 						try {
 							const parsed = JSON.parse(resultText);
@@ -247,7 +346,6 @@ async function processMessages(contextMessages: any[]): Promise<any[]> {
 					assistantContent += `\n  <result>${resultText}</result>\n</tool_use_result>`;
 				}
 			}
-			processedMessages.push({ role: 'assistant', content: assistantContent });
 		} else {
 			processedMessages.push(message);
 		}
@@ -276,7 +374,6 @@ async function processMessages(contextMessages: any[]): Promise<any[]> {
 			}
 		})
 	);
-
 	return processedMessages;
 }
 
@@ -311,6 +408,333 @@ function createCustomProvider(providerName: string, apiKey: string) {
 			});
 	}
 }
+
+function buildDefaultProviderOptions(args: {
+	providerOptionsHeader?: string | null,
+	thinking?: any,
+	reasoning_effort?: any,
+	extra_body?: any,
+	text_verbosity?: any,
+	service_tier?: any,
+}) {
+	const { providerOptionsHeader, thinking, reasoning_effort, extra_body, text_verbosity, service_tier } = args;
+	const providerOptions = providerOptionsHeader ? JSON.parse(providerOptionsHeader) : {
+		anthropic: {
+			thinking: thinking || { type: "enabled", budgetTokens: 4000 },
+			cacheControl: { type: "ephemeral" },
+		},
+		openai: {
+			reasoningEffort: reasoning_effort || "medium",
+			reasoningSummary: "auto",
+			textVerbosity: text_verbosity || "medium",
+			serviceTier: service_tier || "auto",
+			store: false,
+			promptCacheKey: 'ai-gateway',
+		},
+		xai: {
+			searchParameters: { mode: "auto", returnCitations: true },
+			...(reasoning_effort && { reasoningEffort: reasoning_effort }),
+		},
+		google: {
+			// Provide sensible defaults; allow extra_body.google to override
+			thinkingConfig: {
+				thinkingBudget: extra_body?.google?.thinking_config?.thinking_budget || 4000,
+				includeThoughts: true,
+			},
+		},
+		custom: {
+			reasoning_effort: reasoning_effort || "medium",
+			extra_body: extra_body,
+		},
+	};
+	return providerOptions;
+}
+
+type Attempt = { type: 'gateway' | 'custom', name?: string, apiKey: string, model: string };
+const getGatewayForAttempt = (attempt: Attempt) => {
+	if (attempt.type === 'gateway') {
+		const gatewayOptions: any = { apiKey: attempt.apiKey, baseURL: 'https://ai-gateway.vercel.sh/v1/ai' };
+		if (attempt.model === 'anthropic/claude-sonnet-4') {
+			gatewayOptions.headers = { 'anthropic-beta': 'context-1m-2025-08-07' };
+		}
+		return createGateway(gatewayOptions);
+	}
+	return createCustomProvider(attempt.name!, attempt.apiKey);
+};
+
+function prepareProvidersToTry(args: {
+	model: string,
+	providerKeys: Record<string, string[]>,
+	isPasswordAuth: boolean,
+	authApiKey?: string | null,
+}) {
+	const { model, providerKeys, isPasswordAuth, authApiKey } = args;
+	const modelInfo = parseModelName(model);
+	const providersToTry: Array<Attempt> = [];
+
+	if (modelInfo.useCustomProvider && modelInfo.provider) {
+		let keys: string[] = providerKeys[modelInfo.provider] || [];
+		if (keys.length === 0) {
+			if (!isPasswordAuth && authApiKey) {
+				keys = authApiKey.split(',').map((k: string) => k.trim()).filter(Boolean);
+			} else if (isPasswordAuth) {
+				const envKeyName = `${modelInfo.provider.toUpperCase()}_API_KEY`;
+				const envVal = process.env[envKeyName];
+				if (envVal) keys = envVal.split(',').map((k: string) => k.trim()).filter(Boolean);
+			}
+		}
+
+		if (keys.length > 0) {
+			const shuffledKeys = keys.slice().sort(() => Math.random() - 0.5);
+			for (const key of shuffledKeys) {
+				providersToTry.push({ type: 'custom', name: modelInfo.provider, apiKey: key, model: modelInfo.model });
+			}
+		} else {
+			let gatewayKeys: string[] = [];
+			if (isPasswordAuth) {
+				const gatewayKey = process.env.GATEWAY_API_KEY;
+				if (gatewayKey) gatewayKeys = gatewayKey.split(',').map(k => k.trim()).filter(Boolean);
+			} else if (authApiKey) {
+				gatewayKeys = authApiKey.split(',').map((k: string) => k.trim()).filter(Boolean);
+			}
+
+			if (gatewayKeys.length > 0) {
+				const start = Math.floor(Math.random() * gatewayKeys.length);
+				for (let idx = 0; idx < gatewayKeys.length; idx++) {
+					const k = gatewayKeys[(start + idx) % gatewayKeys.length];
+					if (k) providersToTry.push({ type: 'gateway', apiKey: k, model: modelInfo.model });
+				}
+			}
+		}
+	} else {
+		let gatewayKeys: string[] = [];
+		if (isPasswordAuth) {
+			const gatewayKey = process.env.GATEWAY_API_KEY;
+			if (gatewayKey) gatewayKeys = gatewayKey.split(',').map(k => k.trim()).filter(Boolean);
+		} else if (authApiKey) {
+			gatewayKeys = authApiKey.split(',').map((k: string) => k.trim()).filter(Boolean);
+		}
+
+		if (gatewayKeys.length > 0) {
+			const start = Math.floor(Math.random() * gatewayKeys.length);
+			for (let idx = 0; idx < gatewayKeys.length; idx++) {
+				const k = gatewayKeys[(start + idx) % gatewayKeys.length];
+				if (k) providersToTry.push({ type: 'gateway', apiKey: k, model });
+			}
+		}
+	}
+
+	return { modelInfo, providersToTry };
+}
+
+// Convert OpenAI Responses API input format to AI SDK messages
+function responsesInputToAiSdkMessages(input: any): any[] {
+	if (!input) return [];
+
+	// Simple string => user text
+	if (typeof input === 'string') {
+		return [{ role: 'user', content: input }];
+	}
+
+	// Single input_text object
+	if (input && typeof input === 'object' && input.type === 'input_text' && typeof input.text === 'string') {
+		return [{ role: 'user', content: input.text }];
+	}
+
+	// Array of role/content objects
+	if (Array.isArray(input)) {
+		const messages: any[] = [];
+		for (const item of input) {
+			// Handle function_call_output messages (responses format)
+			if (item?.type === 'function_call_output') {
+				messages.push(item); // Pass through unchanged
+				continue;
+			}
+
+			const role = item?.role;
+
+			// Handle assistant messages with string content
+			if (role === 'assistant' && typeof item?.content === 'string') {
+				messages.push({ role: 'assistant', content: item.content });
+				continue;
+			}
+
+			const contentArr = Array.isArray(item?.content) ? item.content : [];
+			if (!role || contentArr.length === 0) continue;
+
+			if (role === 'system') {
+				// AI SDK expects a string content for system
+				const text = contentArr
+					.map((part: any) =>
+						part?.type === 'input_text' && typeof part?.text === 'string'
+							? part.text
+							: typeof part?.text === 'string'
+								? part.text
+								: typeof part === 'string'
+									? part
+									: ''
+					)
+					.filter(Boolean)
+					.join('\n');
+				if (text) messages.push({ role: 'system', content: text });
+				continue;
+			}
+
+			const parts: any[] = [];
+			for (const part of contentArr) {
+				if (!part) continue;
+				if (part.type === 'input_text' && typeof part.text === 'string') {
+					parts.push({ type: 'text', text: part.text });
+				} else if (part.type === 'text' && typeof part.text === 'string') {
+					parts.push({ type: 'text', text: part.text });
+				} else if (part.type === 'input_image') {
+					const imageSrc = part?.image_url?.url || part?.url || part?.image || part?.data;
+					if (imageSrc) {
+						const mediaType = part?.media_type || part?.mediaType;
+						parts.push(mediaType ? { type: 'image', image: imageSrc, mediaType } : { type: 'image', image: imageSrc });
+					}
+				} else if (part.type === 'input_file') {
+					const data = part?.data || part?.file_data || part?.url;
+					const mediaType = part?.media_type || part?.mediaType || 'application/octet-stream';
+					if (data) parts.push({ type: 'file', data, mediaType });
+				} else if (typeof part === 'string') {
+					parts.push({ type: 'text', text: part });
+				}
+			}
+
+			if (parts.length > 0) {
+				const finalRole = role === 'assistant' || role === 'user' || role === 'tool' ? role : 'user';
+				messages.push({ role: finalRole, content: parts });
+			}
+		}
+		return messages;
+	}
+
+	return [];
+}
+
+// Build AI SDK tools from OpenAI tools array with shared heuristics
+function buildAiSdkTools(model: string, userTools: any[] | undefined, messages: any[]): Record<string, any> {
+	let aiSdkTools: Record<string, any> = {};
+
+	// Only build tools if userTools is explicitly provided as an array (even if empty)
+	if (Array.isArray(userTools)) {
+		userTools.forEach((userTool: any) => {
+			// Support both OpenAI Chat-style and flat Responses-style tool schemas
+			const isFunctionType = userTool?.type === 'function';
+			const fn = userTool.function || (isFunctionType ? { name: userTool.name, parameters: userTool.parameters } : null);
+			if (isFunctionType && fn && (fn.name || userTool.name)) {
+				let clientParameters = fn.parameters || fn.inputSchema;
+				if (!clientParameters) return;
+				const finalParameters: Record<string, any> = {
+					type: 'object',
+					properties: clientParameters.properties || clientParameters,
+					required: clientParameters.required || [],
+				};
+				const properties = finalParameters.properties || {};
+				const required = finalParameters.required || [];
+				const zodFields: Record<string, any> = {};
+
+				for (const [key, prop] of Object.entries(properties)) {
+					const propDef = prop as any;
+					let zodType: any;
+					switch (propDef.type) {
+						case 'string': zodType = string({ message: propDef.description || 'String parameter' }); break;
+						case 'number': zodType = number({ message: propDef.description || 'Number parameter' }); break;
+						case 'integer': zodType = int({ message: propDef.description || 'Integer parameter' }); break;
+						case 'boolean': zodType = boolean({ message: propDef.description || 'Boolean parameter' }); break;
+						case 'array': zodType = array(string({ message: 'Array item' }), { message: propDef.description || 'Array parameter' }); break;
+						case 'object': zodType = object({}, { message: propDef.description || 'Object parameter' }); break;
+						default: zodType = string({ message: 'Any parameter' });
+					}
+					if (!required.includes(key)) zodType = optional(zodType);
+					zodFields[key] = zodType;
+				}
+
+				const fnName = fn.name || userTool.name;
+				const description = fn.description || userTool.description || `Function ${fnName}`;
+				aiSdkTools[fnName] = tool({ description, inputSchema: object(zodFields) });
+			}
+		});
+
+		const googleIncompatible = (!['google', 'gemini'].some(prefix => model.startsWith(prefix)) || Object.keys(aiSdkTools).length > 0);
+
+		const messageText = messages.map((msg: any) =>
+			typeof msg.content === 'string'
+				? msg.content.toLowerCase()
+				: Array.isArray(msg.content)
+					? msg.content.map((p: any) => (p?.text || '')).join(' ').toLowerCase()
+					: ''
+		).join(' ');
+
+		const containsResearchKeywords = RESEARCH_KEYWORDS.some(keyword => messageText.includes(keyword));
+
+		if (model.startsWith('openai')) {
+			aiSdkTools.web_search_preview = openai.tools.webSearchPreview({});
+			aiSdkTools.code_interpreter = openai.tools.codeInterpreter({});
+		} else if (model.startsWith('groq/openai')) {
+			aiSdkTools.browser_search = groq.tools.browserSearch({});
+		} else if (googleIncompatible && !model.startsWith('xai')) {
+			if (tavilyApiKey) aiSdkTools.tavily_search = tavilySearchTool;
+		}
+		if (containsResearchKeywords) {
+			aiSdkTools.ensembl_api = ensemblApiTool;
+			aiSdkTools.semantic_scholar_search = semanticScholarSearchTool;
+			aiSdkTools.semantic_scholar_recommendations = semanticScholarRecommendationsTool;
+		}
+		if (googleIncompatible) {
+			aiSdkTools.jina_reader = jinaReaderTool;
+			if (!model.startsWith('openai') && pythonApiKey && pythonUrl) {
+				aiSdkTools.python_executor = pythonExecutorTool;
+			}
+		} else {
+			aiSdkTools = {
+				google_search: google.tools.googleSearch({}),
+				url_context: google.tools.urlContext({}),
+				code_execution: google.tools.codeExecution({}),
+			};
+		}
+	}
+
+	return aiSdkTools;
+}
+
+const buildCommonOptions = (
+	gw: any,
+	attempt: Attempt,
+	params: {
+		messages: any[],
+		aiSdkTools: Record<string, any>,
+		temperature?: number,
+		top_p?: number,
+		top_k?: number,
+		max_tokens?: number,
+		seed?: number,
+		stop_sequences?: string[],
+		presence_penalty?: number,
+		frequency_penalty?: number,
+		tool_choice?: any,
+		abortSignal: AbortSignal,
+		providerOptions: any,
+	}
+) => ({
+	model: gw(attempt.model),
+	messages: params.messages,
+	tools: params.aiSdkTools,
+	temperature: params.temperature,
+	topP: params.top_p,
+	topK: params.top_k,
+	maxOutputTokens: params.max_tokens,
+	seed: params.seed,
+	stopSequences: params.stop_sequences,
+	presencePenalty: params.presence_penalty,
+	frequencyPenalty: params.frequency_penalty,
+	toolChoice: params.tool_choice,
+	abortSignal: params.abortSignal,
+	providerOptions: params.providerOptions,
+	stopWhen: [stepCountIs(20)],
+	onError: () => { }
+}) as any;
 
 // Tools definitions
 const pythonExecutorTool = tool({
@@ -781,7 +1205,6 @@ app.use('*', cors({
 	allowHeaders: ['*'],
 }))
 
-// Chat completions endpoint
 app.post('/v1/chat/completions', async (c: Context) => {
 	const authHeader = c.req.header('Authorization');
 	let apiKey = authHeader?.split(' ')[1];
@@ -798,10 +1221,10 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	let gateway;
 
 	// Get headers
-	tavilyApiKey = c.req.header('tavily_api_key') || (isPasswordAuth ? process.env.TAVILY_API_KEY || null : null);
-	pythonApiKey = c.req.header('python_api_key') || (isPasswordAuth ? process.env.PYTHON_API_KEY || null : null);
-	pythonUrl = c.req.header('python_url') || (isPasswordAuth ? process.env.PYTHON_URL || null : null);
-	semanticScholarApiKey = c.req.header('semantic_scholar_api_key') || (isPasswordAuth ? process.env.SEMANTIC_SCHOLAR_API_KEY || null : null);
+	tavilyApiKey = c.req.header('x-tavily-api-key') || (isPasswordAuth ? process.env.TAVILY_API_KEY || null : null);
+	pythonApiKey = c.req.header('x-python-api-key') || (isPasswordAuth ? process.env.PYTHON_API_KEY || null : null);
+	pythonUrl = c.req.header('x-python-url') || (isPasswordAuth ? process.env.PYTHON_URL || null : null);
+	semanticScholarApiKey = c.req.header('x-semantic-scholar-api-key') || (isPasswordAuth ? process.env.SEMANTIC_SCHOLAR_API_KEY || null : null);
 
 	const body = await c.req.json();
 	const { model, messages = [], tools, stream, temperature, top_p, top_k, max_tokens, stop_sequences, seed, presence_penalty, frequency_penalty, tool_choice, reasoning_effort, thinking, extra_body, text_verbosity, service_tier } = body;
@@ -812,266 +1235,20 @@ app.post('/v1/chat/completions', async (c: Context) => {
 		headers[key.toLowerCase().replace(/-/g, '_')] = value
 	})
 
-	// Optimize context message creation
-	let contextMessages = messages;
-	if (geo) {
-		const { country, city, timezone } = geo;
-		const ip = c.req.header('x-forwarded-for');
-		const now = new Date();
-
-		const contextParts = [
-			(city && country) ? `Location: ${city} (${country.name})` : country && `Country: ${country.name}`,
-			`Time: ${now.toLocaleString(country?.code === 'GB' ? 'en-GB' : 'en-US', { timeZone: timezone }).replace(',', '')} (${now.toLocaleDateString('en-US', { weekday: 'long', timeZone: timezone })})`,
-			ip && `IP: ${ip}`
-		].filter(Boolean);
-
-		if (contextParts.length > 0) {
-			const systemMessage = {
-				role: 'system' as const,
-				content: `Context Information: ${contextParts.join(', ')}`
-			};
-			contextMessages = [systemMessage, ...messages];
-		}
-	}
+	// Add context messages using shared function
+	const contextMessages = addContextMessages(messages, c);
 
 	// Use async provider keys function for better performance
 	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
+	const aiSdkTools: Record<string, any> = buildAiSdkTools(model, tools, contextMessages);
 
-	let aiSdkTools: Record<string, any> = {};
-	if (tools && Array.isArray(tools)) {
-		tools.forEach((userTool: any) => {
-			if (userTool.type === 'function' && userTool.function) {
-				let clientParameters = userTool.function.parameters || userTool.function.inputSchema;
-				if (!clientParameters) {
-					return;
-				}
-				const finalParameters: Record<string, any> = {
-					type: "object",
-					properties: clientParameters.properties || clientParameters,
-					required: clientParameters.required || [],
-				};
-				const properties = finalParameters.properties || {};
-				const required = finalParameters.required || [];
-				const zodFields: Record<string, any> = {};
-
-				for (const [key, prop] of Object.entries(properties)) {
-					const propDef = prop as any;
-					let zodType: any;
-
-					// Map OpenAI parameter types to Zod 4 Mini functional syntax
-					switch (propDef.type) {
-						case 'string':
-							zodType = string({ message: propDef.description || 'String parameter' });
-							break;
-						case 'number':
-							zodType = number({ message: propDef.description || 'Number parameter' });
-							break;
-						case 'integer':
-							// Use int() for Zod 4 Mini syntax
-							zodType = int({ message: propDef.description || 'Integer parameter' });
-							break;
-						case 'boolean':
-							zodType = boolean({ message: propDef.description || 'Boolean parameter' });
-							break;
-						case 'array':
-							zodType = array(string({ message: 'Array item' }), { message: propDef.description || 'Array parameter' });
-							break;
-						case 'object':
-							zodType = object({}, { message: propDef.description || 'Object parameter' });
-							break;
-						default:
-							zodType = string({ message: 'Any parameter' });
-					}
-
-					if (!required.includes(key)) {
-						zodType = optional(zodType);
-					}
-
-					zodFields[key] = zodType;
-				}
-
-				aiSdkTools[userTool.function.name] = tool({
-					description: userTool.function.description || `Function ${userTool.function.name}`,
-					inputSchema: object(zodFields),
-				});
-			}
-		});
-
-		const googleIncompatible = (!['google', 'gemini'].some(prefix => model.startsWith(prefix)) || Object.keys(aiSdkTools).length > 0);
-
-		const messageText = contextMessages.map((msg: any) =>
-			typeof msg.content === 'string' ? msg.content.toLowerCase() : ''
-		).join(' ');
-
-		const containsResearchKeywords = RESEARCH_KEYWORDS.some(keyword =>
-			messageText.includes(keyword)
-		);
-
-		if (model.startsWith('openai')) {
-			aiSdkTools.web_search_preview = openai.tools.webSearchPreview({});
-			aiSdkTools.code_interpreter = openai.tools.codeInterpreter({});
-		} else if (model.startsWith('groq/openai')) {
-			aiSdkTools.browser_search = groq.tools.browserSearch({});
-		} else if (googleIncompatible && !model.startsWith('xai')) {
-			if (tavilyApiKey) {
-				aiSdkTools.tavily_search = tavilySearchTool;
-			}
-		}
-		if (containsResearchKeywords) {
-			aiSdkTools.ensembl_api = ensemblApiTool;
-			aiSdkTools.semantic_scholar_search = semanticScholarSearchTool;
-			aiSdkTools.semantic_scholar_recommendations = semanticScholarRecommendationsTool;
-		}
-
-		if (googleIncompatible) {
-			aiSdkTools.jina_reader = jinaReaderTool;
-			if (!model.startsWith('openai') && pythonApiKey && pythonUrl) {
-				aiSdkTools.python_executor = pythonExecutorTool;
-			}
-		} else {
-			aiSdkTools = {
-				google_search: google.tools.googleSearch({}),
-				url_context: google.tools.urlContext({}),
-				code_execution: google.tools.codeExecution({}),
-			};
-		}
-	}
-
-	// Parse the model name to determine provider
-	const modelInfo = parseModelName(model);
-	let providersToTry: Array<{ type: 'gateway' | 'custom', name?: string, apiKey: string, model: string }> = [];
-
-	// If the model explicitly names a supported provider (provider/model), target that provider only.
-	if (modelInfo.useCustomProvider && modelInfo.provider) {
-		// Try to get keys specifically for that provider first
-		let keys: string[] = providerKeys[modelInfo.provider] || [];
-
-		// If no header/provider keys, try falling back to the auth header keys (when not password auth)
-		if (keys.length === 0) {
-			if (!isPasswordAuth && apiKey) {
-				keys = apiKey.split(',').map((k: string) => k.trim()).filter(Boolean);
-			} else if (isPasswordAuth) {
-				const envKeyName = `${modelInfo.provider.toUpperCase()}_API_KEY`;
-				const envVal = process.env[envKeyName];
-				if (envVal) keys = envVal.split(',').map((k: string) => k.trim()).filter(Boolean);
-			}
-		}
-
-		if (keys.length > 0) {
-			const shuffledKeys = keys.slice().sort(() => Math.random() - 0.5);
-			for (const key of shuffledKeys) {
-				providersToTry.push({
-					type: 'custom',
-					name: modelInfo.provider,
-					apiKey: key,
-					model: modelInfo.model,
-				});
-			}
-		} else {
-			let gatewayKeys: string[] = [];
-			if (isPasswordAuth) {
-				const gatewayKey = process.env.GATEWAY_API_KEY;
-				if (gatewayKey) gatewayKeys = gatewayKey.split(',').map(k => k.trim()).filter(Boolean);
-			} else if (apiKey) {
-				gatewayKeys = apiKey.split(',').map((k: string) => k.trim()).filter(Boolean);
-			}
-
-			if (gatewayKeys.length > 0) {
-				const start = Math.floor(Math.random() * gatewayKeys.length);
-				for (let idx = 0; idx < gatewayKeys.length; idx++) {
-					const k = gatewayKeys[(start + idx) % gatewayKeys.length];
-					if (k) {
-						providersToTry.push({ type: 'gateway', apiKey: k, model: modelInfo.model });
-					}
-				}
-			}
-		}
-	} else {
-		// Model does not map to a custom provider we handle — use the gateway only.
-		let gatewayKeys: string[] = [];
-		if (isPasswordAuth) {
-			const gatewayKey = process.env.GATEWAY_API_KEY;
-			if (gatewayKey) gatewayKeys = gatewayKey.split(',').map(k => k.trim()).filter(Boolean);
-		} else if (apiKey) {
-			gatewayKeys = apiKey.split(',').map((k: string) => k.trim()).filter(Boolean);
-		}
-
-		if (gatewayKeys.length > 0) {
-			const start = Math.floor(Math.random() * gatewayKeys.length);
-			for (let idx = 0; idx < gatewayKeys.length; idx++) {
-				const k = gatewayKeys[(start + idx) % gatewayKeys.length];
-				if (k) {
-					providersToTry.push({ type: 'gateway', apiKey: k, model: modelInfo.model });
-				}
-			}
-		}
-	}
+	// Parse the model name to determine provider(s)
+	const { providersToTry } = prepareProvidersToTry({ model, providerKeys, isPasswordAuth, authApiKey: apiKey });
 
 	const processedMessages = await processMessages(contextMessages);
 
-	const providerOptionsHeader = c.req.header('provider_options');
-	const providerOptions = providerOptionsHeader ? JSON.parse(providerOptionsHeader) : {
-		anthropic: {
-			thinking: thinking || { type: "enabled", budgetTokens: 4000 },
-			cacheControl: { type: "ephemeral" },
-		},
-		openai: {
-			reasoningEffort: reasoning_effort || "medium",
-			reasoningSummary: "auto",
-			textVerbosity: text_verbosity || "medium",
-			serviceTier: service_tier || "auto",
-			store: false,
-			promptCacheKey: 'ai-gateway',
-		},
-		xai: {
-			searchParameters: { mode: "auto", returnCitations: true },
-			...(reasoning_effort && { reasoningEffort: reasoning_effort }),
-		},
-		google: {
-			...(extra_body?.google && {
-				thinkingConfig: {
-					thinkingBudget: extra_body.google.thinking_config.thinking_budget || 4000,
-					includeThoughts: true,
-				},
-			}),
-		},
-		custom: {
-			reasoning_effort: reasoning_effort || "medium",
-			extra_body: extra_body,
-		},
-	};
-
-	// Small helpers to keep provider creation and options-building DRY across streaming and non-streaming paths
-	type Attempt = { type: 'gateway' | 'custom', name?: string, apiKey: string, model: string };
-	const getGatewayForAttempt = (attempt: Attempt) => {
-		if (attempt.type === 'gateway') {
-			const gatewayOptions: any = { apiKey: attempt.apiKey, baseURL: 'https://ai-gateway.vercel.sh/v1/ai' };
-			if (attempt.model === 'anthropic/claude-sonnet-4') {
-				gatewayOptions.headers = { 'anthropic-beta': 'context-1m-2025-08-07' };
-			}
-			return createGateway(gatewayOptions);
-		}
-		return createCustomProvider(attempt.name!, attempt.apiKey);
-	};
-
-	const buildCommonOptions = (gw: any, attempt: Attempt) => ({
-		model: gw(attempt.model),
-		messages: processedMessages,
-		tools: aiSdkTools,
-		temperature,
-		topP: top_p,
-		topK: top_k,
-		maxOutputTokens: max_tokens,
-		seed,
-		stopSequences: stop_sequences,
-		presencePenalty: presence_penalty,
-		frequencyPenalty: frequency_penalty,
-		toolChoice: tool_choice,
-		abortSignal: abortController.signal,
-		providerOptions,
-		stopWhen: [stepCountIs(20)],
-		onError: () => { }
-	}) as any;
+	const providerOptionsHeader = c.req.header('x-provider-options');
+	const providerOptions = buildDefaultProviderOptions({ providerOptionsHeader: providerOptionsHeader ?? null, thinking, reasoning_effort, extra_body, text_verbosity, service_tier });
 
 	// If streaming, handle retries within a single ReadableStream so we can switch keys on error mid-stream
 	if (stream) {
@@ -1083,6 +1260,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 				const maxAttempts = Math.min(providersToTry.length, MAX_ATTEMPTS);
 				let attemptsTried = 0;
 				let lastStreamError: any = null;
+				let accumulatedCitations: Array<{ type: string, url_citation: { url: string, title: string } }> = [];
 				for (let i = 0; i < maxAttempts; i++) {
 					if (abortController.signal.aborted) break;
 					const attempt = providersToTry[i];
@@ -1090,7 +1268,21 @@ app.post('/v1/chat/completions', async (c: Context) => {
 					try {
 						attemptsTried++;
 						const gw = getGatewayForAttempt(attempt);
-						const commonOptions = buildCommonOptions(gw, attempt);
+						const commonOptions = buildCommonOptions(gw, attempt, {
+							messages: processedMessages,
+							aiSdkTools,
+							temperature,
+							top_p,
+							top_k,
+							max_tokens,
+							seed,
+							stop_sequences,
+							presence_penalty,
+							frequency_penalty,
+							tool_choice,
+							abortSignal: abortController.signal,
+							providerOptions,
+						});
 
 						const result = streamText(commonOptions);
 						// Forward chunks; on error, try next key/provider
@@ -1116,8 +1308,14 @@ app.post('/v1/chat/completions', async (c: Context) => {
 									controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
 									break;
 								case 'source':
-									chunk = { ...baseChunk, choices: [{ index: 0, delta: { role: 'assistant', content: null, metadata: { sources: [part.source] } }, finish_reason: null }] };
-									controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+									// Accumulate citations for later inclusion in finish
+									accumulatedCitations.push({
+										type: part.sourceType + '_citation',
+										url_citation: {
+											url: part.url || '',
+											title: part.title || ''
+										}
+									});
 									break;
 								case 'tool-call':
 									if (!EXCLUDED_TOOLS.has(part.toolName)) {
@@ -1132,6 +1330,10 @@ app.post('/v1/chat/completions', async (c: Context) => {
 									}
 									break;
 								case 'finish':
+									if (accumulatedCitations.length > 0) {
+										const citationsChunk = { ...baseChunk, choices: [{ index: 0, delta: { annotations: accumulatedCitations }, finish_reason: null }] };
+										controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(citationsChunk)}\n\n`));
+									}
 									chunk = { ...baseChunk, choices: [{ index: 0, delta: {}, finish_reason: part.finishReason }], usage: { prompt_tokens: part.totalUsage.inputTokens, completion_tokens: part.totalUsage.outputTokens, total_tokens: part.totalUsage.totalTokens } };
 									controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
 									break;
@@ -1181,7 +1383,21 @@ app.post('/v1/chat/completions', async (c: Context) => {
 		try {
 			attemptsTried++;
 			const gw = getGatewayForAttempt(provider);
-			const commonOptions = buildCommonOptions(gw, provider);
+			const commonOptions = buildCommonOptions(gw, provider, {
+				messages: processedMessages,
+				aiSdkTools,
+				temperature,
+				top_p,
+				top_k,
+				max_tokens,
+				seed,
+				stop_sequences,
+				presence_penalty,
+				frequency_penalty,
+				tool_choice,
+				abortSignal: abortController.signal,
+				providerOptions,
+			});
 
 			const result = await generateText(commonOptions);
 			const openAIResponse = await toOpenAIResponse(result, model);
@@ -1224,6 +1440,673 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	};
 	return c.json(errorPayload, statusCode);
 })
+
+app.post('/v1/responses', async (c: Context) => {
+	const authHeader = c.req.header('Authorization');
+	const apiKey = authHeader?.split(' ')[1] || null;
+	const envPassword = process.env.PASSWORD;
+	const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
+	if (!apiKey) return c.text('Unauthorized', 401);
+
+	const abortController = new AbortController();
+
+	// Headers and aux keys
+	tavilyApiKey = c.req.header('x-tavily-api-key') || (isPasswordAuth ? process.env.TAVILY_API_KEY || null : null);
+	pythonApiKey = c.req.header('x-python-api-key') || (isPasswordAuth ? process.env.PYTHON_API_KEY || null : null);
+	pythonUrl = c.req.header('x-python-url') || (isPasswordAuth ? process.env.PYTHON_URL || null : null);
+	semanticScholarApiKey = c.req.header('x-semantic-scholar-api-key') || (isPasswordAuth ? process.env.SEMANTIC_SCHOLAR_API_KEY || null : null);
+
+	const body = await c.req.json();
+	const {
+		model,
+		input,
+		instructions = null,
+		stream = false,
+		temperature,
+		top_p,
+		top_k,
+		max_output_tokens,
+		stop_sequences,
+		seed,
+		presence_penalty,
+		frequency_penalty,
+		tool_choice,
+		tools,
+		// Reasoning: body.reasoning?.effort
+		reasoning,
+		previous_response_id,
+		request_id,
+		extra_body,
+		text_verbosity,
+		service_tier,
+	} = body || {};
+
+	// Provider keys and headers map
+	const headers: Record<string, string> = {};
+	c.req.raw.headers.forEach((value, key) => {
+		headers[key.toLowerCase().replace(/-/g, '_')] = value;
+	});
+	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
+	// Build tools using shared helper
+	let aiSdkTools: Record<string, any> = buildAiSdkTools(model, tools, []);
+
+	// Convert Responses API input => AI SDK messages using shared helper
+	const toAiSdkMessages = async (): Promise<any[]> => {
+		// Seed from previous stored conversation if provided
+		let history: any[] = [];
+		if (previous_response_id) {
+			try {
+				const store = getStoreWithConfig('responses', headers);
+				const existing: any = await store.get(previous_response_id, { type: 'json' as any });
+				if (existing && existing.messages && Array.isArray(existing.messages)) history = existing.messages;
+			} catch { }
+		}
+
+		// Map `input` into messages
+		const mapped = responsesInputToAiSdkMessages(input);
+
+		// Prepend instructions as system only for first request (no continuation)
+		if (!previous_response_id) {
+			if (instructions) {
+				history = [{ role: 'system', content: String(instructions) }, ...history];
+			}
+			const combined = [...history, ...mapped];
+			// Add context messages using shared function
+			const contextMessages = addContextMessages(combined, c);
+			return processMessages(contextMessages);
+		}
+		return processMessages(history);
+	};
+
+	const messages = await toAiSdkMessages();
+
+	// Provider options (map differences)
+	const providerOptionsHeader = c.req.header('x-provider-options');
+	const reasoning_effort = reasoning?.effort ?? undefined;
+	const providerOptions = buildDefaultProviderOptions({
+		providerOptionsHeader: providerOptionsHeader ?? null,
+		thinking: undefined,
+		reasoning_effort,
+		extra_body,
+		text_verbosity,
+		service_tier,
+	});
+
+	// Rebuild tools based on actual messages context
+	aiSdkTools = buildAiSdkTools(model, tools, messages);
+
+	// Prepare providers to try
+	const { providersToTry } = prepareProvidersToTry({ model, providerKeys, isPasswordAuth, authApiKey: apiKey });
+
+	const commonParams = {
+		messages,
+		aiSdkTools,
+		temperature,
+		top_p,
+		top_k,
+		max_tokens: max_output_tokens,
+		seed,
+		stop_sequences,
+		presence_penalty,
+		frequency_penalty,
+		tool_choice,
+		abortSignal: abortController.signal,
+		providerOptions,
+	};
+
+	// Storage preparation
+	const responseId = request_id || randomId('resp');
+
+	if (stream) {
+		// Streaming SSE per OpenAI Responses API
+		const streamResponse = new ReadableStream({
+			async start(controller) {
+				const createdAt = Math.floor(Date.now() / 1000);
+				let sequenceNumber = 0;
+				let outputIndex = 0;
+				const outputItems: any[] = [];
+
+				const baseResponseObj = {
+					id: responseId,
+					object: 'response',
+					created_at: createdAt,
+					status: 'in_progress',
+					background: false,
+					error: null,
+					incomplete_details: null,
+					instructions,
+					max_output_tokens: max_output_tokens ?? null,
+					max_tool_calls: null,
+					model,
+					output: outputItems,
+					parallel_tool_calls: true,
+					previous_response_id: previous_response_id || null,
+					prompt_cache_key: null,
+					reasoning: { effort: reasoning_effort ?? null, summary: null },
+					safety_identifier: null,
+					service_tier: "priority",
+					store: true,
+					temperature: temperature ?? 1,
+					text: { format: { type: 'text' }, verbosity: "medium" },
+					tool_choice: tool_choice || 'auto',
+					tools: tools || [],
+					top_logprobs: 0,
+					top_p: top_p ?? 1,
+					truncation: 'disabled',
+					usage: null,
+					user: null,
+				} as any;
+
+				const emit = (obj: any) => controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(obj)}\n\n`));
+
+				// response.created
+				emit({
+					type: 'response.created',
+					sequence_number: sequenceNumber++,
+					response: baseResponseObj
+				});
+
+				// response.in_progress (optional second event)
+				emit({
+					type: 'response.in_progress',
+					sequence_number: sequenceNumber++,
+					response: { ...baseResponseObj, status: 'in_progress' }
+				});
+
+				const maxAttempts = Math.min(providersToTry.length, MAX_ATTEMPTS);
+				let attemptsTried = 0;
+				let lastStreamError: any = null;
+				let textItemId: string | null = null;
+				let collectedText = '';
+				let accumulatedSources: Array<{ title: string, url: string, type: string }> = [];
+				let reasoningItemId: string | null = null;
+				let reasoningText = '';
+				let reasoningSummaryIndex = 0;
+				let functionCallItems: Map<string, { id: string, name: string, call_id: string, args: string, outputIndex: number }> = new Map();
+
+				for (let i = 0; i < maxAttempts; i++) {
+					if (abortController.signal.aborted) break;
+					const attempt = providersToTry[i];
+					if (!attempt) continue;
+					try {
+						attemptsTried++;
+						const gw = getGatewayForAttempt(attempt);
+						const commonOptions = buildCommonOptions(gw, attempt, commonParams);
+						const result = streamText(commonOptions);
+
+						for await (const part of (result as any).fullStream) {
+							if (abortController.signal.aborted) throw new Error('aborted');
+
+							switch (part.type) {
+								case 'source': {
+									// Accumulate sources for later inclusion in content_part.done
+									accumulatedSources.push({
+										title: part.title || '',
+										url: part.url || '',
+										type: part.sourceType + '_citation',
+									});
+									break;
+								}
+								case 'reasoning-start': {
+									if (!reasoningItemId) {
+										reasoningItemId = randomId('rs');
+										reasoningSummaryIndex = 0;
+										const reasoningItem = {
+											id: reasoningItemId,
+											type: 'reasoning',
+											summary: []
+										};
+										outputItems.push(reasoningItem);
+
+										// Emit output_item.added for reasoning start
+										emit({
+											type: 'response.output_item.added',
+											sequence_number: sequenceNumber++,
+											output_index: outputIndex,
+											item: reasoningItem
+										});
+
+										// Emit reasoning_summary_part.added for the text part
+										emit({
+											type: 'response.reasoning_summary_part.added',
+											sequence_number: sequenceNumber++,
+											item_id: reasoningItemId,
+											output_index: outputIndex,
+											summary_index: reasoningSummaryIndex,
+											part: {
+												type: 'summary_text',
+												text: ''
+											}
+										});
+									}
+									break;
+								}
+								case 'reasoning-delta': {
+									const delta = (part.delta ?? part.text ?? '');
+									reasoningText += delta;
+
+									// Emit reasoning_summary_text.delta
+									emit({
+										type: 'response.reasoning_summary_text.delta',
+										sequence_number: sequenceNumber++,
+										item_id: reasoningItemId,
+										output_index: outputIndex,
+										summary_index: reasoningSummaryIndex,
+										delta: delta
+									});
+									break;
+								}
+								case 'reasoning-end': {
+									if (reasoningItemId) {
+										// Emit reasoning_summary_text.done
+										emit({
+											type: 'response.reasoning_summary_text.done',
+											sequence_number: sequenceNumber++,
+											item_id: reasoningItemId,
+											output_index: outputIndex,
+											summary_index: reasoningSummaryIndex,
+											text: reasoningText
+										});
+
+										// Emit reasoning_summary_part.done
+										emit({
+											type: 'response.reasoning_summary_part.done',
+											sequence_number: sequenceNumber++,
+											item_id: reasoningItemId,
+											output_index: outputIndex,
+											summary_index: reasoningSummaryIndex,
+											part: {
+												type: 'summary_text',
+												text: reasoningText
+											}
+										});
+
+										// Create final reasoning item with summary
+										const reasoningItem = {
+											id: reasoningItemId,
+											type: 'reasoning',
+											summary: [{
+												type: 'summary_text',
+												text: reasoningText
+											}]
+										};
+
+										// Update the item in outputItems
+										const itemIndex = outputItems.findIndex(item => item.id === reasoningItemId);
+										if (itemIndex >= 0) outputItems[itemIndex] = reasoningItem;
+
+										// Emit output_item.done
+										emit({
+											type: 'response.output_item.done',
+											sequence_number: sequenceNumber++,
+											output_index: outputIndex,
+											item: reasoningItem
+										});
+
+										outputIndex++;
+									}
+									break;
+								}
+								case 'text-start': {
+									if (!textItemId) {
+										textItemId = randomId('msg');
+										const textOutputIndex = outputIndex + 1;
+										const textItem = {
+											id: textItemId,
+											type: 'message',
+											status: 'in_progress',
+											role: 'assistant',
+											content: []
+										};
+										outputItems.push(textItem);
+										emit({
+											type: 'response.output_item.added',
+											sequence_number: sequenceNumber++,
+											output_index: textOutputIndex,
+											item: textItem
+										});
+
+										// Emit content_part.added for output_text
+										emit({
+											type: 'response.content_part.added',
+											sequence_number: sequenceNumber++,
+											item_id: textItemId,
+											output_index: textOutputIndex,
+											content_index: 0,
+											part: {
+												type: 'output_text',
+												text: '',
+											}
+										});
+
+										outputIndex = textOutputIndex;
+									}
+									break;
+								}
+								case 'text-delta': {
+									collectedText += part.text;
+									emit({
+										type: 'response.output_text.delta',
+										sequence_number: sequenceNumber++,
+										item_id: textItemId,
+										output_index: outputIndex,
+										content_index: 0,
+										delta: part.text
+									});
+									break;
+								}
+								case 'tool-input-start': {
+									if (!EXCLUDED_TOOLS.has(part.toolName)) {
+										// Use a unique tracking key that won't conflict
+										const trackingKey = part.toolCallId || part.id;
+										const funcItemId = randomId('fc');
+										const callId = part.toolCallId || randomId('call');
+										const currentOutputIndex = outputIndex + 1;
+
+										const functionItem = {
+											id: funcItemId,
+											type: 'function_call',
+											status: 'in_progress',
+											arguments: '',
+											call_id: callId,
+											name: part.toolName
+										};
+
+										functionCallItems.set(trackingKey, {
+											id: funcItemId,
+											name: part.toolName,
+											call_id: callId,
+											args: '',
+											outputIndex: currentOutputIndex
+										});
+										outputItems.push(functionItem);
+
+										emit({
+											type: 'response.output_item.added',
+											sequence_number: sequenceNumber++,
+											output_index: currentOutputIndex,
+											item: functionItem
+										});
+									}
+									break;
+								}
+								case 'tool-call': {
+									// Final tool call with complete input - finalize arguments
+									if (!EXCLUDED_TOOLS.has(part.toolName)) {
+										const trackingKey = part.toolCallId || part.id;
+										const funcCall = functionCallItems.get(trackingKey);
+
+										if (funcCall) {
+											const finalArgs = JSON.stringify(part.input ?? {});
+
+											emit({
+												type: 'response.function_call_arguments.done',
+												sequence_number: sequenceNumber++,
+												item_id: funcCall.id,
+												output_index: funcCall.outputIndex,
+												arguments: finalArgs
+											});
+
+											// Update function call item with final arguments
+											const updatedItem = {
+												id: funcCall.id,
+												type: 'function_call',
+												status: 'in_progress',
+												arguments: finalArgs,
+												call_id: funcCall.call_id,
+												name: funcCall.name
+											};
+
+											// Update the item in outputItems and store final args
+											const itemIndex = outputItems.findIndex(item => item.id === funcCall.id);
+											if (itemIndex >= 0) outputItems[itemIndex] = updatedItem;
+											funcCall.args = finalArgs; // Store for tool-result
+										}
+									}
+									break;
+								}
+								case 'tool-input-delta': {
+									// Find the function call by tool call ID or part ID
+									const trackingKey = part.toolCallId || part.id;
+									const funcCall = functionCallItems.get(trackingKey);
+
+									if (funcCall && !EXCLUDED_TOOLS.has(funcCall.name)) {
+										const delta = part.delta ?? '';
+										funcCall.args += delta;
+
+										emit({
+											type: 'response.function_call_arguments.delta',
+											sequence_number: sequenceNumber++,
+											item_id: funcCall.id,
+											output_index: funcCall.outputIndex,
+											delta
+										});
+									}
+									break;
+								}
+								case 'tool-result': {
+									// Find the function call by tool call ID or tool name
+									const trackingKey = part.toolCallId || part.id;
+									const funcCall = functionCallItems.get(trackingKey);
+
+									if (funcCall && !EXCLUDED_TOOLS.has(funcCall.name)) {
+										// Mark function call as completed with the result
+										const completedItem = {
+											id: funcCall.id,
+											type: 'function_call',
+											status: 'completed',
+											arguments: funcCall.args || '{}',
+											call_id: funcCall.call_id,
+											name: funcCall.name
+										};
+
+										// Update the item in outputItems
+										const itemIndex = outputItems.findIndex(item => item.id === funcCall.id);
+										if (itemIndex >= 0) outputItems[itemIndex] = completedItem;
+
+										emit({
+											type: 'response.output_item.done',
+											sequence_number: sequenceNumber++,
+											output_index: funcCall.outputIndex,
+											item: completedItem
+										});
+
+										// Remove from tracking and increment global output index
+										functionCallItems.delete(trackingKey);
+										outputIndex = Math.max(outputIndex, funcCall.outputIndex);
+									}
+									break;
+								}
+								case 'finish': {
+									// Finalize text item if exists
+									if (textItemId) {
+										// Emit content_part.done with accumulated annotations
+										emit({
+											type: 'response.content_part.done',
+											sequence_number: sequenceNumber++,
+											item_id: textItemId,
+											output_index: outputIndex,
+											content_index: 0,
+											part: {
+												type: 'output_text',
+												text: collectedText,
+												annotations: accumulatedSources
+											}
+										});
+
+										const completedTextItem = {
+											id: textItemId,
+											type: 'message',
+											status: 'completed',
+											role: 'assistant',
+											content: [{ type: 'output_text', text: collectedText, annotations: accumulatedSources }]
+										};
+
+										// Update the item in outputItems
+										const itemIndex = outputItems.findIndex(item => item.id === textItemId);
+										if (itemIndex >= 0) outputItems[itemIndex] = completedTextItem;
+
+										emit({
+											type: 'response.output_item.done',
+											sequence_number: sequenceNumber++,
+											output_index: outputIndex,
+											item: completedTextItem
+										});
+									}
+
+									const filteredOutput = outputItems.filter(item => item.type !== 'function_call');
+
+									const completed = {
+										...baseResponseObj,
+										status: 'completed',
+										output: filteredOutput,
+										usage: part.totalUsage ? {
+											input_tokens: part.totalUsage.inputTokens,
+											output_tokens: part.totalUsage.outputTokens,
+											total_tokens: part.totalUsage.totalTokens
+										} : null
+									};
+									emit({
+										type: 'response.completed',
+										sequence_number: sequenceNumber++,
+										response: completed
+									});
+
+									// Save conversation
+									try {
+										const store = getStoreWithConfig('responses', headers);
+										await store.setJSON(responseId, {
+											id: responseId,
+											messages: [...messages, { role: 'assistant', content: collectedText }],
+											assistant: collectedText
+										});
+									} catch { }
+									controller.close();
+									return;
+								}
+								case 'error': {
+									if ([429, 401].includes((part as any)?.error?.statusCode)) throw new Error((part as any)?.error || 'Streaming provider error');
+									emit({
+										type: 'error',
+										sequence_number: sequenceNumber++,
+										code: (part as any)?.error?.statusCode || 'ERR',
+										message: part.error,
+										param: null
+									});
+									break;
+								}
+							}
+						}
+					} catch (err: any) {
+						if (abortController.signal.aborted || err?.message === 'aborted' || err?.name === 'AbortError') {
+							emit({
+								type: 'response.failed',
+								sequence_number: sequenceNumber++,
+								response: {
+									id: responseId,
+									object: 'response',
+									status: 'failed',
+									error: { code: 'request_aborted', message: 'Request was aborted by the user' }
+								}
+							});
+							controller.close();
+							return;
+						}
+						lastStreamError = err;
+						continue;
+					}
+				}
+
+				// All attempts failed
+				const msg = lastStreamError?.message || 'An unknown error occurred';
+				emit({
+					type: 'response.failed',
+					sequence_number: sequenceNumber++,
+					response: {
+						id: responseId,
+						object: 'response',
+						status: 'failed',
+						error: { code: 'server_error', message: msg }
+					}
+				});
+				controller.close();
+			},
+		});
+		return new Response(streamResponse, { headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' } });
+	}
+
+	// Non-streaming path
+	const maxAttempts = Math.min(providersToTry.length, MAX_ATTEMPTS);
+	let lastError: any;
+	for (let i = 0; i < maxAttempts; i++) {
+		const attempt = providersToTry[i];
+		if (!attempt) continue;
+		try {
+			const gw = getGatewayForAttempt(attempt);
+			const commonOptions = buildCommonOptions(gw, attempt, commonParams);
+			const result = await generateText(commonOptions);
+			// Transform result.sources to annotations format  
+			const annotations = result.sources ? result.sources.map((source: any) => ({
+				title: source.title || '',
+				url: source.url || '',
+				type: (source.sourceType || 'url') + '_citation'
+			})) : [];
+			// Construct Responses API output
+			const inputNormalized = typeof input === 'string'
+				? [{ type: 'input_text', text: input }]
+				: (Array.isArray(input) ? input : (input ? [input] : []));
+			const output = result.text ? [{
+				type: 'message',
+				id: randomId('msg'),
+				status: 'completed',
+				role: 'assistant',
+				content: [{ type: 'output_text', text: result.text, annotations }]
+			}] : [];
+			const responsePayload = {
+				id: responseId,
+				object: 'response',
+				created_at: Math.floor(Date.now() / 1000),
+				status: 'completed',
+				error: null,
+				incomplete_details: null,
+				input: inputNormalized,
+				instructions,
+				max_output_tokens: max_output_tokens ?? null,
+				model,
+				output,
+				previous_response_id: previous_response_id || null,
+				reasoning: { effort: reasoning_effort ?? null, summary: null },
+				parallel_tool_calls: true,
+				store: true,
+				temperature: temperature ?? 1,
+				text: { format: { type: 'text' } },
+				tool_choice: tool_choice || 'auto',
+				tools: tools || [],
+				top_p: top_p ?? 1,
+				truncation: 'disabled',
+				usage: result.usage ? { input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens, total_tokens: result.usage.totalTokens } : null,
+				user: null,
+			} as any;
+
+			try {
+				const store = getStoreWithConfig('responses', headers);
+				// Append assistant reply to the stored message history
+				await store.setJSON(responseId, { id: responseId, messages: [...messages, { role: 'assistant', content: result.text }], assistant: result.text });
+			} catch { }
+
+			return c.json(responsePayload);
+		} catch (error: any) {
+			lastError = error;
+			if (error.name === 'AbortError' || abortController.signal.aborted) return c.json({ error: { message: 'Request was aborted by the user', type: 'request_aborted', statusCode: 499 } }, 499 as any);
+			if (i < maxAttempts - 1) continue;
+			break;
+		}
+	}
+
+	const statusCode = lastError?.statusCode || 500;
+	const errorPayload = { error: { message: lastError?.message || 'All attempts failed', type: lastError?.type, statusCode } };
+	return c.json(errorPayload, statusCode);
+});
 
 // Shared models handler function
 async function handleModelsRequest(c: Context) {
@@ -1281,7 +2164,7 @@ async function handleModelsRequest(c: Context) {
 		const providerKeys: Record<string, string[]> = {};
 
 		for (const provider of Object.keys(SUPPORTED_PROVIDERS)) {
-			const keyName = `${provider}_api_key`;
+			const keyName = `x-${provider}-api-key`;
 			const headerValue = headers[keyName];
 			if (headerValue) {
 				const keys = headerValue.split(',').map((k: string) => k.trim());
@@ -1520,6 +2403,7 @@ async function handleModelsRequest(c: Context) {
 		}, 500);
 	}
 }
+
 app.get('/v1/models', handleModelsRequest);
 app.post('/v1/models', handleModelsRequest);
 
