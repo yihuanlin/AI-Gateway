@@ -909,6 +909,45 @@ function buildAiSdkTools(model: string, userTools: any[] | undefined, messages: 
 	return aiSdkTools;
 }
 
+// Helper function to modify messages for Poe provider
+function modifyMessagesForPoe(messages: any[], reasoning_effort?: string): any[] {
+	if (!reasoning_effort) return messages;
+
+	// Find the last user message
+	const modifiedMessages = [...messages];
+	for (let i = modifiedMessages.length - 1; i >= 0; i--) {
+		const message = modifiedMessages[i];
+		if (message.role === 'user') {
+			// Clone the message to avoid mutating the original
+			const modifiedMessage = { ...message };
+
+			// Handle different content types
+			if (typeof modifiedMessage.content === 'string') {
+				modifiedMessage.content = `${modifiedMessage.content} --reasoning_effort "${reasoning_effort}"`;
+			} else if (Array.isArray(modifiedMessage.content)) {
+				// Find the last text part and append to it
+				const contentCopy = [...modifiedMessage.content];
+				for (let j = contentCopy.length - 1; j >= 0; j--) {
+					const part = contentCopy[j];
+					if (part.type === 'text' && typeof part.text === 'string') {
+						contentCopy[j] = {
+							...part,
+							text: `${part.text} --reasoning_effort "${reasoning_effort}"`
+						};
+						break;
+					}
+				}
+				modifiedMessage.content = contentCopy;
+			}
+
+			modifiedMessages[i] = modifiedMessage;
+			break;
+		}
+	}
+
+	return modifiedMessages;
+}
+
 const buildCommonOptions = (
 	gw: any,
 	attempt: Attempt,
@@ -926,25 +965,33 @@ const buildCommonOptions = (
 		tool_choice?: any,
 		abortSignal: AbortSignal,
 		providerOptions: any,
+		reasoning_effort?: string,
 	}
-) => ({
-	model: gw(attempt.model),
-	messages: params.messages,
-	tools: params.aiSdkTools,
-	temperature: params.temperature,
-	topP: params.top_p,
-	topK: params.top_k,
-	maxOutputTokens: params.max_tokens,
-	seed: params.seed,
-	stopSequences: params.stop_sequences,
-	presencePenalty: params.presence_penalty,
-	frequencyPenalty: params.frequency_penalty,
-	toolChoice: params.tool_choice,
-	abortSignal: params.abortSignal,
-	providerOptions: params.providerOptions,
-	stopWhen: [stepCountIs(20)],
-	onError: () => { }
-}) as any;
+) => {
+	// Modify messages for Poe provider if reasoning_effort is provided
+	const finalMessages = attempt.name === 'poe' ?
+		modifyMessagesForPoe(params.messages, params.reasoning_effort) :
+		params.messages;
+
+	return {
+		model: gw(attempt.model),
+		messages: finalMessages,
+		tools: params.aiSdkTools,
+		temperature: params.temperature,
+		topP: params.top_p,
+		topK: params.top_k,
+		maxOutputTokens: params.max_tokens,
+		seed: params.seed,
+		stopSequences: params.stop_sequences,
+		presencePenalty: params.presence_penalty,
+		frequencyPenalty: params.frequency_penalty,
+		toolChoice: params.tool_choice,
+		abortSignal: params.abortSignal,
+		providerOptions: params.providerOptions,
+		stopWhen: [stepCountIs(20)],
+		onError: () => { }
+	} as any;
+};
 
 // Tools definitions
 const pythonExecutorTool = tool({
@@ -1515,6 +1562,7 @@ app.post('/v1/responses', async (c: Context) => {
 		tool_choice,
 		abortSignal: abortController.signal,
 		providerOptions,
+		reasoning_effort: reasoning?.effort || undefined,
 	};
 	// Storage preparation
 	const responseId = request_id || randomId('resp');
@@ -2283,7 +2331,7 @@ app.post('/v1/responses', async (c: Context) => {
 									return;
 								}
 								case 'error': {
-									if ([429, 401].includes((part as any)?.error?.statusCode)) throw new Error((part as any)?.error || 'Streaming provider error');
+									if ([429, 401, 402].includes((part as any)?.error?.statusCode)) throw new Error((part as any)?.error || 'Streaming provider error');
 									emit({
 										type: 'error',
 										sequence_number: sequenceNumber++,
@@ -2528,6 +2576,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 							tool_choice,
 							abortSignal: abortController.signal,
 							providerOptions,
+							reasoning_effort,
 						});
 
 						const result = streamText(commonOptions);
@@ -2538,7 +2587,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 							let chunk: any;
 							switch (part.type) {
 								case 'error':
-									if ([429, 401].includes((part as any)?.error?.statusCode)) {
+									if ([429, 401, 402].includes((part as any)?.error?.statusCode)) {
 										throw new Error((part as any)?.error || 'Streaming provider error');
 									} else {
 										chunk = { ...baseChunk, choices: [{ index: 0, delta: { error: part.error }, finish_reason: null }] };
@@ -2745,6 +2794,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 				tool_choice,
 				abortSignal: abortController.signal,
 				providerOptions,
+				reasoning_effort,
 			});
 
 			const result = await generateText(commonOptions);
@@ -2892,7 +2942,7 @@ async function handleModelsRequest(c: Context) {
 		// Common exclusions for all providers
 		const commonExclusions = [
 			'gemma', 'rerank', 'distill', 'parse', 'embed', 'bge-', 'tts', 'phi', 'live', 'audio', 'lite',
-			'qwen2', 'qwen-2', 'qwen1', 'qwq', 'qvq', 'gemini-2.0', 'gemini-1', 'learnlm', 'gemini-exp',
+			'qwen2', 'qwen-2', 'qwen1', 'qwq', 'qvq', 'gemini-1', 'learnlm', 'gemini-exp',
 			'turbo', 'claude-3', 'voxtral', 'pixtral', 'mixtral', 'ministral', '-24', 'moderation', 'saba', '-ocr-',
 			'transcribe', 'image', 'dall', 'davinci', 'babbage', 'flux', 'luma', 'diffusion', 'hailuo',
 			'kling', 'wan', 'ideogram', 'seedance', 'seedream', 'background'
