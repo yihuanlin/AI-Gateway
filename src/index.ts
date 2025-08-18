@@ -13,14 +13,9 @@ import { string, number, boolean, array, object, optional, int, enum as zenum } 
 const app = new Hono()
 
 const SUPPORTED_PROVIDERS = {
-	cerebras: {
-		baseURL: 'https://api.cerebras.ai/v1',
-	},
-	groq: {
-		baseURL: 'https://api.groq.com/openai/v1',
-	},
-	gemini: {
-		baseURL: 'https://generativelanguage.googleapis.com/v1beta',
+	copilot: {
+		baseURL: 'https://api.githubcopilot.com',
+		tokenURL: 'https://api.github.com/copilot_internal/v2/token',
 	},
 	chatgpt: {
 		baseURL: 'https://api.openai.com/v1',
@@ -28,8 +23,23 @@ const SUPPORTED_PROVIDERS = {
 	doubao: {
 		baseURL: 'https://ark.cn-beijing.volces.com/api/v3',
 	},
+	gemini: {
+		baseURL: 'https://generativelanguage.googleapis.com/v1beta',
+	},
+	poe: {
+		baseURL: 'https://api.poe.com/v1',
+	},
+	cerebras: {
+		baseURL: 'https://api.cerebras.ai/v1',
+	},
+	groq: {
+		baseURL: 'https://api.groq.com/openai/v1',
+	},
 	modelscope: {
 		baseURL: 'https://api-inference.modelscope.cn/v1',
+	},
+	infini: {
+		baseURL: 'https://cloud.infini-ai.com/maas/v1',
 	},
 	github: {
 		baseURL: 'https://models.github.ai/inference',
@@ -46,15 +56,8 @@ const SUPPORTED_PROVIDERS = {
 	cohere: {
 		baseURL: 'https://api.cohere.ai/compatibility/v1',
 	},
-	infini: {
-		baseURL: 'https://cloud.infini-ai.com/maas/v1',
-	},
 	poixe: {
 		baseURL: 'https://api.poixe.com/v1',
-	},
-	copilot: {
-		baseURL: 'https://api.githubcopilot.com',
-		tokenURL: 'https://api.github.com/copilot_internal/v2/token',
 	}
 };
 
@@ -213,7 +216,177 @@ async function getProviderKeys(headers: any, authHeader: string | null, isPasswo
 	return providerKeys;
 }
 
-async function toOpenAIResponse(result: GenerateTextResult<any, any>, model: string) {
+function startsWithThinking(text: string): boolean {
+	// Remove leading whitespace and empty newlines
+	const lines = text.split('\n');
+	const nonEmptyLines = [];
+
+	for (const line of lines) {
+		const trimmed = line.trim();
+		if (trimmed !== '') {
+			nonEmptyLines.push(trimmed);
+		}
+	}
+
+	// Check if the first or second non-empty line starts with >
+	if (nonEmptyLines.length >= 1 && nonEmptyLines[0] && nonEmptyLines[0].startsWith('>')) {
+		return true;
+	}
+	if (nonEmptyLines.length >= 2 && nonEmptyLines[1] && nonEmptyLines[1].startsWith('>')) {
+		return true;
+	}
+
+	return false;
+}
+
+function findThinkingIndex(text: string): number {
+	// Find where the actual reasoning content (>) starts
+	// Look for the first line that starts with > and return the position of the >
+	const lines = text.split('\n');
+	let currentIndex = 0;
+
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		if (!line) {
+			currentIndex += 1; // Just the newline
+			continue;
+		}
+
+		const trimmedLine = line.trim();
+
+		// If this line starts with >, find the exact position of the >
+		if (trimmedLine.startsWith('>')) {
+			return currentIndex;
+		}
+
+		// Add the length of this line plus the newline character
+		currentIndex += line.length + 1; // +1 for the \n
+	}
+
+	return -1; // No reasoning content found
+}
+
+function cleanPoeReasoningDelta(delta: string, isFirstDelta: boolean = false): string {
+	let cleanedDelta = delta;
+
+	// For first delta, remove everything before the first line that starts with >
+	if (isFirstDelta) {
+		const lines = cleanedDelta.split('\n');
+		let firstQuoteLineIndex = -1;
+
+		// Find the first line that starts with >
+		for (let i = 0; i < lines.length; i++) {
+			const line = lines[i];
+			if (line && line.trim().startsWith('>')) {
+				firstQuoteLineIndex = i;
+				break;
+			}
+		}
+
+		// If we found a quote line, remove everything before it
+		if (firstQuoteLineIndex >= 0) {
+			cleanedDelta = lines.slice(firstQuoteLineIndex).join('\n');
+		}
+	}
+
+	// Remove ">" quotation markdown from the beginning of lines
+	const lines = cleanedDelta.split('\n');
+	const cleanedLines = lines.map(line => {
+		if (line.startsWith('> ')) {
+			return line.substring(2); // Remove "> "
+		} else if (line.startsWith('>')) {
+			return line.substring(1); // Remove ">"
+		}
+		return line;
+	});
+
+	return cleanedLines.join('\n');
+}
+function cleanPoeReasoning(reasoning: string): string {
+	// Remove everything before the first line that starts with >
+	const lines = reasoning.split('\n');
+	let firstQuoteLineIndex = -1;
+
+	// Find the first line that starts with >
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		if (line && line.trim().startsWith('>')) {
+			firstQuoteLineIndex = i;
+			break;
+		}
+	}
+
+	// If no quote line found, return empty
+	if (firstQuoteLineIndex < 0) {
+		return '';
+	}
+
+	// Take only the lines from the first quote line onwards
+	const reasoningLines = lines.slice(firstQuoteLineIndex);
+
+	// Remove ">" quotation markdown from the beginning of lines
+	const cleanedLines = reasoningLines.map(line => {
+		if (line.startsWith('> ')) {
+			return line.substring(2); // Remove "> "
+		} else if (line.startsWith('>')) {
+			return line.substring(1); // Remove ">"
+		}
+		return line;
+	});
+
+	return cleanedLines.join('\n').trim();
+}
+
+// Helper function to extract Poe reasoning content from text
+function extractPoeReasoning(text: string): { reasoning: string, content: string } {
+	if (!startsWithThinking(text)) {
+		return { reasoning: '', content: text };
+	}
+
+	// Find where "Thinking..." starts
+	const thinkingIndex = findThinkingIndex(text);
+	if (thinkingIndex < 0) {
+		return { reasoning: '', content: text };
+	}
+
+	const beforeThinking = text.substring(0, thinkingIndex);
+	const afterThinking = text.substring(thinkingIndex);
+
+	// Find the end of reasoning (two consecutive newlines where the second doesn't start with >)
+	const lines = afterThinking.split('\n');
+	let reasoningEndIndex = -1;
+
+	for (let i = 0; i < lines.length - 1; i++) {
+		const currentLine = lines[i];
+		const nextLine = lines[i + 1];
+		if (currentLine === '' && nextLine && nextLine !== '' && !nextLine.startsWith('>')) {
+			// Found the end, calculate the position in the original text
+			const linesBefore = lines.slice(0, i).join('\n');
+			reasoningEndIndex = thinkingIndex + linesBefore.length + 1; // +1 for the newline
+			break;
+		}
+	}
+
+	if (reasoningEndIndex >= 0) {
+		let reasoning = text.substring(thinkingIndex, reasoningEndIndex);
+		const content = beforeThinking + text.substring(reasoningEndIndex + 1); // +1 to skip the newline
+
+		// Clean up reasoning content
+		reasoning = cleanPoeReasoning(reasoning);
+
+		return { reasoning, content };
+	} else {
+		// No clear end found, treat everything after Thinking... as reasoning
+		let reasoning = afterThinking;
+
+		// Clean up reasoning content
+		reasoning = cleanPoeReasoning(reasoning);
+
+		return { reasoning, content: beforeThinking };
+	}
+}
+
+async function toOpenAIResponse(result: GenerateTextResult<any, any>, model: string, providerName?: string) {
 	const now = Math.floor(Date.now() / 1000);
 
 	const annotations = result.sources ? result.sources.map((source: any) => ({
@@ -224,14 +397,24 @@ async function toOpenAIResponse(result: GenerateTextResult<any, any>, model: str
 		}
 	})) : [];
 
-	const choices = result.text
+	let content = result.text || '';
+	let reasoningContent = result.reasoningText || '';
+
+	// Handle Poe-specific reasoning extraction for non-streaming
+	if (providerName === 'poe' && content && !reasoningContent) {
+		const extracted = extractPoeReasoning(content);
+		content = extracted.content;
+		reasoningContent = extracted.reasoning;
+	}
+
+	const choices = content
 		? [
 			{
 				index: 0,
 				message: {
 					role: 'assistant',
-					content: result.text,
-					reasoning_content: result.reasoningText,
+					content: content,
+					reasoning_content: reasoningContent || undefined,
 					tool_calls: result.toolCalls,
 					...(annotations.length > 0 ? { annotations } : {})
 				},
@@ -442,8 +625,9 @@ function buildDefaultProviderOptions(args: {
 	text_verbosity?: any,
 	service_tier?: any,
 	reasoning_summary?: any,
+	store?: any
 }) {
-	const { providerOptionsHeader, thinking, reasoning_effort, extra_body, text_verbosity, service_tier, reasoning_summary } = args;
+	const { providerOptionsHeader, thinking, reasoning_effort, extra_body, text_verbosity, service_tier, reasoning_summary, store } = args;
 	const providerOptions = providerOptionsHeader ? JSON.parse(providerOptionsHeader) : {
 		anthropic: {
 			thinking: thinking || { type: "enabled", budgetTokens: 4000 },
@@ -454,7 +638,7 @@ function buildDefaultProviderOptions(args: {
 			reasoningSummary: reasoning_summary || "auto",
 			textVerbosity: text_verbosity || "medium",
 			serviceTier: service_tier || "auto",
-			store: false,
+			store: store || false,
 			promptCacheKey: 'ai-gateway',
 		},
 		xai: {
@@ -463,7 +647,7 @@ function buildDefaultProviderOptions(args: {
 		},
 		google: {
 			thinkingConfig: {
-				thinkingBudget: extra_body?.google?.thinking_config?.thinking_budget || 4000,
+				thinkingBudget: extra_body?.google?.thinking_config?.thinking_budget || -1,
 				includeThoughts: true,
 			},
 		},
@@ -1264,6 +1448,7 @@ app.post('/v1/responses', async (c: Context) => {
 		extra_body,
 		text,
 		service_tier,
+		store = true,
 	} = body || {};
 
 	// Provider keys and headers map
@@ -1272,22 +1457,19 @@ app.post('/v1/responses', async (c: Context) => {
 		headers[key.toLowerCase().replace(/-/g, '_')] = value;
 	});
 	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
-	// Build tools using shared helper
 	let aiSdkTools: Record<string, any> = buildAiSdkTools(model, tools, []);
 
-	// Convert Responses API input => AI SDK messages using shared helper
 	const toAiSdkMessages = async (): Promise<any[]> => {
 		// Seed from previous stored conversation if provided
 		let history: any[] = [];
 		if (previous_response_id) {
 			try {
-				const store = getStoreWithConfig('responses', headers);
-				const existing: any = await store.get(previous_response_id, { type: 'json' as any });
+				const blobStore = getStoreWithConfig('responses', headers);
+				const existing: any = await blobStore.get(previous_response_id, { type: 'json' as any });
 				if (existing && existing.messages && Array.isArray(existing.messages)) history = existing.messages;
 			} catch { }
 		}
 
-		// Map `input` into messages
 		const mapped = responsesInputToAiSdkMessages(input);
 
 		// Prepend instructions as system only for first request (no continuation)
@@ -1315,6 +1497,7 @@ app.post('/v1/responses', async (c: Context) => {
 		text_verbosity: text?.verbosity || undefined,
 		service_tier,
 		reasoning_summary: reasoning?.summary || undefined,
+		store,
 	});
 
 	// Rebuild tools based on actual messages context
@@ -1362,7 +1545,7 @@ app.post('/v1/responses', async (c: Context) => {
 					previous_response_id: previous_response_id || null,
 					prompt_cache_key: 'ai-gateway',
 					reasoning: reasoning,
-					store: true,
+					store: store,
 					temperature: temperature ?? 1,
 					text: text || { format: { type: 'text' }, verbosity: 'medium' },
 					tool_choice: tool_choice || 'auto',
@@ -1400,6 +1583,12 @@ app.post('/v1/responses', async (c: Context) => {
 				let reasoningSummaryIndex = 0;
 				let functionCallItems: Map<string, { id: string, name: string, call_id: string, args: string, outputIndex: number }> = new Map();
 
+				// Poe-specific reasoning detection state
+				let isPoeProvider = false;
+				let poeReasoningMode = false;
+				let poeReasoningBuffer = '';
+				let poeProcessedLength = 0;
+
 				for (let i = 0; i < maxAttempts; i++) {
 					if (abortController.signal.aborted) break;
 					const attempt = providersToTry[i];
@@ -1407,6 +1596,10 @@ app.post('/v1/responses', async (c: Context) => {
 					try {
 						attemptsTried++;
 						const gw = await getGatewayForAttempt(attempt);
+
+						// Check if this is Poe provider
+						isPoeProvider = attempt.name === 'poe';
+
 						const commonOptions = buildCommonOptions(gw, attempt, commonParams);
 						const result = streamText(commonOptions);
 
@@ -1560,6 +1753,290 @@ app.post('/v1/responses', async (c: Context) => {
 									break;
 								}
 								case 'text-delta': {
+									// Handle Poe-specific reasoning detection
+									if (isPoeProvider) {
+										poeReasoningBuffer += part.text;
+
+										// Check if reasoning is starting
+										if (!poeReasoningMode && startsWithThinking(poeReasoningBuffer)) {
+											poeReasoningMode = true;
+
+											// Start reasoning item if not already started
+											if (!reasoningItemId) {
+												reasoningItemId = randomId('rs');
+												reasoningSummaryIndex = 0;
+												const reasoningItem = {
+													id: reasoningItemId,
+													type: 'reasoning',
+													summary: []
+												};
+												outputItems.push(reasoningItem);
+
+												// Emit output_item.added for reasoning start
+												emit({
+													type: 'response.output_item.added',
+													sequence_number: sequenceNumber++,
+													output_index: outputIndex,
+													item: reasoningItem
+												});
+
+												// Emit reasoning_summary_part.added for the text part
+												emit({
+													type: 'response.reasoning_summary_part.added',
+													sequence_number: sequenceNumber++,
+													item_id: reasoningItemId,
+													output_index: outputIndex,
+													summary_index: reasoningSummaryIndex,
+													part: {
+														type: 'summary_text',
+														text: ''
+													}
+												});
+											}
+
+											const thinkingIndex = findThinkingIndex(poeReasoningBuffer);
+											if (thinkingIndex >= 0) {
+												const beforeThinking = poeReasoningBuffer.substring(0, thinkingIndex);
+												const reasoningStart = poeReasoningBuffer.substring(thinkingIndex);
+
+												if (beforeThinking && textItemId) {
+													collectedText += beforeThinking;
+													emit({
+														type: 'response.output_text.delta',
+														sequence_number: sequenceNumber++,
+														item_id: textItemId,
+														output_index: outputIndex,
+														content_index: 0,
+														delta: beforeThinking
+													});
+												}
+
+												const cleanedReasoningStart = cleanPoeReasoningDelta(reasoningStart, true);
+												reasoningText += cleanedReasoningStart;
+												emit({
+													type: 'response.reasoning_summary_text.delta',
+													sequence_number: sequenceNumber++,
+													item_id: reasoningItemId,
+													output_index: outputIndex,
+													summary_index: reasoningSummaryIndex,
+													delta: cleanedReasoningStart
+												});
+
+												// Reset buffer to contain only processed reasoning content
+												poeReasoningBuffer = reasoningStart;
+												poeProcessedLength = reasoningStart.length;
+											}
+											continue;
+										}
+
+										// Check if reasoning is ending (two consecutive newlines without >)
+										if (poeReasoningMode) {
+											const lines = poeReasoningBuffer.split('\n');
+											let reasoningEnded = false;
+
+											// Look for two consecutive lines where the second doesn't start with >
+											for (let i = lines.length - 2; i >= 0; i--) {
+												const currentLine = lines[i];
+												const nextLine = lines[i + 1];
+												if (currentLine === '' && nextLine && nextLine !== '' && !nextLine.startsWith('>')) {
+													reasoningEnded = true;
+													break;
+												}
+											}
+
+											if (reasoningEnded) {
+												// Find where reasoning content ends
+												const reasoningEndIndex = poeReasoningBuffer.lastIndexOf('\n\n');
+												let reasoningContent = '';
+												let postReasoningContent = '';
+
+												if (reasoningEndIndex >= 0) {
+													reasoningContent = poeReasoningBuffer.substring(0, reasoningEndIndex);
+													postReasoningContent = poeReasoningBuffer.substring(reasoningEndIndex + 2);
+												} else {
+													reasoningContent = poeReasoningBuffer;
+												}
+
+												// Emit final reasoning content
+												if (reasoningContent) {
+													const newReasoningText = reasoningContent.substring(reasoningText.length);
+													if (newReasoningText) {
+														const cleanedNewReasoningText = cleanPoeReasoningDelta(newReasoningText);
+														reasoningText += cleanedNewReasoningText;
+														emit({
+															type: 'response.reasoning_summary_text.delta',
+															sequence_number: sequenceNumber++,
+															item_id: reasoningItemId,
+															output_index: outputIndex,
+															summary_index: reasoningSummaryIndex,
+															delta: cleanedNewReasoningText
+														});
+													}
+												}
+
+												// End reasoning
+												if (reasoningItemId) {
+													// Emit reasoning_summary_text.done
+													emit({
+														type: 'response.reasoning_summary_text.done',
+														sequence_number: sequenceNumber++,
+														item_id: reasoningItemId,
+														output_index: outputIndex,
+														summary_index: reasoningSummaryIndex,
+														text: reasoningText
+													});
+
+													// Emit reasoning_summary_part.done
+													emit({
+														type: 'response.reasoning_summary_part.done',
+														sequence_number: sequenceNumber++,
+														item_id: reasoningItemId,
+														output_index: outputIndex,
+														summary_index: reasoningSummaryIndex,
+														part: {
+															type: 'summary_text',
+															text: reasoningText
+														}
+													});
+
+													// Create final reasoning item with summary
+													const reasoningItem = {
+														id: reasoningItemId,
+														type: 'reasoning',
+														summary: [{
+															type: 'summary_text',
+															text: reasoningText
+														}]
+													};
+
+													// Update the item in outputItems
+													const itemIndex = outputItems.findIndex(item => item.id === reasoningItemId);
+													if (itemIndex >= 0) outputItems[itemIndex] = reasoningItem;
+
+													// Emit output_item.done
+													emit({
+														type: 'response.output_item.done',
+														sequence_number: sequenceNumber++,
+														output_index: outputIndex,
+														item: reasoningItem
+													});
+
+													outputIndex++;
+													reasoningItemId = null;
+													reasoningText = '';
+												}
+
+												poeReasoningMode = false;
+												poeReasoningBuffer = postReasoningContent;
+
+												// Continue with post-reasoning content as regular text
+												if (postReasoningContent) {
+													if (!textItemId) {
+														textItemId = randomId('msg');
+														const textOutputIndex = outputIndex + 1;
+														const textItem = {
+															id: textItemId,
+															type: 'message',
+															status: 'in_progress',
+															role: 'assistant',
+															content: []
+														};
+														outputItems.push(textItem);
+														emit({
+															type: 'response.output_item.added',
+															sequence_number: sequenceNumber++,
+															output_index: textOutputIndex,
+															item: textItem
+														});
+
+														// Emit content_part.added for output_text
+														emit({
+															type: 'response.content_part.added',
+															sequence_number: sequenceNumber++,
+															item_id: textItemId,
+															output_index: textOutputIndex,
+															content_index: 0,
+															part: {
+																type: 'output_text',
+																text: '',
+															}
+														});
+
+														outputIndex = textOutputIndex;
+													}
+
+													collectedText += postReasoningContent;
+													emit({
+														type: 'response.output_text.delta',
+														sequence_number: sequenceNumber++,
+														item_id: textItemId,
+														output_index: outputIndex,
+														content_index: 0,
+														delta: postReasoningContent
+													});
+												}
+												continue;
+											} else {
+												// Still in reasoning mode, add to reasoning
+												const newReasoningText = part.text;
+												const cleanedNewReasoningText = cleanPoeReasoningDelta(newReasoningText);
+												reasoningText += cleanedNewReasoningText;
+												emit({
+													type: 'response.reasoning_summary_text.delta',
+													sequence_number: sequenceNumber++,
+													item_id: reasoningItemId,
+													output_index: outputIndex,
+													summary_index: reasoningSummaryIndex,
+													delta: cleanedNewReasoningText
+												});
+												continue;
+											}
+										}
+
+										// If not in reasoning mode and no reasoning detected, treat as regular text
+										if (!poeReasoningMode) {
+											// Reset buffer periodically to prevent memory issues
+											if (poeReasoningBuffer.length > 1000) {
+												poeReasoningBuffer = poeReasoningBuffer.slice(-500);
+											}
+										}
+									}
+
+									// Regular text handling (non-Poe or non-reasoning content)
+									if (!textItemId) {
+										textItemId = randomId('msg');
+										const textOutputIndex = outputIndex + 1;
+										const textItem = {
+											id: textItemId,
+											type: 'message',
+											status: 'in_progress',
+											role: 'assistant',
+											content: []
+										};
+										outputItems.push(textItem);
+										emit({
+											type: 'response.output_item.added',
+											sequence_number: sequenceNumber++,
+											output_index: textOutputIndex,
+											item: textItem
+										});
+
+										// Emit content_part.added for output_text
+										emit({
+											type: 'response.content_part.added',
+											sequence_number: sequenceNumber++,
+											item_id: textItemId,
+											output_index: textOutputIndex,
+											content_index: 0,
+											part: {
+												type: 'output_text',
+												text: '',
+											}
+										});
+
+										outputIndex = textOutputIndex;
+									}
+
 									collectedText += part.text;
 									emit({
 										type: 'response.output_text.delta',
@@ -1569,6 +2046,47 @@ app.post('/v1/responses', async (c: Context) => {
 										content_index: 0,
 										delta: part.text
 									});
+									break;
+								}
+								case 'text-end': {
+									if (textItemId) {
+										// Emit content_part.done with accumulated text
+										emit({
+											type: 'response.content_part.done',
+											sequence_number: sequenceNumber++,
+											item_id: textItemId,
+											output_index: outputIndex,
+											content_index: 0,
+											part: {
+												type: 'output_text',
+												text: collectedText,
+												annotations: accumulatedSources
+											}
+										});
+
+										const completedTextItem = {
+											id: textItemId,
+											type: 'message',
+											status: 'completed',
+											role: 'assistant',
+											content: [{ type: 'output_text', text: collectedText, annotations: accumulatedSources }]
+										};
+
+										// Update the item in outputItems
+										const itemIndex = outputItems.findIndex(item => item.id === textItemId);
+										if (itemIndex >= 0) outputItems[itemIndex] = completedTextItem;
+
+										emit({
+											type: 'response.output_item.done',
+											sequence_number: sequenceNumber++,
+											output_index: outputIndex,
+											item: completedTextItem
+										});
+
+										collectedText = '';
+										accumulatedSources = [];
+										textItemId = null;
+									}
 									break;
 								}
 								case 'tool-input-start': {
@@ -1727,6 +2245,9 @@ app.post('/v1/responses', async (c: Context) => {
 											output_index: outputIndex,
 											item: completedTextItem
 										});
+										collectedText = '';
+										accumulatedSources = [];
+										textItemId = null;
 									}
 
 									const filteredOutput = outputItems.filter(item => item.type !== 'function_call');
@@ -1748,14 +2269,16 @@ app.post('/v1/responses', async (c: Context) => {
 									});
 
 									// Save conversation
-									try {
-										const store = getStoreWithConfig('responses', headers);
-										await store.setJSON(responseId, {
-											id: responseId,
-											messages: [...messages, { role: 'assistant', content: collectedText }],
-											assistant: collectedText
-										});
-									} catch { }
+									if (store) {
+										try {
+											const blobStore = getStoreWithConfig('responses', headers);
+											await blobStore.setJSON(responseId, {
+												id: responseId,
+												messages: [...messages, { role: 'assistant', content: collectedText }],
+												assistant: collectedText
+											});
+										} catch { }
+									}
 									controller.close();
 									return;
 								}
@@ -1820,23 +2343,54 @@ app.post('/v1/responses', async (c: Context) => {
 			const gw = await getGatewayForAttempt(attempt);
 			const commonOptions = buildCommonOptions(gw, attempt, commonParams);
 			const result = await generateText(commonOptions);
+
+			// Handle Poe-specific reasoning extraction for non-streaming
+			let content = result.text || '';
+			let reasoningContent = result.reasoningText || '';
+
+			if (attempt.name === 'poe' && content && !reasoningContent) {
+				const extracted = extractPoeReasoning(content);
+				content = extracted.content;
+				reasoningContent = extracted.reasoning;
+			}
+
 			// Transform result.sources to annotations format  
 			const annotations = result.sources ? result.sources.map((source: any) => ({
 				title: source.title || '',
 				url: source.url || '',
 				type: (source.sourceType || 'url') + '_citation'
 			})) : [];
+
 			// Construct Responses API output
 			const inputNormalized = typeof input === 'string'
 				? [{ type: 'input_text', text: input }]
 				: (Array.isArray(input) ? input : (input ? [input] : []));
-			const output = result.text ? [{
-				type: 'message',
-				id: randomId('msg'),
-				status: 'completed',
-				role: 'assistant',
-				content: [{ type: 'output_text', text: result.text, annotations }]
-			}] : [];
+
+			// Build output items
+			const output: any[] = [];
+
+			// Add reasoning item if present
+			if (reasoningContent) {
+				output.push({
+					type: 'reasoning',
+					id: randomId('rs'),
+					summary: [{
+						type: 'summary_text',
+						text: reasoningContent
+					}]
+				});
+			}
+
+			// Add message item if present
+			if (content) {
+				output.push({
+					type: 'message',
+					id: randomId('msg'),
+					status: 'completed',
+					role: 'assistant',
+					content: [{ type: 'output_text', text: content, annotations }]
+				});
+			}
 			const responsePayload = {
 				id: responseId,
 				object: 'response',
@@ -1852,7 +2406,7 @@ app.post('/v1/responses', async (c: Context) => {
 				previous_response_id: previous_response_id || null,
 				reasoning: reasoning,
 				parallel_tool_calls: true,
-				store: true,
+				store: store,
 				temperature: temperature ?? 1,
 				text: { format: { type: 'text' } },
 				tool_choice: tool_choice || 'auto',
@@ -1863,11 +2417,13 @@ app.post('/v1/responses', async (c: Context) => {
 				user: null,
 			} as any;
 
-			try {
-				const store = getStoreWithConfig('responses', headers);
-				// Append assistant reply to the stored message history
-				await store.setJSON(responseId, { id: responseId, messages: [...messages, { role: 'assistant', content: result.text }], assistant: result.text });
-			} catch { }
+			if (store) {
+				try {
+					const blobStore = getStoreWithConfig('responses', headers);
+					// Append assistant reply to the stored message history using processed content
+					await blobStore.setJSON(responseId, { id: responseId, messages: [...messages, { role: 'assistant', content: content }], assistant: content });
+				} catch { }
+			}
 
 			return c.json(responsePayload);
 		} catch (error: any) {
@@ -1939,6 +2495,14 @@ app.post('/v1/chat/completions', async (c: Context) => {
 				let attemptsTried = 0;
 				let lastStreamError: any = null;
 				let accumulatedCitations: Array<{ type: string, url_citation: { url: string, title: string } }> = [];
+
+				// Poe-specific reasoning detection state
+				let isPoeProvider = false;
+				let poeReasoningMode = false;
+				let poeReasoningBuffer = '';
+				let poeAccumulatedReasoning = '';
+				let poeProcessedLength = 0;
+
 				for (let i = 0; i < maxAttempts; i++) {
 					if (abortController.signal.aborted) break;
 					const attempt = providersToTry[i];
@@ -1946,6 +2510,10 @@ app.post('/v1/chat/completions', async (c: Context) => {
 					try {
 						attemptsTried++;
 						const gw = await getGatewayForAttempt(attempt);
+
+						// Check if this is Poe provider
+						isPoeProvider = attempt.name === 'poe';
+
 						const commonOptions = buildCommonOptions(gw, attempt, {
 							messages: processedMessages,
 							aiSdkTools,
@@ -1982,6 +2550,108 @@ app.post('/v1/chat/completions', async (c: Context) => {
 									controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
 									break;
 								case 'text-delta':
+									// Handle Poe-specific reasoning detection
+									if (isPoeProvider) {
+										poeReasoningBuffer += part.text;
+
+										// Check if reasoning is starting
+										if (!poeReasoningMode && startsWithThinking(poeReasoningBuffer)) {
+											poeReasoningMode = true;
+
+											// Extract the reasoning text (remove the part before "Thinking...")
+											const thinkingIndex = findThinkingIndex(poeReasoningBuffer);
+											if (thinkingIndex >= 0) {
+												const beforeThinking = poeReasoningBuffer.substring(0, thinkingIndex);
+												const reasoningStart = poeReasoningBuffer.substring(thinkingIndex);
+
+												// Emit any text before "Thinking..." as regular content
+												if (beforeThinking) {
+													chunk = { ...baseChunk, choices: [{ index: 0, delta: { content: beforeThinking }, finish_reason: null }] };
+													controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+												}
+
+												// Clean and add reasoning text
+												const cleanedReasoningStart = cleanPoeReasoningDelta(reasoningStart, true);
+												poeAccumulatedReasoning += cleanedReasoningStart;
+												chunk = { ...baseChunk, choices: [{ index: 0, delta: { reasoning_content: cleanedReasoningStart }, finish_reason: null }] };
+												controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+
+												// Reset buffer to contain only processed reasoning content
+												poeReasoningBuffer = reasoningStart;
+												poeProcessedLength = reasoningStart.length;
+											}
+											break;
+										}
+
+										// Check if reasoning is ending (two consecutive newlines without >)
+										if (poeReasoningMode) {
+											const lines = poeReasoningBuffer.split('\n');
+											let reasoningEnded = false;
+
+											// Look for two consecutive lines where the second doesn't start with >
+											for (let i = lines.length - 2; i >= 0; i--) {
+												const currentLine = lines[i];
+												const nextLine = lines[i + 1];
+												if (currentLine === '' && nextLine && nextLine !== '' && !nextLine.startsWith('>')) {
+													reasoningEnded = true;
+													break;
+												}
+											}
+
+											if (reasoningEnded) {
+												// Find where reasoning content ends
+												const reasoningEndIndex = poeReasoningBuffer.lastIndexOf('\n\n');
+												let reasoningContent = '';
+												let postReasoningContent = '';
+
+												if (reasoningEndIndex >= 0) {
+													reasoningContent = poeReasoningBuffer.substring(0, reasoningEndIndex);
+													postReasoningContent = poeReasoningBuffer.substring(reasoningEndIndex + 2);
+												} else {
+													reasoningContent = poeReasoningBuffer;
+												}
+
+												// Emit final reasoning content
+												if (reasoningContent) {
+													const newReasoningText = reasoningContent.substring(poeAccumulatedReasoning.length);
+													if (newReasoningText) {
+														const cleanedNewReasoningText = cleanPoeReasoningDelta(newReasoningText);
+														poeAccumulatedReasoning += cleanedNewReasoningText;
+														chunk = { ...baseChunk, choices: [{ index: 0, delta: { reasoning_content: cleanedNewReasoningText }, finish_reason: null }] };
+														controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+													}
+												}
+
+												poeReasoningMode = false;
+												poeReasoningBuffer = postReasoningContent;
+
+												// Continue with post-reasoning content as regular text
+												if (postReasoningContent) {
+													chunk = { ...baseChunk, choices: [{ index: 0, delta: { content: postReasoningContent }, finish_reason: null }] };
+													controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+												}
+												break;
+											} else {
+												// Still in reasoning mode, add to reasoning
+												const newReasoningText = part.text;
+												const cleanedNewReasoningText = cleanPoeReasoningDelta(newReasoningText);
+												poeAccumulatedReasoning += cleanedNewReasoningText;
+												chunk = { ...baseChunk, choices: [{ index: 0, delta: { reasoning_content: cleanedNewReasoningText }, finish_reason: null }] };
+												controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+												break;
+											}
+										}
+
+										// If not in reasoning mode and no reasoning detected, treat as regular text
+										if (!poeReasoningMode) {
+											// Reset buffer periodically to prevent memory issues
+											if (poeReasoningBuffer.length > 1000) {
+												poeReasoningBuffer = poeReasoningBuffer.slice(-500);
+											}
+										}
+									}
+
+									// Regular text handling (non-Poe or non-reasoning content)
 									chunk = { ...baseChunk, choices: [{ index: 0, delta: { content: part.text }, finish_reason: null }] };
 									controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
 									break;
@@ -2078,7 +2748,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 			});
 
 			const result = await generateText(commonOptions);
-			const openAIResponse = await toOpenAIResponse(result, model);
+			const openAIResponse = await toOpenAIResponse(result, model, provider.name);
 			return c.json(openAIResponse);
 		} catch (error: any) {
 			console.error(`Error with provider ${i + 1}/${providersToTry.length} (${provider.type}${provider.name ? ':' + provider.name : ''}):`, error.message || error);
@@ -2224,7 +2894,8 @@ async function handleModelsRequest(c: Context) {
 			'gemma', 'rerank', 'distill', 'parse', 'embed', 'bge-', 'tts', 'phi', 'live', 'audio', 'lite',
 			'qwen2', 'qwen-2', 'qwen1', 'qwq', 'qvq', 'gemini-2.0', 'gemini-1', 'learnlm', 'gemini-exp',
 			'turbo', 'claude-3', 'voxtral', 'pixtral', 'mixtral', 'ministral', '-24', 'moderation', 'saba', '-ocr-',
-			'transcribe', 'image', 'dall', 'davinci', 'babbage'
+			'transcribe', 'image', 'dall', 'davinci', 'babbage', 'flux', 'luma', 'diffusion', 'hailuo',
+			'kling', 'wan', 'ideogram', 'seedance', 'seedream', 'background'
 		];
 		if (commonExclusions.some(exclusion => modelId.includes(exclusion))) {
 			return false;
@@ -2234,9 +2905,7 @@ async function handleModelsRequest(c: Context) {
 		}
 
 		// Provider-specific exclusions
-		if (providerName === 'gemini' && ['veo', 'imagen'].some(exclusion => modelId.includes(exclusion))) {
-			return false;
-		} else if (providerName === 'openrouter' && !modelId.includes(':free')) {
+		if (providerName === 'openrouter' && !modelId.includes(':free')) {
 			return false;
 		} else if (providerName !== 'mistral' && modelId.includes('mistral')) {
 			return false;

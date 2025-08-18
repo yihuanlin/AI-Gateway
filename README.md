@@ -23,7 +23,7 @@ bun build
 POST /v1/chat/completions
 ```
 
-### Responses
+### Responses (Stored in Netlify Blobs)
 ```
 POST /v1/responses
 ```
@@ -179,6 +179,10 @@ TAVILY_API_KEY=tvly-dev-...
 PYTHON_API_KEY=your-python-key
 PYTHON_URL=https://your-python-executor.com
 
+# Use Netlify Blobs in non-Netlify platforms (Responses endpoint datastore)
+NETLIFY_SITE_ID=your-netlify-site-id
+NETLIFY_TOKEN=nfp_...
+
 # Provider-specific keys
 CHATGPT_API_KEY=sk-proj-...,sk-proj-...,sk-proj-...
 GROQ_API_KEY=gsk_...
@@ -195,9 +199,8 @@ COHERE_API_KEY=your-cohere-api-key
 MORPH_API_KEY=sk-...
 INFINI_API_KEY=sk-...
 POIXE_API_KEY=sk-...
-NETLIFY_SITE_ID=your-netlify-site-id
-NETLIFY_TOKEN=nfp_...
 COPILOT_API_KEY=ghu_...
+POE_API_KEY=your-poe-api-key
 ```
 
 ## 🔌 Supported Providers
