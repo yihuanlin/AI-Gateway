@@ -1565,13 +1565,14 @@ app.post('/v1/responses', async (c: Context) => {
 		reasoning_effort: reasoning?.effort || undefined,
 	};
 	// Storage preparation
-	const responseId = request_id || randomId('resp');
+	const now = Date.now();
+	const responseId = request_id || 'resp_' + now;
 
 	if (stream) {
 		// Streaming SSE per OpenAI Responses API
 		const streamResponse = new ReadableStream({
 			async start(controller) {
-				const createdAt = Math.floor(Date.now() / 1000);
+				const createdAt = Math.floor(now / 1000);
 				let sequenceNumber = 0;
 				let outputIndex = 0;
 				const outputItems: any[] = [];
@@ -2442,7 +2443,7 @@ app.post('/v1/responses', async (c: Context) => {
 			const responsePayload = {
 				id: responseId,
 				object: 'response',
-				created_at: Math.floor(Date.now() / 1000),
+				created_at: Math.floor(now / 1000),
 				status: 'completed',
 				error: null,
 				incomplete_details: null,
