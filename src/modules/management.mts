@@ -62,7 +62,7 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
   const store = getStoreWithConfig('responses', headers);
 
   if (/^\/help$/.test(text)) {
-    const help = 'Commands: "list" | "delete all" | "delete <id>" | "<id>" to view.';
+    const help = 'Commands: "list" | "delete all" | "delete $id" | "$id" to view.';
     const now = Math.floor(Date.now() / 1000);
     if (stream) {
       return streamChatSingleText(model, help);
@@ -191,7 +191,7 @@ export async function handleAdminForResponses(args: { input: any; headers: Heade
   const streamTextOnce = (messageText: string) => streamResponsesSingleText(baseObj, messageText, textItemId, true);
 
   if (/^\/help$/.test(text)) {
-    const msg = 'Commands: "list" | "delete all" | "delete <id>" | "<id>" to view.';
+    const msg = 'Commands: "list" | "delete all" | "delete $id" | "$id" to view.';
     if (!stream) return new Response(JSON.stringify(buildCompleted(msg)), { headers: { 'Content-Type': 'application/json' } });
     return streamTextOnce(msg);
   }

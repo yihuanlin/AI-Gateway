@@ -5,7 +5,7 @@ A high-performance AI Gateway built with [Hono](https://hono.dev/) for edge comp
 ## ✨ Features
 
 - **Unified Text API**: Images and videos models accessible through standard chat/responses endpoints  
-- **Admin Models**: Special administrative models for system management (admin/responses)
+- **Admin Models**: Special administrative models for system management (admin/magic)
 - **Multi-Provider Support**: OpenAI, Google, Groq, Cerebras, Doubao, ModelScope, and more
 - **Streaming Support**: Real-time responses with progress indicators
 - **Tool Integration**: Python execution, web search, content extraction
@@ -170,7 +170,7 @@ curl -X POST "$HOSTNAME/v1/responses" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $PASSWORD" \
   -d '{
-    "model": "admin/responses",
+    "model": "admin/magic",
     "input": "deleteall" # Delete all stored responses
   }'
 ```
@@ -221,7 +221,7 @@ curl -X POST "$HOSTNAME/v1/models" \
 - **Flags**: `--ratio 16:9`, `--duration 3-12`, `--resolution 720p`
 
 ### Admin Models
-- **System Management**: `admin/responses`
+- **System Management**: `admin/magic`
 
 ## 📝 Response Management Examples
 

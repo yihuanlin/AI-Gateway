@@ -7,7 +7,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { openai, createOpenAI } from '@ai-sdk/openai'
 import { google, createGoogleGenerativeAI } from '@ai-sdk/google'
 import { groq, createGroq } from '@ai-sdk/groq';
-import { SUPPORTED_PROVIDERS, getProviderKeys, parseModelName, fetchCopilotToken } from './shared/providers.mts'
+import { SUPPORTED_PROVIDERS, getProviderKeys, fetchCopilotToken } from './shared/providers.mts'
 import { getStoreWithConfig } from './shared/store.mts'
 import { string, number, boolean, array, object, optional, int, enum as zenum } from 'zod/mini'
 
@@ -1348,7 +1348,7 @@ app.post('/v1/responses', async (c: Context) => {
 
 	const messages = await toAiSdkMessages();
 
-	// Storage preparation (needed for admin/responses routing id reference)
+	// Storage preparation (needed for admin/magic routing id reference)
 	const now = Date.now();
 	const responseId = request_id || 'resp_' + now;
 
@@ -1361,7 +1361,7 @@ app.post('/v1/responses', async (c: Context) => {
 		const { handleVideoForResponses } = await import('./modules/videos.mts');
 		return await handleVideoForResponses({ model, input, headers: c.req.raw.headers as any, stream: !!stream, request_id: responseId, store, authHeader: authHeader || null, isPasswordAuth });
 	}
-	if (model === 'admin/responses') {
+	if (model === 'admin/magic') {
 		const { handleAdminForResponses } = await import('./modules/management.mts');
 		return await handleAdminForResponses({ input, headers: c.req.raw.headers as any, model, request_id: responseId, instructions, store: false, stream: !!stream });
 	}
@@ -2372,7 +2372,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 		const { handleVideoForChat } = await import('./modules/videos.mts');
 		return await handleVideoForChat({ model, messages: processedMessages, headers: c.req.raw.headers as any, stream: !!stream, authHeader: authHeader || null, isPasswordAuth });
 	}
-	if (model === 'admin/responses') {
+	if (model === 'admin/magic') {
 		const { handleAdminForChat } = await import('./modules/management.mts');
 		return await handleAdminForChat({ messages: processedMessages, headers: c.req.raw.headers as any, model, stream: !!stream });
 	}
@@ -2684,13 +2684,214 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	return c.json(errorPayload, statusCode);
 })
 
-// /v1/models routed to dynamic module to reduce cold start
+function isSupportedProvider(name: string): name is keyof typeof SUPPORTED_PROVIDERS {
+	return Object.prototype.hasOwnProperty.call(SUPPORTED_PROVIDERS, name);
+}
+
+function shouldIncludeModel(model: any, providerName?: string) {
+	const modelId = String(model.id || '').toLowerCase();
+	const commonExclusions = [
+		'gemma', 'rerank', 'distill', 'parse', 'embed', 'bge-', 'tts', 'phi', 'live', 'audio', 'lite',
+		'qwen2', 'qwen-2', 'qwen1', 'qwq', 'qvq', 'gemini-1', 'learnlm', 'gemini-exp',
+		'turbo', 'claude-3', 'voxtral', 'pixtral', 'mixtral', 'ministral', '-24', 'moderation', 'saba', '-ocr-',
+		'transcribe', 'dall', 'davinci', 'babbage', 'hailuo', 'kling', 'wan', 'ideogram', 'background'
+	];
+	if (commonExclusions.some((e) => modelId.includes(e))) return false;
+	if (!modelId.includes('super') && ((['nemotron', 'llama'].some((e) => modelId.includes(e))) || modelId.includes('nvidia'))) return false;
+	if (providerName === 'openrouter' && !modelId.includes(':free')) return false;
+	if (providerName !== 'mistral' && modelId.includes('mistral')) return false;
+	if (providerName === 'chatgpt' && (modelId.split('-').length - 1) > 2) return false;
+	if (!providerName && ['mistral', 'alibaba', 'cohere', 'deepseek', 'moonshotai', 'morph', 'zai'].some((e) => modelId.includes(e))) return false;
+	return true;
+}
+
+// Using shared getProviderKeys
+
+async function fetchProviderModels(providerName: string, apiKey: string) {
+	if (!isSupportedProvider(providerName)) {
+		throw new Error(`Unsupported provider: ${providerName}`);
+	}
+	const config = SUPPORTED_PROVIDERS[providerName];
+	if (!config) throw new Error(`Unsupported provider: ${providerName}`);
+	let modelsEndpoint: string;
+	if (providerName === 'github') modelsEndpoint = config.baseURL.replace('inference', 'catalog/models');
+	else modelsEndpoint = `${config.baseURL}/models`;
+
+	let response: Response;
+	if (providerName === 'gemini') {
+		modelsEndpoint = modelsEndpoint + '?key=' + apiKey;
+		response = await fetch(modelsEndpoint);
+	} else if (providerName === 'copilot') {
+		const copilotToken = await fetchCopilotToken(apiKey);
+		response = await fetch(modelsEndpoint, {
+			method: 'GET',
+			headers: {
+				'Authorization': `Bearer ${copilotToken}`,
+				'Content-Type': 'application/json',
+				"editor-version": "vscode/1.103.1",
+				"copilot-vision-request": "true",
+				"editor-plugin-version": "copilot-chat/0.30.1",
+				"user-agent": "GitHubCopilotChat/0.30.1"
+			},
+		});
+	} else {
+		response = await fetch(modelsEndpoint, { method: 'GET', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } });
+	}
+	if (!response.ok) throw new Error(`Provider ${providerName} models API failed: ${response.status} ${response.statusText}`);
+	const data = (await response.json()) as any;
+	if (providerName === 'gemini') {
+		return { data: data.models.map((m: any) => ({ id: m.name, name: m.displayName, description: m.description || '' })) };
+	} else if (providerName === 'github') {
+		return { data };
+	}
+	return data;
+}
+
+async function getModelsResponse(apiKey: string, providerKeys: Record<string, string[]>, isPasswordAuth: boolean = false) {
+	let gatewayApiKeys: string[] = [];
+	if (isPasswordAuth) {
+		const gatewayKey = process.env.GATEWAY_API_KEY;
+		if (gatewayKey) gatewayApiKeys = gatewayKey.split(',').map((k) => k.trim());
+	} else {
+		gatewayApiKeys = apiKey.split(',').map((k) => k.trim());
+	}
+
+	const fetchPromises: Promise<any[]>[] = [];
+
+	if (gatewayApiKeys.length > 0) {
+		const randomIndex = Math.floor(Math.random() * gatewayApiKeys.length);
+		const currentApiKey = gatewayApiKeys[randomIndex];
+		const gatewayPromise = (async () => {
+			try {
+				if (!currentApiKey) throw new Error('No valid gateway API key found');
+				const gateway = createGateway({ apiKey: currentApiKey, baseURL: 'https://ai-gateway.vercel.sh/v1/ai' });
+				const availableModels = await gateway.getAvailableModels();
+				const now = Math.floor(Date.now() / 1000);
+				return availableModels.models
+					.map((model: any) => ({
+						id: model.id,
+						name: model.name,
+						description: model.pricing ? ` I: $${(Number(model.pricing.input) * 1000000).toFixed(2)}, O: $${(Number(model.pricing.output) * 1000000).toFixed(2)}; ${model.description || ''}` : (model.description || ''),
+						object: 'model',
+						created: now,
+						owned_by: model.name.split('/')[0],
+					}))
+					.filter((m: any) => shouldIncludeModel(m));
+			} catch (e) {
+				return [] as any[];
+			}
+		})();
+		fetchPromises.push(gatewayPromise);
+	}
+
+	for (const [providerName, keys] of Object.entries(providerKeys)) {
+		if (!keys || keys.length === 0) continue;
+		if (!isSupportedProvider(providerName)) continue;
+		const randomIndex = Math.floor(Math.random() * keys.length);
+		const providerApiKey = keys[randomIndex];
+		const providerPromise = (async () => {
+			try {
+				if (!providerApiKey) throw new Error(`No valid API key found for provider: ${providerName}`);
+				let formattedModels: any[] = [];
+				const providerModels = await fetchProviderModels(providerName, providerApiKey);
+				formattedModels = (providerModels as any).data?.map((model: any) => ({
+					id: `${providerName}/${String(model.id).replace('models/', '')}`,
+					name: `${model.name?.replace(' (free)', '') || parseModelDisplayName(model.id)}`,
+					description: model.description || model.summary || '',
+					object: 'model',
+					created: model.created || 0,
+					owned_by: model.owned_by || providerName,
+				}))?.filter((m: any) => shouldIncludeModel(m, providerName)) || [];
+				return formattedModels;
+			} catch (e) {
+				return [] as any[];
+			}
+		})();
+		fetchPromises.push(providerPromise);
+	}
+
+	const results = await Promise.allSettled(fetchPromises);
+	const allModels: any[] = [];
+	results.forEach((r) => { if (r.status === 'fulfilled' && r.value.length > 0) allModels.push(...r.value); });
+
+	// Inject curated image models (always available)
+	const curated = [
+		{ id: 'image/doubao-vision', name: 'Seed Image', object: 'model', created: 0, owned_by: 'doubao' },
+		{ id: 'image/AI-ModelScope/stable-diffusion-3.5-large-turbo', name: 'Stable Diffusion 3.5 Large', object: 'model', created: 0, owned_by: 'modelscope' },
+		{ id: 'image/MusePublic/489_ckpt_FLUX_1', name: 'FLUX.1 [dev]', object: 'model', created: 0, owned_by: 'modelscope' },
+		{ id: 'image/black-forest-labs/FLUX.1-Krea-dev', name: 'FLUX.1 Krea [dev]', object: 'model', created: 0, owned_by: 'modelscope' },
+		{ id: 'image/MusePublic/FLUX.1-Kontext-Dev', name: 'FLUX.1 Kontext [dev]', object: 'model', created: 0, owned_by: 'modelscope' },
+		{ id: 'image/MusePublic/flux-high-res', name: 'FLUX.1 [dev] High-Res', object: 'model', created: 0, owned_by: 'modelscope' },
+		{ id: 'image/Qwen/Qwen-Image', name: 'Qwen-Image', object: 'model', created: 0, owned_by: 'modelscope' },
+		{ id: 'admin/magic', name: 'Responses Management', object: 'model', created: 0, owned_by: 'admin' },
+		{ id: 'video/doubao-seedance-pro-vision', name: 'Seedance 1.0 Pro', object: 'model', created: 0, owned_by: 'doubao' },
+		{ id: 'video/doubao-seedance-lite-vision', name: 'Seedance 1.0 Lite', object: 'model', created: 0, owned_by: 'doubao' }
+	];
+	const existingIds = new Set(allModels.map((m) => m.id));
+	for (const m of curated) if (!existingIds.has(m.id)) allModels.push(m);
+
+	if (allModels.length > 0) return { object: 'list', data: allModels };
+	throw new Error('All provider(s) failed to return models');
+}
+
+async function handleModelsRequest(c: any) {
+	const authHeader = c.req.header('Authorization');
+	let apiKey = authHeader?.split(' ')[1];
+	const envPassword = process.env.PASSWORD;
+	const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
+	if (!apiKey) return c.text('Unauthorized', 401);
+
+	const headers: Record<string, string> = {};
+	c.req.raw.headers.forEach((value: string, key: string) => {
+		headers[key.toLowerCase().replace(/-/g, '_')] = value;
+	});
+	const providerKeys = await getProviderKeys(headers as any, authHeader || null, isPasswordAuth);
+
+	try {
+		const modelsResponse = await getModelsResponse(apiKey, providerKeys, isPasswordAuth);
+		return c.json(modelsResponse);
+	} catch (error: any) {
+		return c.json({ error: error?.message || 'All provider(s) failed to return models' }, 500);
+	}
+}
+
+function parseModelDisplayName(model: string) {
+	let baseName = model.split('/').pop() || model;
+	if (baseName.endsWith(':free')) baseName = baseName.slice(0, -5);
+	let displayName = baseName.replace(/-/g, ' ');
+	displayName = displayName.split(' ').map(word => {
+		const lowerWord = word.toLowerCase();
+		if (lowerWord === 'deepseek') return 'DeepSeek';
+		if (lowerWord === 'ernie') return 'ERNIE';
+		if (['mai', 'ds', 'r1'].includes(lowerWord)) return word.toUpperCase();
+		if (lowerWord === 'gpt') return 'GPT';
+		if (lowerWord === 'oss') return 'OSS';
+		if (lowerWord === 'glm') return 'GLM';
+		if (lowerWord.startsWith('o') && lowerWord.length > 1 && /^\d/.test(lowerWord.slice(1))) return word.toLowerCase();
+		if (/^a?\d+[bkmae]$/.test(lowerWord)) return word.toUpperCase();
+		return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+	}).join(' ');
+	if (displayName === 'MAI DS R1') displayName = 'MAI-DS-R1';
+	else if (displayName.startsWith('GPT ')) displayName = displayName.replace(/^GPT /, 'GPT-');
+	return displayName;
+}
+
+export function parseModelName(model: string) {
+	const parts = model.split('/');
+	if (parts.length >= 2) {
+		const [providerName, ...modelParts] = parts as [keyof typeof SUPPORTED_PROVIDERS, ...string[]];
+		const modelName = modelParts.join('/');
+		if (Object.prototype.hasOwnProperty.call(SUPPORTED_PROVIDERS, providerName)) {
+			return { provider: String(providerName), model: modelName, useCustomProvider: true };
+		}
+	}
+	return { provider: null, model: model, useCustomProvider: false };
+}
+
 app.get('/v1/models', async (c: Context) => {
-	const { handleModelsRequest } = await import('./modules/models.mts');
 	return handleModelsRequest(c);
 });
 app.post('/v1/models', async (c: Context) => {
-	const { handleModelsRequest } = await import('./modules/models.mts');
 	return handleModelsRequest(c);
 });
 

@@ -1,5 +1,3 @@
-// Shared provider configuration and helpers, ESM + NodeNext compatible
-
 export const SUPPORTED_PROVIDERS = {
   copilot: { baseURL: 'https://api.githubcopilot.com', tokenURL: 'https://api.github.com/copilot_internal/v2/token' },
   chatgpt: { baseURL: 'https://api.openai.com/v1' },
@@ -59,18 +57,6 @@ export async function getProviderKeys(headers: any, authHeader: string | null, i
   return providerKeys;
 }
 
-export function parseModelName(model: string) {
-  const parts = model.split('/');
-  if (parts.length >= 2) {
-    const [providerName, ...modelParts] = parts as [keyof typeof SUPPORTED_PROVIDERS, ...string[]];
-    const modelName = modelParts.join('/');
-    if (Object.prototype.hasOwnProperty.call(SUPPORTED_PROVIDERS, providerName)) {
-      return { provider: String(providerName), model: modelName, useCustomProvider: true };
-    }
-  }
-  return { provider: null, model: model, useCustomProvider: false };
-}
-
 export async function fetchCopilotToken(apiKey: string): Promise<string> {
   const config = SUPPORTED_PROVIDERS.copilot;
   const response = await fetch(config.tokenURL, {
@@ -87,25 +73,4 @@ export async function fetchCopilotToken(apiKey: string): Promise<string> {
 
   const data = await response.json() as any;
   return data.token;
-}
-
-export function parseModelDisplayName(model: string) {
-  let baseName = model.split('/').pop() || model;
-  if (baseName.endsWith(':free')) baseName = baseName.slice(0, -5);
-  let displayName = baseName.replace(/-/g, ' ');
-  displayName = displayName.split(' ').map(word => {
-    const lowerWord = word.toLowerCase();
-    if (lowerWord === 'deepseek') return 'DeepSeek';
-    if (lowerWord === 'ernie') return 'ERNIE';
-    if (['mai', 'ds', 'r1'].includes(lowerWord)) return word.toUpperCase();
-    if (lowerWord === 'gpt') return 'GPT';
-    if (lowerWord === 'oss') return 'OSS';
-    if (lowerWord === 'glm') return 'GLM';
-    if (lowerWord.startsWith('o') && lowerWord.length > 1 && /^\d/.test(lowerWord.slice(1))) return word.toLowerCase();
-    if (/^a?\d+[bkmae]$/.test(lowerWord)) return word.toUpperCase();
-    return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
-  }).join(' ');
-  if (displayName === 'MAI DS R1') displayName = 'MAI-DS-R1';
-  else if (displayName.startsWith('GPT ')) displayName = displayName.replace(/^GPT /, 'GPT-');
-  return displayName;
 }
