@@ -1,0 +1,111 @@
+// Shared provider configuration and helpers, ESM + NodeNext compatible
+
+export const SUPPORTED_PROVIDERS = {
+  copilot: { baseURL: 'https://api.githubcopilot.com', tokenURL: 'https://api.github.com/copilot_internal/v2/token' },
+  chatgpt: { baseURL: 'https://api.openai.com/v1' },
+  doubao: { baseURL: 'https://ark.cn-beijing.volces.com/api/v3' },
+  gemini: { baseURL: 'https://generativelanguage.googleapis.com/v1beta' },
+  poe: { baseURL: 'https://api.poe.com/v1' },
+  cerebras: { baseURL: 'https://api.cerebras.ai/v1' },
+  groq: { baseURL: 'https://api.groq.com/openai/v1' },
+  modelscope: { baseURL: 'https://api-inference.modelscope.cn/v1' },
+  infini: { baseURL: 'https://cloud.infini-ai.com/maas/v1' },
+  github: { baseURL: 'https://models.github.ai/inference' },
+  openrouter: { baseURL: 'https://openrouter.ai/api/v1' },
+  nvidia: { baseURL: 'https://integrate.api.nvidia.com/v1' },
+  mistral: { baseURL: 'https://api.mistral.ai/v1' },
+  cohere: { baseURL: 'https://api.cohere.ai/compatibility/v1' },
+  poixe: { baseURL: 'https://api.poixe.com/v1' }
+} as const;
+
+export const PROVIDER_KEYS = Object.keys(SUPPORTED_PROVIDERS);
+
+export async function getProviderKeys(headers: any, authHeader: string | null, isPasswordAuth: boolean = false): Promise<Record<string, string[]>> {
+  const providerKeys: Record<string, string[]> = {};
+
+  const getHeader = (name: string): string | null => {
+    try {
+      if (typeof headers?.get === 'function') {
+        return headers.get(name) || headers.get(name.toLowerCase()) || null;
+      }
+    } catch { }
+    const underscore = name.replace(/-/g, '_');
+    return headers?.[name] || headers?.[name.toLowerCase()] || headers?.[underscore] || headers?.[underscore.toLowerCase()] || null;
+  };
+
+  for (const provider of PROVIDER_KEYS) {
+    const keyName = `x-${provider}-api-key`;
+    const headerValue = getHeader(keyName);
+    if (headerValue) {
+      providerKeys[provider] = String(headerValue).split(',').map((k: string) => k.trim());
+      continue;
+    }
+    if (isPasswordAuth) {
+      const envKeyName = `${provider.toUpperCase()}_API_KEY`;
+      const envValue = (process as any).env?.[envKeyName];
+      if (envValue) {
+        providerKeys[provider] = String(envValue).split(',').map((k: string) => k.trim());
+      }
+    }
+  }
+
+  if (Object.keys(providerKeys).length === 0 && authHeader && !isPasswordAuth) {
+    const headerKey = authHeader.split(' ')[1];
+    if (headerKey) {
+      const keys = headerKey.split(',').map((k: string) => k.trim());
+      for (const provider of PROVIDER_KEYS) providerKeys[provider] = keys;
+    }
+  }
+  return providerKeys;
+}
+
+export function parseModelName(model: string) {
+  const parts = model.split('/');
+  if (parts.length >= 2) {
+    const [providerName, ...modelParts] = parts as [keyof typeof SUPPORTED_PROVIDERS, ...string[]];
+    const modelName = modelParts.join('/');
+    if (Object.prototype.hasOwnProperty.call(SUPPORTED_PROVIDERS, providerName)) {
+      return { provider: String(providerName), model: modelName, useCustomProvider: true };
+    }
+  }
+  return { provider: null, model: model, useCustomProvider: false };
+}
+
+export async function fetchCopilotToken(apiKey: string): Promise<string> {
+  const config = SUPPORTED_PROVIDERS.copilot;
+  const response = await fetch(config.tokenURL, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Token ${apiKey}`,
+      'Accept': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch Copilot token: ${response.status} ${response.statusText}`);
+  }
+
+  const data = await response.json() as any;
+  return data.token;
+}
+
+export function parseModelDisplayName(model: string) {
+  let baseName = model.split('/').pop() || model;
+  if (baseName.endsWith(':free')) baseName = baseName.slice(0, -5);
+  let displayName = baseName.replace(/-/g, ' ');
+  displayName = displayName.split(' ').map(word => {
+    const lowerWord = word.toLowerCase();
+    if (lowerWord === 'deepseek') return 'DeepSeek';
+    if (lowerWord === 'ernie') return 'ERNIE';
+    if (['mai', 'ds', 'r1'].includes(lowerWord)) return word.toUpperCase();
+    if (lowerWord === 'gpt') return 'GPT';
+    if (lowerWord === 'oss') return 'OSS';
+    if (lowerWord === 'glm') return 'GLM';
+    if (lowerWord.startsWith('o') && lowerWord.length > 1 && /^\d/.test(lowerWord.slice(1))) return word.toLowerCase();
+    if (/^a?\d+[bkmae]$/.test(lowerWord)) return word.toUpperCase();
+    return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+  }).join(' ');
+  if (displayName === 'MAI DS R1') displayName = 'MAI-DS-R1';
+  else if (displayName.startsWith('GPT ')) displayName = displayName.replace(/^GPT /, 'GPT-');
+  return displayName;
+}

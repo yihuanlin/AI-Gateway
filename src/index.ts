@@ -7,64 +7,17 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { openai, createOpenAI } from '@ai-sdk/openai'
 import { google, createGoogleGenerativeAI } from '@ai-sdk/google'
 import { groq, createGroq } from '@ai-sdk/groq';
-import { getStore } from '@netlify/blobs'
+import { SUPPORTED_PROVIDERS, getProviderKeys, parseModelName, fetchCopilotToken } from './shared/providers.mts'
+import { getStoreWithConfig } from './shared/store.mts'
 import { string, number, boolean, array, object, optional, int, enum as zenum } from 'zod/mini'
 
 const app = new Hono()
 
-const SUPPORTED_PROVIDERS = {
-	copilot: {
-		baseURL: 'https://api.githubcopilot.com',
-		tokenURL: 'https://api.github.com/copilot_internal/v2/token',
-	},
-	chatgpt: {
-		baseURL: 'https://api.openai.com/v1',
-	},
-	doubao: {
-		baseURL: 'https://ark.cn-beijing.volces.com/api/v3',
-	},
-	gemini: {
-		baseURL: 'https://generativelanguage.googleapis.com/v1beta',
-	},
-	poe: {
-		baseURL: 'https://api.poe.com/v1',
-	},
-	cerebras: {
-		baseURL: 'https://api.cerebras.ai/v1',
-	},
-	groq: {
-		baseURL: 'https://api.groq.com/openai/v1',
-	},
-	modelscope: {
-		baseURL: 'https://api-inference.modelscope.cn/v1',
-	},
-	infini: {
-		baseURL: 'https://cloud.infini-ai.com/maas/v1',
-	},
-	github: {
-		baseURL: 'https://models.github.ai/inference',
-	},
-	openrouter: {
-		baseURL: 'https://openrouter.ai/api/v1',
-	},
-	nvidia: {
-		baseURL: 'https://integrate.api.nvidia.com/v1',
-	},
-	mistral: {
-		baseURL: 'https://api.mistral.ai/v1',
-	},
-	cohere: {
-		baseURL: 'https://api.cohere.ai/compatibility/v1',
-	},
-	poixe: {
-		baseURL: 'https://api.poixe.com/v1',
-	}
-};
+// SUPPORTED_PROVIDERS centralized in shared/providers
 
 // Pre-compiled constants for /v1/chat/completions
 const TEXT_ENCODER = new TextEncoder();
 const EXCLUDED_TOOLS = new Set(['code_execution', 'python_executor', 'tavily_search', 'jina_reader', 'google_search', 'web_search_preview', 'url_context', 'browser_search']);
-const PROVIDER_KEYS = Object.keys(SUPPORTED_PROVIDERS);
 const RESEARCH_KEYWORDS = ['scientific', 'biolog', 'research', 'paper'];
 const MAX_ATTEMPTS = 3;
 
@@ -79,91 +32,6 @@ let geo: {
 } | null = null;
 
 // Helper functions
-function getStoreWithConfig(name: string, headers?: Record<string, string>) {
-	// Check for NETLIFY_SITE_ID and NETLIFY_TOKEN in environment variables
-	const siteID = process.env.NETLIFY_SITE_ID;
-	const token = process.env.NETLIFY_TOKEN;
-
-	// Check for corresponding headers if environment variables are not found
-	const headerSiteID = headers?.['x-netlify-site-id'];
-	const headerToken = headers?.['x-netlify-token'];
-
-	if ((siteID && token) || (headerSiteID && headerToken)) {
-		return getStore({
-			name,
-			siteID: siteID || headerSiteID!,
-			token: token || headerToken!
-		});
-	} else if (process.env.NETLIFY_BLOBS_CONTEXT) {
-		return getStore(name);
-	} else {
-		// Fallback to default getStore call
-		return getStore(name);
-	}
-}
-
-function parseModelName(model: string) {
-	const parts = model.split('/');
-	if (parts.length >= 2) {
-		const [providerName, ...modelParts] = parts;
-		const modelName = modelParts.join('/');
-		if (SUPPORTED_PROVIDERS[providerName as keyof typeof SUPPORTED_PROVIDERS]) {
-			return {
-				provider: providerName,
-				model: modelName,
-				useCustomProvider: true
-			};
-		}
-	}
-
-	return {
-		provider: null,
-		model: model,
-		useCustomProvider: false
-	};
-}
-
-function parseModelDisplayName(model: string) {
-	let baseName = model.split('/').pop() || model;
-
-	if (baseName.endsWith(':free')) {
-		baseName = baseName.slice(0, -5);
-	}
-
-	let displayName = baseName.replace(/-/g, ' ');
-	displayName = displayName.split(' ').map(word => {
-		const lowerWord = word.toLowerCase();
-		if (lowerWord === 'deepseek') {
-			return 'DeepSeek';
-		} else if (lowerWord === 'ernie') {
-			return 'ERNIE';
-		} else if (lowerWord === 'mai' || lowerWord === 'ds' || lowerWord === 'r1') {
-			return word.toUpperCase();
-		} else if (lowerWord === 'gpt') {
-			return 'GPT';
-		} else if (lowerWord === 'oss') {
-			return 'OSS';
-		} else if (lowerWord === 'glm') {
-			return 'GLM';
-		} else if (lowerWord.startsWith('o') && lowerWord.length > 1 && /^\d/.test(lowerWord.slice(1))) {
-			// Check if word starts with 'o' followed by a number (OpenAI o models)
-			return word.toLowerCase();
-		} else if (/^a?\d+[bkmae]$/.test(lowerWord)) {
-			return word.toUpperCase();
-		} else {
-			return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
-		}
-	}).join(' ');
-
-	// Handle special cases that need to keep hyphens
-	if (displayName === 'MAI DS R1') {
-		displayName = 'MAI-DS-R1';
-	} else if (displayName.startsWith('GPT ')) {
-		// Replace spaces after GPT with hyphens
-		displayName = displayName.replace(/^GPT /, 'GPT-');
-	}
-	return displayName;
-}
 
 function randomId(prefix: string) {
 	try {
@@ -178,43 +46,7 @@ function randomId(prefix: string) {
 	}
 }
 
-async function getProviderKeys(headers: any, authHeader: string | null, isPasswordAuth: boolean = false): Promise<Record<string, string[]>> {
-	const providerKeys: Record<string, string[]> = {};
-	const headerEntries: Record<string, string | null> = {};
-
-	// Batch read all provider headers at once for better performance
-	for (const provider of PROVIDER_KEYS) {
-		const keyName = `x-${provider}-api-key`;
-		headerEntries[provider] = headers[keyName] || null;
-	}
-
-	for (const provider of PROVIDER_KEYS) {
-		const headerValue = headerEntries[provider];
-		if (headerValue) {
-			providerKeys[provider] = headerValue.split(',').map((k: string) => k.trim());
-		} else if (isPasswordAuth) {
-			// If password auth is enabled and no header key found, try environment variable
-			const envKeyName = `${provider.toUpperCase()}_API_KEY`;
-			const envValue = process.env[envKeyName];
-			if (envValue) {
-				providerKeys[provider] = envValue.split(',').map((k: string) => k.trim());
-			}
-		}
-	}
-
-	// If no provider keys in headers, use auth header for all providers (unless password auth)
-	if (Object.keys(providerKeys).length === 0 && authHeader && !isPasswordAuth) {
-		const headerKey = authHeader.split(' ')[1];
-		if (headerKey) {
-			const keys = headerKey.split(',').map(k => k.trim());
-			for (const provider of PROVIDER_KEYS) {
-				providerKeys[provider] = keys;
-			}
-		}
-	}
-
-	return providerKeys;
-}
+// getProviderKeys centralized in shared/providers
 
 function startsWithThinking(text: string): boolean {
 	// Remove leading whitespace and empty newlines
@@ -302,6 +134,7 @@ function cleanPoeReasoningDelta(delta: string, isFirstDelta: boolean = false): s
 
 	return cleanedLines.join('\n');
 }
+
 function cleanPoeReasoning(reasoning: string): string {
 	// Remove everything before the first line that starts with >
 	const lines = reasoning.split('\n');
@@ -549,25 +382,6 @@ async function processMessages(contextMessages: any[]): Promise<any[]> {
 		})
 	);
 	return processedMessages;
-}
-
-// Helper function to fetch Copilot token
-async function fetchCopilotToken(apiKey: string): Promise<string> {
-	const config = SUPPORTED_PROVIDERS.copilot;
-	const response = await fetch(config.tokenURL, {
-		method: 'GET',
-		headers: {
-			'Authorization': `Token ${apiKey}`,
-			'Accept': 'application/json',
-		},
-	});
-
-	if (!response.ok) {
-		throw new Error(`Failed to fetch Copilot token: ${response.status} ${response.statusText}`);
-	}
-
-	const data = await response.json() as any;
-	return data.token;
 }
 
 async function createCustomProvider(providerName: string, apiKey: string) {
@@ -1534,6 +1348,24 @@ app.post('/v1/responses', async (c: Context) => {
 
 	const messages = await toAiSdkMessages();
 
+	// Storage preparation (needed for admin/responses routing id reference)
+	const now = Date.now();
+	const responseId = request_id || 'resp_' + now;
+
+	// Dynamic model routing to reduce cold starts
+	if (typeof model === 'string' && model.startsWith('image/')) {
+		const { handleImageForResponses } = await import('./modules/images.mts');
+		return await handleImageForResponses({ model, input, headers: c.req.raw.headers as any, stream: !!stream, temperature, top_p, request_id: responseId, store: false, authHeader: authHeader || null, isPasswordAuth });
+	}
+	if (typeof model === 'string' && model.startsWith('video/')) {
+		const { handleVideoForResponses } = await import('./modules/videos.mts');
+		return await handleVideoForResponses({ model, input, headers: c.req.raw.headers as any, stream: !!stream, request_id: responseId, store, authHeader: authHeader || null, isPasswordAuth });
+	}
+	if (model === 'admin/responses') {
+		const { handleAdminForResponses } = await import('./modules/management.mts');
+		return await handleAdminForResponses({ input, headers: c.req.raw.headers as any, model, request_id: responseId, instructions, store: false, stream: !!stream });
+	}
+
 	// Provider options (map differences)
 	const providerOptionsHeader = c.req.header('x-provider-options');
 	const providerOptions = buildDefaultProviderOptions({
@@ -1564,9 +1396,7 @@ app.post('/v1/responses', async (c: Context) => {
 		providerOptions,
 		reasoning_effort: reasoning?.effort || undefined,
 	};
-	// Storage preparation
-	const now = Date.now();
-	const responseId = request_id || 'resp_' + now;
+	// Storage preparation already computed above
 
 	if (stream) {
 		// Streaming SSE per OpenAI Responses API
@@ -2533,6 +2363,20 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	const providerOptionsHeader = c.req.header('x-provider-options');
 	const providerOptions = buildDefaultProviderOptions({ providerOptionsHeader: providerOptionsHeader ?? null, thinking, reasoning_effort, extra_body, text_verbosity, service_tier });
 
+	// Special routing for custom modules
+	if (typeof model === 'string' && model.startsWith('image/')) {
+		const { handleImageForChat } = await import('./modules/images.mts');
+		return await handleImageForChat({ model, messages: processedMessages, headers: c.req.raw.headers as any, stream: !!stream, temperature, top_p, authHeader: authHeader || null, isPasswordAuth });
+	}
+	if (typeof model === 'string' && model.startsWith('video/')) {
+		const { handleVideoForChat } = await import('./modules/videos.mts');
+		return await handleVideoForChat({ model, messages: processedMessages, headers: c.req.raw.headers as any, stream: !!stream, authHeader: authHeader || null, isPasswordAuth });
+	}
+	if (model === 'admin/responses') {
+		const { handleAdminForChat } = await import('./modules/management.mts');
+		return await handleAdminForChat({ messages: processedMessages, headers: c.req.raw.headers as any, model, stream: !!stream });
+	}
+
 	// If streaming, handle retries within a single ReadableStream so we can switch keys on error mid-stream
 	if (stream) {
 		const streamResponse = new ReadableStream({
@@ -2840,697 +2684,38 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	return c.json(errorPayload, statusCode);
 })
 
-// Shared models handler function
-async function handleModelsRequest(c: Context) {
-	// Helper function to fetch models from custom provider
-	async function fetchProviderModels(providerName: string, apiKey: string) {
-		const config = SUPPORTED_PROVIDERS[providerName as keyof typeof SUPPORTED_PROVIDERS];
-		if (!config) {
-			throw new Error(`Unsupported provider: ${providerName}`);
-		}
-		let modelsEndpoint;
-		if (providerName === 'github') {
-			modelsEndpoint = config.baseURL.replace('inference', 'catalog/models');
-		} else {
-			modelsEndpoint = `${config.baseURL}/models`;
-		}
-
-		let response;
-		if (providerName === 'gemini') {
-			modelsEndpoint = modelsEndpoint + '?key=' + apiKey;
-			response = await fetch(modelsEndpoint);
-		} else if (providerName === 'copilot') {
-			const copilotToken = await fetchCopilotToken(apiKey);
-			response = await fetch(modelsEndpoint, {
-				method: 'GET',
-				headers: {
-					'Authorization': `Bearer ${copilotToken}`,
-					'Content-Type': 'application/json',
-					"editor-version": "vscode/1.103.1",
-					"copilot-vision-request": "true",
-					"editor-plugin-version": "copilot-chat/0.30.1",
-					"user-agent": "GitHubCopilotChat/0.30.1"
-				},
-			});
-		} else {
-			response = await fetch(modelsEndpoint, {
-				method: 'GET',
-				headers: {
-					'Authorization': `Bearer ${apiKey}`,
-					'Content-Type': 'application/json',
-				},
-			});
-		}
-
-		if (!response.ok) {
-			throw new Error(`Provider ${providerName} models API failed: ${response.status} ${response.statusText}`);
-		}
-
-		const data = await response.json() as any;
-		if (providerName === 'gemini') {
-			return {
-				data: data.models.map((model: any) => ({
-					id: model.name,
-					name: model.displayName,
-					description: model.description || '',
-				}))
-			}
-		} else if (providerName === 'github') {
-			return {
-				data: data
-			}
-		}
-
-		return data;
-	}
-
-	// Helper function to get provider API keys from request headers
-	function getProviderKeysFromHeaders(headers: Record<string, string>, isPasswordAuth: boolean = false) {
-		const providerKeys: Record<string, string[]> = {};
-
-		for (const provider of Object.keys(SUPPORTED_PROVIDERS)) {
-			const keyName = `x-${provider}-api-key`;
-			const headerValue = headers[keyName];
-			if (headerValue) {
-				const keys = headerValue.split(',').map((k: string) => k.trim());
-				providerKeys[provider] = keys;
-			}
-		}
-
-		// If password auth is enabled, also check for environment variables for all providers
-		if (isPasswordAuth) {
-			for (const provider of Object.keys(SUPPORTED_PROVIDERS)) {
-				const envKeyName = `${provider.toUpperCase()}_API_KEY`;
-				const envValue = process.env[envKeyName];
-				if (envValue) {
-					const keys = envValue.split(',').map((k: string) => k.trim());
-					// If provider already has header keys, merge them; otherwise add env keys
-					if (providerKeys[provider]) {
-						providerKeys[provider].push(...keys);
-					} else {
-						providerKeys[provider] = keys;
-					}
-				}
-			}
-		}
-
-		return providerKeys;
-	}
-
-	// Helper function to filter out unwanted models
-	function shouldIncludeModel(model: any, providerName?: string) {
-		const modelId = model.id.toLowerCase();
-		// Common exclusions for all providers
-		const commonExclusions = [
-			'gemma', 'rerank', 'distill', 'parse', 'embed', 'bge-', 'tts', 'phi', 'live', 'audio', 'lite',
-			'qwen2', 'qwen-2', 'qwen1', 'qwq', 'qvq', 'gemini-1', 'learnlm', 'gemini-exp',
-			'turbo', 'claude-3', 'voxtral', 'pixtral', 'mixtral', 'ministral', '-24', 'moderation', 'saba', '-ocr-',
-			'transcribe', 'image', 'dall', 'davinci', 'babbage', 'flux', 'luma', 'diffusion', 'hailuo',
-			'kling', 'wan', 'ideogram', 'seedance', 'seedream', 'background'
-		];
-		if (commonExclusions.some(exclusion => modelId.includes(exclusion))) {
-			return false;
-		}
-		if (!modelId.includes('super') && ((['nemotron', 'llama'].some(exclusion => modelId.includes(exclusion))) || modelId.includes('nvidia'))) {
-			return false;
-		}
-
-		// Provider-specific exclusions
-		if (providerName === 'openrouter' && !modelId.includes(':free')) {
-			return false;
-		} else if (providerName !== 'mistral' && modelId.includes('mistral')) {
-			return false;
-		} else if (providerName === 'chatgpt' && (modelId.split('-').length - 1) > 2) {
-			return false;
-		}
-
-		if (!providerName && ['mistral', 'alibaba', 'cohere', 'deepseek', 'moonshotai', 'morph', 'zai'].some(exclusion => modelId.includes(exclusion))) {
-			return false;
-		}
-
-		return true;
-	}
-
-	async function getModelsResponse(apiKey: string, providerKeys: Record<string, string[]>, isPasswordAuth: boolean = false) {
-		let gatewayApiKeys: string[] = [];
-
-		if (isPasswordAuth) {
-			const gatewayKey = process.env.GATEWAY_API_KEY;
-			if (gatewayKey) {
-				gatewayApiKeys = gatewayKey.split(',').map((key: string) => key.trim());
-			}
-		} else {
-			gatewayApiKeys = apiKey.split(',').map((key: string) => key.trim());
-		}
-
-		const fetchPromises: Promise<any[]>[] = [];
-
-		if (gatewayApiKeys.length > 0) {
-			const randomIndex = Math.floor(Math.random() * gatewayApiKeys.length);
-			const currentApiKey = gatewayApiKeys[randomIndex];
-
-			const gatewayPromise = (async () => {
-				try {
-					if (!currentApiKey) {
-						throw new Error('No valid gateway API key found');
-					}
-
-					const gateway = createGateway({
-						apiKey: currentApiKey,
-						baseURL: 'https://ai-gateway.vercel.sh/v1/ai',
-					});
-
-					const availableModels = await gateway.getAvailableModels();
-					const now = Math.floor(Date.now() / 1000);
-
-					return availableModels.models.map(model => ({
-						id: model.id,
-						name: model.name,
-						description: `${model.pricing
-							? ` I: $${(Number(model.pricing.input) * 1000000).toFixed(2)}, O: $${(
-								Number(model.pricing.output) * 1000000
-							).toFixed(2)};`
-							: ''
-							} ${model.description || ''}`,
-						object: 'model',
-						created: now,
-						owned_by: model.name.split('/')[0],
-					})).filter(model => shouldIncludeModel(model));
-				} catch (error: any) {
-					console.error(`Error with gateway API key:`, error);
-					return [];
-				}
-			})();
-
-			fetchPromises.push(gatewayPromise);
-		}
-
-		// Add provider fetch promises
-		for (const [providerName, keys] of Object.entries(providerKeys)) {
-			if (keys.length === 0) continue;
-
-			// Randomly select one API key for this provider
-			const randomIndex = Math.floor(Math.random() * keys.length);
-			const providerApiKey = keys[randomIndex];
-
-			const providerPromise = (async () => {
-				try {
-					if (!providerApiKey) {
-						throw new Error(`No valid API key found for provider: ${providerName}`);
-					}
-
-					let formattedModels: any[] = [];
-
-					// Check if this provider has a custom model list (doesn't support /models endpoint)
-					if (CUSTOM_MODEL_LISTS[providerName as keyof typeof CUSTOM_MODEL_LISTS]) {
-						const customModels = CUSTOM_MODEL_LISTS[providerName as keyof typeof CUSTOM_MODEL_LISTS];
-						formattedModels = customModels.map(model => ({
-							id: `${providerName}/${model.id}`,
-							name: model.name,
-							object: 'model',
-							created: 0,
-							owned_by: providerName,
-						})).filter(model => shouldIncludeModel(model, providerName));
-					} else {
-						// Use regular API call for providers that support /models endpoint
-						const providerModels = await fetchProviderModels(providerName, providerApiKey);
-						formattedModels = (providerModels as any).data?.map((model: any) => ({
-							id: `${providerName}/${model.id.replace('models/', '')}`,
-							name: `${model.name?.replace(' (free)', '') || parseModelDisplayName(model.id)}`,
-							description: model.description || model.summary || '',
-							object: 'model',
-							created: model.created || 0,
-							owned_by: model.owned_by || providerName,
-						})).filter((model: any) => {
-							if (!shouldIncludeModel(model, providerName)) {
-								return false;
-							}
-							return true;
-						}) || [];
-					}
-
-					return formattedModels;
-				} catch (error: any) {
-					console.error(`Error with ${providerName} API key:`, error);
-					return [];
-				}
-			})();
-
-			fetchPromises.push(providerPromise);
-		}
-
-		// Fetch all providers in parallel
-		const results = await Promise.allSettled(fetchPromises);
-
-		// Collect all successful results
-		const allModels: any[] = [];
-		results.forEach((result) => {
-			if (result.status === 'fulfilled' && result.value.length > 0) {
-				allModels.push(...result.value);
-			}
-		});
-
-		// If we have models from any source, return them
-		if (allModels.length > 0) {
-			return {
-				object: 'list',
-				data: allModels,
-			};
-		}
-
-		throw new Error('All provider(s) failed to return models');
-	}
-
-	// Custom model lists for providers that don't support /models endpoint
-	const CUSTOM_MODEL_LISTS = {
-		poixe: [
-			{ id: 'gpt-5:free', name: 'GPT-5 4K/2K' },
-			{ id: 'gpt-5-mini:free', name: 'GPT-5 Mini 4K' },
-			{ id: 'grok-3-mini:free', name: 'Grok 3 Mini 4K' },
-			{ id: 'grok-4:free', name: 'Grok 4 4K/2K' },
-			{ id: 'claude-sonnet-4-20250514:free', name: 'Claude Sonnet 4 4K/2K' },
-			{ id: 'doubao-seed-1-6-thinking-250615:free', name: 'Doubao Seed 1.6 Thinking 4K/2K' },
-		],
-		doubao: [
-			{ id: 'doubao-seed-1-6-flash-250715', name: 'Doubao Seed 1.6 Flash' },
-			{ id: 'doubao-seed-1-6-thinking-250715', name: 'Doubao Seed 1.6 Thinking' },
-			{ id: 'deepseek-r1-250528', name: 'DeepSeek R1' },
-			{ id: 'deepseek-v3-250324', name: 'DeepSeek V3' },
-			{ id: 'kimi-k2-250711', name: 'Kimi K2' },
-		],
-		cohere: [
-			{ id: 'command-a-03-2025', name: 'Command A' },
-			{ id: 'command-a-vision-07-2025', name: 'Cohere A Vision' },
-		],
-	};
-	const authHeader = c.req.header('Authorization');
-	let apiKey = authHeader?.split(' ')[1];
-
-	// Check for password authentication
-	const envPassword = process.env.PASSWORD;
-	const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
-
-	if (!apiKey) {
-		return c.text('Unauthorized', 401);
-	}
-
-	// Get provider API keys from headers
-	const headers: Record<string, string> = {}
-	c.req.raw.headers.forEach((value, key) => {
-		headers[key.toLowerCase().replace(/-/g, '_')] = value
-	})
-	const providerKeys = getProviderKeysFromHeaders(headers, isPasswordAuth);
-
-	try {
-		const modelsResponse = await getModelsResponse(apiKey, providerKeys, isPasswordAuth);
-		return c.json(modelsResponse);
-	} catch (error: any) {
-		return c.json({
-			error: error.message || 'All provider(s) failed to return models'
-		}, 500);
-	}
-}
-
-app.get('/v1/models', handleModelsRequest);
-app.post('/v1/models', handleModelsRequest);
+// /v1/models routed to dynamic module to reduce cold start
+app.get('/v1/models', async (c: Context) => {
+	const { handleModelsRequest } = await import('./modules/models.mts');
+	return handleModelsRequest(c);
+});
+app.post('/v1/models', async (c: Context) => {
+	const { handleModelsRequest } = await import('./modules/models.mts');
+	return handleModelsRequest(c);
+});
 
 // Get a model response
 app.get('/v1/responses/:response_id', async (c: Context) => {
-	const authHeader = c.req.header('Authorization');
-	const apiKey = authHeader?.split(' ')[1];
-	const envPassword = process.env.PASSWORD;
-	const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
-
-	if (!isPasswordAuth) {
-		return c.text('Unauthorized', 401);
-	}
-
-	const responseId = c.req.param('response_id');
-	const stream = c.req.query('stream') === 'true';
-
-	try {
-		// Get headers for store configuration
-		const headers: Record<string, string> = {};
-		c.req.raw.headers.forEach((value, key) => {
-			headers[key.toLowerCase().replace(/-/g, '_')] = value;
-		});
-
-		const store = getStoreWithConfig('responses', headers);
-		const storedResponse: any = await store.get(responseId, { type: 'json' as any });
-
-		if (!storedResponse) {
-			return c.json({
-				error: {
-					message: `Response with ID '${responseId}' not found.`,
-					type: 'invalid_request_error',
-					code: 'response_not_found'
-				}
-			}, 404);
-		}
-
-		// Build response object based on stored data
-		// Convert all messages from the conversation to output format
-		const output = [];
-
-		if (storedResponse.messages && Array.isArray(storedResponse.messages)) {
-			for (const message of storedResponse.messages) {
-				const outputMessage: any = {
-					type: 'message',
-					id: randomId('msg'),
-					status: 'completed',
-					role: message.role,
-					content: []
-				};
-
-				// Handle different content types
-				if (typeof message.content === 'string') {
-					// Check if this is a tool use result format
-					if (message.content.includes('<tool_use_result>')) {
-						// Parse tool use results and convert to function_call_output format
-						const toolResultMatch = message.content.match(/<tool_use_result>\s*<result>(.*?)<\/result>\s*<\/tool_use_result>/s);
-						if (toolResultMatch) {
-							let resultContent = toolResultMatch[1];
-							try {
-								// Try to parse JSON result
-								const parsed = JSON.parse(resultContent);
-								resultContent = JSON.stringify(parsed, null, 2);
-							} catch {
-								// Keep as string if not valid JSON
-							}
-
-							outputMessage.type = 'function_call_output';
-							outputMessage.call_id = randomId('call');
-							outputMessage.output = resultContent;
-							delete outputMessage.content; // function_call_output doesn't use content array
-						} else {
-							// Regular assistant message
-							outputMessage.content.push({
-								type: 'output_text',
-								text: message.content,
-								annotations: []
-							});
-						}
-					} else {
-						// Regular text message
-						outputMessage.content.push({
-							type: message.role === 'assistant' ? 'output_text' : 'input_text',
-							text: message.content,
-							annotations: []
-						});
-					}
-				} else if (Array.isArray(message.content)) {
-					// Handle structured content (images, files, etc.)
-					outputMessage.content = message.content.map((part: any) => {
-						if (part.type === 'text') {
-							return {
-								type: message.role === 'assistant' ? 'output_text' : 'input_text',
-								text: part.text,
-								annotations: []
-							};
-						} else if (part.type === 'image') {
-							return {
-								type: 'input_image',
-								image_url: { url: part.image },
-								...(part.mediaType && { media_type: part.mediaType })
-							};
-						} else if (part.type === 'file') {
-							return {
-								type: 'input_file',
-								data: part.data,
-								media_type: part.mediaType
-							};
-						}
-						return part;
-					});
-				}
-
-				output.push(outputMessage);
-			}
-		}
-
-		const response = {
-			id: responseId,
-			object: 'response',
-			created_at: Math.floor(Date.now() / 1000),
-			status: 'completed',
-			output,
-			store: true,
-		};
-
-		if (stream) {
-			// For streaming, return as server-sent events
-			const streamResponse = new ReadableStream({
-				start(controller) {
-					let sequenceNumber = 0;
-					const emit = (obj: any) => controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(obj)}\n\n`));
-
-					// Emit response events
-					emit({
-						type: 'response.created',
-						sequence_number: sequenceNumber++,
-						response: { ...response, status: 'completed' }
-					});
-
-					emit({
-						type: 'response.completed',
-						sequence_number: sequenceNumber++,
-						response
-					});
-
-					controller.enqueue(TEXT_ENCODER.encode('data: [DONE]\n\n'));
-					controller.close();
-				}
-			});
-
-			return new Response(streamResponse, {
-				headers: {
-					'Content-Type': 'text/event-stream; charset=utf-8',
-					'Cache-Control': 'no-cache',
-					'Connection': 'keep-alive'
-				}
-			});
-		}
-
-		return c.json(response);
-
-	} catch (error: any) {
-		console.error('Error retrieving response:', error);
-		return c.json({
-			error: {
-				message: 'Failed to retrieve response',
-				type: 'server_error'
-			}
-		}, 500);
-	}
+	const { getResponseHttp } = await import('./modules/management.mts');
+	return getResponseHttp(c);
 });
 
 // List responses
 app.get('/v1/responses', async (c: Context) => {
-	const authHeader = c.req.header('Authorization');
-	const apiKey = authHeader?.split(' ')[1];
-	const envPassword = process.env.PASSWORD;
-	const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
-
-	if (!isPasswordAuth) {
-		return c.text('Unauthorized', 401);
-	}
-
-	const directories = c.req.query('directories') === 'true';
-	const prefix = c.req.query('prefix') || '';
-	const limit = parseInt(c.req.query('limit') || '20');
-
-	try {
-		// Get headers for store configuration
-		const headers: Record<string, string> = {};
-		c.req.raw.headers.forEach((value, key) => {
-			headers[key.toLowerCase().replace(/-/g, '_')] = value;
-		});
-
-		const store = getStoreWithConfig('responses', headers);
-
-		// List blobs with optional parameters
-		const listOptions: any = {
-			directories,
-			...(prefix && { prefix })
-		};
-
-		try {
-			const listResult = await store.list(listOptions);
-
-			// Handle the AsyncIterable result
-			let blobs: any[] = [];
-			let dirs: string[] = [];
-
-			if (listResult && 'blobs' in listResult && Array.isArray((listResult as any).blobs)) {
-				blobs = (listResult as any).blobs;
-				dirs = (listResult as any).directories || [];
-			} else {
-				// Handle AsyncIterable case - iterate through results
-				for await (const item of listResult as any) {
-					if (item.blobs) {
-						blobs.push(...item.blobs);
-					}
-					if (item.directories) {
-						dirs.push(...item.directories);
-					}
-				}
-			}
-
-			// Format the response to match expected structure
-			const responseList = {
-				object: 'list',
-				data: blobs.slice(0, limit).map((blob: any) => ({
-					id: blob.key,
-					object: 'response',
-					etag: blob.etag,
-					key: blob.key,
-					created_at: Math.floor(Date.now() / 1000) // Could be extracted from etag if needed
-				})),
-				has_more: blobs.length > limit,
-				...(dirs && dirs.length > 0 && { directories: dirs })
-			};
-
-			return c.json(responseList);
-		} catch (listError: any) {
-			// Fallback: try to get individual keys if list fails
-			console.warn('List operation failed, attempting fallback:', listError);
-			return c.json({
-				object: 'list',
-				data: [],
-				has_more: false,
-				error: 'List operation not fully supported'
-			});
-		}
-
-	} catch (error: any) {
-		console.error('Error listing responses:', error);
-		return c.json({
-			error: {
-				message: 'Failed to list responses',
-				type: 'server_error'
-			}
-		}, 500);
-	}
+	const { listResponsesHttp } = await import('./modules/management.mts');
+	return listResponsesHttp(c);
 });
 
 // Delete all responses
 app.delete('/v1/responses/all', async (c: Context) => {
-	const authHeader = c.req.header('Authorization');
-	const apiKey = authHeader?.split(' ')[1];
-	const envPassword = process.env.PASSWORD;
-	const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
-
-	if (!isPasswordAuth) {
-		return c.text('Unauthorized', 401);
-	}
-
-	try {
-		// Get headers for store configuration
-		const headers: Record<string, string> = {};
-		c.req.raw.headers.forEach((value, key) => {
-			headers[key.toLowerCase().replace(/-/g, '_')] = value;
-		});
-
-		const store = getStoreWithConfig('responses', headers);
-
-		// List all responses and delete them
-		try {
-			const listResult = await store.list();
-			let blobs: any[] = [];
-
-			// Handle the AsyncIterable result
-			if (listResult && 'blobs' in listResult && Array.isArray((listResult as any).blobs)) {
-				blobs = (listResult as any).blobs;
-			} else {
-				// Handle AsyncIterable case - iterate through results
-				for await (const item of listResult as any) {
-					if (item.blobs) {
-						blobs.push(...item.blobs);
-					}
-				}
-			}
-
-			const deletePromises = blobs.map((blob: any) => store.delete(blob.key));
-			await Promise.all(deletePromises);
-
-			return c.json({
-				message: `Successfully deleted ${blobs.length} responses`,
-				deleted_count: blobs.length
-			});
-		} catch (listError: any) {
-			// If list fails, we can't delete all, but we can return an appropriate error
-			console.error('Failed to list responses for deletion:', listError);
-			return c.json({
-				error: {
-					message: 'Failed to list responses for deletion',
-					type: 'server_error'
-				}
-			}, 500);
-		}
-
-	} catch (error: any) {
-		console.error('Error deleting all responses:', error);
-		return c.json({
-			error: {
-				message: 'Failed to delete all responses',
-				type: 'server_error'
-			}
-		}, 500);
-	}
+	const { deleteAllResponsesHttp } = await import('./modules/management.mts');
+	return deleteAllResponsesHttp(c);
 });
 
 // Delete a model response
 app.delete('/v1/responses/:response_id', async (c: Context) => {
-	const authHeader = c.req.header('Authorization');
-	const apiKey = authHeader?.split(' ')[1];
-	const envPassword = process.env.PASSWORD;
-	const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
-
-	if (!isPasswordAuth) {
-		return c.text('Unauthorized', 401);
-	}
-
-	const responseId = c.req.param('response_id');
-
-	try {
-		// Get headers for store configuration
-		const headers: Record<string, string> = {};
-		c.req.raw.headers.forEach((value, key) => {
-			headers[key.toLowerCase().replace(/-/g, '_')] = value;
-		});
-
-		const store = getStoreWithConfig('responses', headers);
-
-		// Check if response exists before deleting
-		const existingResponse: any = await store.get(responseId, { type: 'json' as any });
-		if (!existingResponse) {
-			return c.json({
-				error: {
-					message: `Response with ID '${responseId}' not found.`,
-					type: 'invalid_request_error',
-					code: 'response_not_found'
-				}
-			}, 404);
-		}
-
-		// Delete the response
-		await store.delete(responseId);
-
-		return c.json({
-			id: responseId,
-			object: 'response',
-			deleted: true
-		});
-
-	} catch (error: any) {
-		console.error('Error deleting response:', error);
-		return c.json({
-			error: {
-				message: 'Failed to delete response',
-				type: 'server_error'
-			}
-		}, 500);
-	}
+	const { deleteResponseHttp } = await import('./modules/management.mts');
+	return deleteResponseHttp(c);
 });
 
 app.get('/*', (c: Context) => {

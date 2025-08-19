@@ -1,0 +1,166 @@
+import { type WaitResult, lastUserPromptFromMessages, lastUserPromptFromResponsesInput, responsesBase, streamChatSingleText, streamResponsesSingleText, streamResponsesGenerationElapsed, streamChatGenerationElapsed, findLinks, hasImageInMessages, sleep } from './utils.mts';
+import { SUPPORTED_PROVIDERS, getProviderKeys } from '../shared/providers.mts';
+
+export function toMarkdownVideo(url: string): string {
+    return `[Generated Video](${url}) "Download Link"`;
+}
+
+function ensureRatioInPrompt(prompt: string): string {
+    if (/\s--(rt|ratio)\s/.test(prompt)) return prompt;
+    return `${prompt} --ratio 16:9`;
+}
+
+function helpForVideo(model: string) {
+    return 'Flags: --rs/--resolution 480p|720p|1080p, --dur/--duration 3-12, --seed -1|[0,2^32-1], --cf/--camerafixed true|false, --rt/--ratio 16:9 (default of t2v), 4:3, 1:1, 3:4, 9:16, 21:9, adaptive (default of i2v).';
+}
+
+async function buildVideoGenerationWaiter(params: {
+    model: string;
+    prompt: string;
+    headers: Headers;
+    authHeader: string | null;
+    isPasswordAuth: boolean;
+    contentParts: any[];
+}): Promise<{ ok: true; wait: (signal: AbortSignal) => Promise<WaitResult> } | { ok: false; error: any; status?: number }> {
+    const { model, prompt: rawPrompt, headers, authHeader, isPasswordAuth, contentParts } = params;
+    const links = findLinks(rawPrompt || '');
+    const imgs = hasImageInMessages(contentParts || []);
+    let prompt = rawPrompt || '';
+
+    // only Doubao Seedance supported in current repo
+    let apiKey: string | null = null;
+    try {
+        const pk = await getProviderKeys(headers as any, authHeader, isPasswordAuth);
+        const keys = pk['doubao'] || [];
+        if (keys.length > 0) { const idx = Math.floor(Math.random() * keys.length); apiKey = keys[idx] || null; }
+    } catch { }
+    if (!apiKey) return { ok: false, error: { code: 'no_api_key', message: 'Missing Doubao API key' }, status: 401 };
+    const base = SUPPORTED_PROVIDERS.doubao.baseURL;
+
+    const content: any[] = [{ type: 'text', text: prompt }];
+    let modelId = '';
+    if (model.includes('doubao-seedance-pro')) {
+        modelId = 'doubao-seedance-1-0-pro-250528';
+    } else {
+        if (links.length > 0 || imgs.has) modelId = 'doubao-seedance-1-0-lite-i2v-250428'; else modelId = 'doubao-seedance-1-0-lite-t2v-250428';
+    }
+
+    if (imgs.has || links.length > 0) {
+        const first = imgs.first || links[0] || '';
+        if (modelId.endsWith('i2v-250428')) {
+            content.push({ type: 'image_url', image_url: { url: first }, role: 'first_frame' });
+            if (imgs.second || links.length > 1) {
+                const lastUrl = imgs.second || links[links.length - 1] || '';
+                content.push({ type: 'image_url', image_url: { url: lastUrl }, role: 'last_frame' });
+            }
+            prompt = prompt.replace(first, '').trim();
+            content[0].text = prompt;
+        } else {
+            content.push({ type: 'image_url', image_url: { url: first } });
+            prompt = prompt.replace(first, '').trim();
+            content[0].text = prompt;
+        }
+    } else {
+        if (modelId.endsWith('t2v-250428')) {
+            prompt = ensureRatioInPrompt(prompt);
+            content[0].text = prompt;
+        }
+    }
+
+    const wait = async (_signal: AbortSignal) => {
+        try {
+            const createRes = await fetch(`${base}/contents/generations/tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, body: JSON.stringify({ model: modelId, content }) });
+            const createJson: any = await createRes.json().catch(() => ({} as any));
+            if (!createRes.ok) return { ok: false, error: createJson?.error || { code: createRes.status, message: createJson?.message || createRes.statusText } } as const;
+            const id = (createJson && (createJson.id || createJson.task_id)) as string;
+            const started = Date.now();
+            while (true) {
+                await sleep(1000);
+                const r = await fetch(`${base}/contents/generations/tasks/${id}`, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` } });
+                const j: any = await r.json().catch(() => ({} as any));
+                const status = (j && j.status) || 'queued';
+                if (status === 'succeeded') {
+                    const url = j?.content?.video_url;
+                    const usage = j?.usage ? {
+                        input_tokens: 0,
+                        output_tokens: j.usage.completion_tokens || 0,
+                        total_tokens: j.usage.total_tokens || 0
+                    } : { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
+                    return { ok: true, text: toMarkdownVideo(url), usage } as const;
+                } else if (status === 'failed') {
+                    const err = j?.error || { code: 'failed', message: 'Video Generation Failed.' };
+                    return { ok: false, error: err } as const;
+                } else if (status === 'cancelled') {
+                    return { ok: true, text: 'Cancelled', usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } } as const;
+                }
+                if (Date.now() - started > 10 * 60_000) return { ok: false, error: { code: 'timeout', message: 'Video generation timeout' } } as const;
+            }
+        } catch (e: any) {
+            return { ok: false, error: { code: 'network_error', message: e?.message || 'fetch failed' } } as const;
+        }
+    };
+    return { ok: true, wait };
+}
+
+export async function handleVideoForChat(args: { model: string; messages: any[]; headers: Headers; stream?: boolean; authHeader: string | null; isPasswordAuth: boolean; }): Promise<Response> {
+    const { model, messages, headers, stream = false, authHeader, isPasswordAuth } = args;
+    const now = Date.now();
+    const last = lastUserPromptFromMessages(messages);
+    let prompt = last.text || '';
+
+    if (prompt.trim() === '/help') {
+        const help = helpForVideo(model);
+        if (stream) return streamChatSingleText(model, help);
+        const created = Math.floor(now / 1000);
+        const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created, model, choices: [{ index: 0, message: { role: 'assistant', content: help }, finish_reason: 'stop' }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } } as any;
+        return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
+    }
+
+    const waiter = await buildVideoGenerationWaiter({ model, prompt, headers, authHeader, isPasswordAuth, contentParts: last.content || [] });
+    if (!waiter.ok) {
+        return new Response(JSON.stringify({ error: waiter.error }), { status: waiter.status || 400, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (stream) return streamChatGenerationElapsed(model, waiter.wait);
+    // Non-stream: since video is async by provider, return a minimal ack
+    const res = await waiter.wait(new AbortController().signal);
+    if (!res.ok) return new Response(JSON.stringify({ error: res.error }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    const created = Math.floor(now / 1000);
+    const chatUsage = res.usage ? {
+        prompt_tokens: res.usage.input_tokens,
+        completion_tokens: res.usage.output_tokens,
+        total_tokens: res.usage.total_tokens
+    } : { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+    const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created, model, choices: [{ index: 0, message: { role: 'assistant', content: res.text }, finish_reason: 'stop' }], usage: chatUsage } as any;
+    return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
+}
+
+export async function handleVideoForResponses(args: { model: string; input: any; headers: Headers; stream?: boolean; request_id: string; store: boolean; authHeader: string | null; isPasswordAuth: boolean; }): Promise<Response> {
+    const { model, input, headers, stream = false, request_id, store, authHeader, isPasswordAuth } = args;
+    const now = Date.now();
+    const last = lastUserPromptFromResponsesInput(input);
+    let prompt = last.text || '';
+
+    if (prompt.trim() === '/help') {
+        const help = helpForVideo(model);
+        const base = responsesBase(now, request_id, model, input, null, store, undefined, undefined, undefined, undefined);
+        if (stream) return streamResponsesSingleText(base, help, `msg_${now}`, true);
+        const response = { ...base, status: 'completed', output: [{ type: 'message', id: `msg_${now}`, status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: help }] }], usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } };
+        return new Response(JSON.stringify(response), { headers: { 'Content-Type': 'application/json' } });
+    }
+
+    const waiter = await buildVideoGenerationWaiter({ model, prompt, headers, authHeader, isPasswordAuth, contentParts: last.content || [] });
+    if (!waiter.ok) {
+        return new Response(JSON.stringify({ error: waiter.error }), { status: waiter.status || 400, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (stream) {
+        const baseObj = responsesBase(now, request_id, model, input, null, store, undefined, undefined, undefined, undefined);
+        return streamResponsesGenerationElapsed({ baseObj, requestId: request_id, waitForResult: waiter.wait });
+    }
+    // Non-stream: wait for completion
+    const res = await waiter.wait(new AbortController().signal);
+    if (!res.ok) return new Response(JSON.stringify({ error: res.error }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    const baseObj = responsesBase(now, request_id, model, input, null, store, undefined, undefined, undefined, undefined);
+    // For Responses endpoint, usage format is already correct: { input_tokens, output_tokens, total_tokens }
+    const response = { ...baseObj, status: 'completed', output: [{ type: 'message', id: 'msg_' + Date.now(), status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: res.text }] }], usage: res.usage ?? { input_tokens: 0, output_tokens: 0, total_tokens: 0 } };
+    return new Response(JSON.stringify(response), { headers: { 'Content-Type': 'application/json' } });
+}

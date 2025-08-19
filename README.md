@@ -1,6 +1,15 @@
 # AI Gateway
 
-A high-performance AI Gateway built with [Hono](https://hono.dev/) for edge computing environments. This gateway provides unified access to multiple AI providers with intelligent fallback, streaming support, and advanced tools integration.
+A high-performance AI Gateway built with [Hono](https://hono.dev/) for edge computing environments. This gateway provides unified access to multiple AI providers with intelligent fallback, streaming support, advanced tools integration, and multimedia generation capabilities.
+
+## ✨ Features
+
+- **Unified Text API**: Images and videos models accessible through standard chat/responses endpoints  
+- **Admin Models**: Special administrative models for system management (admin/responses)
+- **Multi-Provider Support**: OpenAI, Google, Groq, Cerebras, Doubao, ModelScope, and more
+- **Streaming Support**: Real-time responses with progress indicators
+- **Tool Integration**: Python execution, web search, content extraction
+- **Response Storage**: Persistent conversation management with Netlify Blobs
 
 ## 🛠 Quick Start
 
@@ -45,6 +54,8 @@ POST /v1/models
 ## 💡 API Usage Examples
 
 ### Chat Completions
+
+#### Text Generation
 ```bash
 # Basic chat completion with password authentication
 curl -X POST "$HOSTNAME/v1/chat/completions" \
@@ -61,6 +72,48 @@ curl -X POST "$HOSTNAME/v1/chat/completions" \
   }'
 ```
 
+#### Image Generation
+```bash
+# Image editing using Doubao (ByteDance) models
+curl -X POST "$HOSTNAME/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $PASSWORD" \
+  -d '{
+    "model": "image/doubao-vision",
+    "messages": [
+      {"role": "user", "content": "A beautiful sunset over mountains --size 1280x720 --guidance 7.5"}
+    ],
+    "stream": true
+  }'
+
+# Generate images using ModelScope models
+curl -X POST "$HOSTNAME/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $PASSWORD" \
+  -d '{
+    "model": "image/Qwen/Qwen-Image", # image/ + ModelScope model ID
+    "messages": [
+      {"role": "user", "content": "Cyberpunk cityscape at night --steps 30 --guidance 3.5"}
+    ]
+  }'
+```
+
+#### Video Generation
+```bash
+# Generate videos using Doubao Seedance models
+curl -X POST "$HOSTNAME/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $PASSWORD" \
+  -d '{
+    "model": "video/doubao-seedance",
+    "messages": [
+      {"role": "user", "content": "A cat playing in a garden --ratio 16:9 --duration 5"}
+    ],
+    "stream": true
+  }'
+```
+
+#### Advanced Search
 ```bash
 # Chat with search (enabled by adding tools, even an empty array) and custom provider key
 curl -X POST "$HOSTNAME/v1/chat/completions" \
@@ -77,6 +130,8 @@ curl -X POST "$HOSTNAME/v1/chat/completions" \
 ```
 
 ### Responses API
+
+#### Text Responses
 ```bash
 curl -X POST "$HOSTNAME/v1/responses" \
   -H "Content-Type: application/json" \
@@ -90,6 +145,37 @@ curl -X POST "$HOSTNAME/v1/responses" \
   }'
 ```
 
+#### Image Generation with Responses
+```bash
+# Generate image with reasoning steps shown
+curl -X POST "$HOSTNAME/v1/responses" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $PASSWORD" \
+  -d '{
+    "model": "image/doubao-vision",
+    "input": [
+      {"role": "user", "content": [
+        {"type": "input_text", "text": "Create a logo for a tech startup"},
+        {"type": "input_image", "image_url": "data:image/jpeg;base64,..."}
+      ]}
+    ],
+    "stream": true
+  }'
+```
+
+#### Administrative Tasks
+```bash
+# Use admin model for system management
+curl -X POST "$HOSTNAME/v1/responses" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $PASSWORD" \
+  -d '{
+    "model": "admin/responses",
+    "input": "deleteall" # Delete all stored responses
+  }'
+```
+
+#### Conversation Continuation
 ```bash
 # Create response with conversation continuation
 curl -X POST "$HOSTNAME/v1/responses" \
@@ -98,13 +184,13 @@ curl -X POST "$HOSTNAME/v1/responses" \
   -d '{
     "model": "gemini/gemini-2.5-flash",
     "input": "Tell me more about that topic",
-    "previous_response_id": "resp_abc123456789",
+    "previous_response_id": "resp_abc123456789"
   }'
 ```
 
 ### Get Models List
 ```bash
-# Get models with specific provider keys
+# Get all available models including text, image, video, and admin models
 curl -X GET "$HOSTNAME/v1/models" \
   -H "Authorization: Bearer your-vercel-ai-gateway-key" \
   -H "x-chatgpt-api-key: sk-proj-..." \
@@ -118,6 +204,24 @@ curl -X POST "$HOSTNAME/v1/models" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $PASSWORD"
 ```
+
+## 🎨 Model Categories
+
+### Text Models
+- **LLM Providers**: OpenAI, Gemini, Groq, Cerebras, etc.
+- **Specialised**: Claude, Mistral, Cohere, GitHub Copilot
+
+### Image Models  
+- **Doubao (ByteDance)**: `image/doubao` - High-quality image generation
+- **ModelScope**: `image/black-forest-labs/FLUX.1-dev`, `image/Qwen/Qwen-Image`, `image/doubao-vision` etc.
+- **Flags**: `--size WxH`, `--ratio A:B`, `--guidance N`, `--steps N`, `--seed N`
+
+### Video Models
+- **Doubao Seedance**: `video/doubao-seedance`, `video/doubao-seedance-pro`  
+- **Flags**: `--ratio 16:9`, `--duration 3-12`, `--resolution 720p`
+
+### Admin Models
+- **System Management**: `admin/responses`
 
 ## 📝 Response Management Examples
 
@@ -144,12 +248,6 @@ curl -X GET "$HOSTNAME/v1/responses" \
 ```bash
 # List with filters
 curl -X GET "$HOSTNAME/v1/responses?prefix=resp_&limit=10" \
-  -H "Authorization: Bearer $PASSWORD"
-```
-
-```bash
-# List with directory structure
-curl -X GET "$HOSTNAME/v1/responses?directories=true" \
   -H "Authorization: Bearer $PASSWORD"
 ```
 
@@ -205,9 +303,19 @@ POE_API_KEY=your-poe-api-key
 
 ## 🔌 Supported Providers
 
+### Text Generation
 - **Gateway**: Vercel AI Gateway
 - **Direct Providers**: Google, OpenAI, Groq, Cerebras, etc.
-- **Tools**: Python execution, web search, content extraction
+
+### Multimedia Generation  
+- **Doubao (ByteDance)**: Image and video generation
+- **ModelScope**: FLUX, Qwen-Image, and community models
+
+### Tools & Extensions
+- **Python Execution**: Code interpreter
+- **Web Search**: Tavily API integration  
+- **Content Extraction**: Web page reading
+- **Research APIs**: Ensembl, Scholar APIs
 
 ## 📊 Architecture
 
@@ -218,11 +326,19 @@ POE_API_KEY=your-poe-api-key
                                 │
                                 ▼
                        ┌──────────────────┐
-                       │   Tools Layer    │
-                       │ • Python Exec    │
-                       │ • Web Search     │
-                       │ • Content Read   │
-                       │ • Ensembl API    │
-                       │ • Scholar API    │
+                       │  Modular System  │
+                       │ • Text Models    │
+                       │ • Image Models   │
+                       │ • Video Models   │ 
+                       │ • Admin Models   │
+                       │ • Tools Layer    │
+                       └──────────────────┘
+                                │
+                                ▼
+                       ┌──────────────────┐
+                       │   Data Storage   │
+                       │ • Netlify Blobs  │
+                       │ • Response Mgmt  │
+                       │ • Conversation   │
                        └──────────────────┘
 ```
