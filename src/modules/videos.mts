@@ -2,7 +2,7 @@ import { type WaitResult, lastUserPromptFromMessages, lastUserPromptFromResponse
 import { SUPPORTED_PROVIDERS, getProviderKeys } from '../shared/providers.mts';
 
 export function toMarkdownVideo(url: string): string {
-    return `[Generated Video](${url}) "Download Link"`;
+    return `[Generated Video](${url})`;
 }
 
 function ensureRatioInPrompt(prompt: string): string {

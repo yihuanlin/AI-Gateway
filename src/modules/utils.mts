@@ -187,7 +187,7 @@ export function streamResponsesGenerationElapsed(params: {
       emit({ type: 'response.output_item.added', sequence_number: sequenceNumber++, output_index: startIndex, item: { id: reasoningId, type: 'reasoning', summary: [] } });
       emit({ type: 'response.reasoning_summary_part.added', sequence_number: sequenceNumber++, item_id: reasoningId, output_index: startIndex, summary_index: 0, part: { type: 'summary_text', text: '' } });
       if (taskId) {
-        emit({ type: 'response.reasoning_summary_text.delta', sequence_number: sequenceNumber++, item_id: reasoningId, output_index: startIndex, summary_index: 0, delta: `Task ID: ${taskId}\n` });
+        emit({ type: 'response.reasoning_summary_text.delta', sequence_number: sequenceNumber++, item_id: reasoningId, output_index: startIndex, summary_index: 0, delta: `${taskId}\n` });
       }
 
       let done = false;
@@ -232,7 +232,7 @@ export function streamResponsesGenerationElapsed(params: {
         }
 
         const finalReasoningText = taskId ?
-          `Task ID: ${taskId}\n${Math.floor((Date.now() - started) / 1000)}s elapsed\n` :
+          `${taskId}\n${Math.floor((Date.now() - started) / 1000)}s elapsed\n` :
           `${Math.floor((Date.now() - started) / 1000)}s elapsed\n`;
         const events = generationFinalizeEvents({ baseObj, reasoningId, textItemId, finalText: result.text, finalReasoningText, usage: result.usage ?? { input_tokens: 0, output_tokens: 0, total_tokens: 0 }, reasoningIndex: startIndex, messageIndex: startIndex + 1 });
         for (const ev of events) emit({ ...ev, sequence_number: sequenceNumber++ });
@@ -262,7 +262,7 @@ export function streamChatGenerationElapsed(model: string, waitForResult: (signa
 
       // Emit task ID first if provided
       if (taskId) {
-        controller.enqueue(enc.encode(`data: ${JSON.stringify({ ...baseChunk, choices: [{ index: 0, delta: { reasoning_content: `Task ID: ${taskId}\n` }, finish_reason: null }] })}\n\n`));
+        controller.enqueue(enc.encode(`data: ${JSON.stringify({ ...baseChunk, choices: [{ index: 0, delta: { reasoning_content: `${taskId}\n` }, finish_reason: null }] })}\n\n`));
       }
 
       const tick = async () => {

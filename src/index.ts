@@ -2817,7 +2817,7 @@ async function getModelsResponse(apiKey: string, providerKeys: Record<string, st
 	// Inject curated image models (always available)
 	const curated = [
 		{ id: 'image/doubao-vision', name: 'Seed Image', object: 'model', created: 0, owned_by: 'doubao' },
-		{ id: 'image/AI-ModelScope/stable-diffusion-3.5-large-turbo', name: 'Stable Diffusion 3.5 Large', object: 'model', created: 0, owned_by: 'modelscope' },
+		{ id: 'image/MusePublic/14_ckpt_SD_XL', name: 'Anything XL', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/MusePublic/489_ckpt_FLUX_1', name: 'FLUX.1 [dev]', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/black-forest-labs/FLUX.1-Krea-dev', name: 'FLUX.1 Krea [dev]', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/MusePublic/FLUX.1-Kontext-Dev', name: 'FLUX.1 Kontext [dev]', object: 'model', created: 0, owned_by: 'modelscope' },

@@ -290,7 +290,6 @@ async function buildImageGenerationWaiter(params: {
       const aspectRatio = w / h;
 
       if (/qwen/i.test(model)) {
-        // Use preconfigured values for Qwen
         const qwenMap: Record<string, [number, number]> = {
           '1:1': [1328, 1328], '16:9': [1664, 928], '9:16': [928, 1664],
           '4:3': [1472, 1140], '3:4': [1140, 1472], '3:2': [1584, 1056], '2:3': [1056, 1584],
@@ -298,14 +297,12 @@ async function buildImageGenerationWaiter(params: {
         const v = qwenMap[ratio];
         return v ? `${v[0]}x${v[1]}` : null;
       } else if (/flux/i.test(model)) {
-        // FLUX: base 1440x1440, adapt to ratio
         const base = 1440;
         const area = base * base;
         const width = Math.round(Math.sqrt(area * aspectRatio) / 2) * 2;
         const height = Math.round(area / width / 2) * 2;
         return `${width}x${height}`;
-      } else if (/(diffusion|high-res)/i.test(model)) {
-        // Diffusion/high-res: base 2048x2048, adapt to ratio
+      } else if (/(_SD_|high-res)/i.test(model)) {
         const base = 2048;
         const area = base * base;
         const width = Math.round(Math.sqrt(area * aspectRatio) / 2) * 2;
@@ -322,9 +319,8 @@ async function buildImageGenerationWaiter(params: {
     } else if (typeof flags['ratio'] === 'string') {
       sizeStr = ratioToSize(flags['ratio'] as string, effectiveModel) || undefined;
     } else {
-      // Default sizes based on model
       if (/flux/i.test(effectiveModel)) sizeStr = '1440x1440';
-      else if (/(diffusion|high-res)/i.test(effectiveModel)) sizeStr = '2048x2048';
+      else if (/(_SD_|high-res)/i.test(effectiveModel)) sizeStr = '2048x2048';
       else if (/qwen/i.test(effectiveModel)) sizeStr = '1328x1328';
     }
 
