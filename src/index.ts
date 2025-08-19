@@ -1350,7 +1350,7 @@ app.post('/v1/responses', async (c: Context) => {
 
 	// Storage preparation (needed for admin/magic routing id reference)
 	const now = Date.now();
-	const responseId = request_id || 'resp_' + now;
+	const responseId = request_id || 'resp_' + new Date(now).toISOString().slice(0, 16).replace(/[-:T]/g, '');
 
 	// Dynamic model routing to reduce cold starts
 	if (typeof model === 'string' && model.startsWith('image/')) {

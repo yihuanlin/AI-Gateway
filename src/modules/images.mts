@@ -48,7 +48,7 @@ export async function handleImageForChat(args: {
     if (!waiter.ok) {
       return new Response(JSON.stringify({ error: waiter.error }), { status: waiter.status || 400, headers: { 'Content-Type': 'application/json' } });
     }
-    if (stream) return streamChatGenerationElapsed(model, waiter.wait);
+    if (stream) return streamChatGenerationElapsed(model, waiter.wait, waiter.taskId);
     const res = await waiter.wait(new AbortController().signal);
     if (!res.ok) return new Response(JSON.stringify({ error: res.error }), { status: 500, headers: { 'Content-Type': 'application/json' } });
     const created = Math.floor(now / 1000);
@@ -109,7 +109,7 @@ export async function handleImageForResponses(args: {
     if (!waiter.ok) {
       return new Response(JSON.stringify({ error: waiter.error }), { status: waiter.status || 400, headers: { 'Content-Type': 'application/json' } });
     }
-    if (stream) return streamResponsesGenerationElapsed({ baseObj, requestId: request_id, waitForResult: waiter.wait });
+    if (stream) return streamResponsesGenerationElapsed({ baseObj, requestId: request_id, waitForResult: waiter.wait, taskId: waiter.taskId, headers });
     const res = await waiter.wait(new AbortController().signal);
     if (!res.ok) return new Response(JSON.stringify({ error: res.error }), { status: 500, headers: { 'Content-Type': 'application/json' } });
     // For Responses endpoint, usage format is already correct: { input_tokens, output_tokens, total_tokens }
@@ -158,10 +158,10 @@ function guidanceFromTopP(topP?: number, temperature?: number): number | undefin
 
 function getHelpForModel(model: string) {
   if (model.startsWith('image/doubao')) {
-    return 'Use Doubao: t2i model doubao-seedream-3-0-t2i-250415 or i2i doubao-seededit-3-0-i2i-250628. Flags: --format url|b64_json, --size {WxH}|--ratio {e.g., 16:9}, --seed N, --guidance F.';
+    return 'Use Doubao: t2i model doubao-seedream-3-0-t2i-250415 or i2i doubao-seededit-3-0-i2i-250628. Flags: --format url|b64_json, --size {WxH}|--ratio {e.g., 16:9}, --seed N, --guidance F. i2i: /upload (upload images to bucket).';
   }
   if (model.startsWith('image/')) {
-    return 'ModelScope image models. Flags: --negative_prompt "text", --steps N (1-100), --guidance F (or derived from top_p/temperature), --size WxH or --ratio A:B, --seed N. FLUX.1 uses 1024x1024. For Qwen models, supported ratios: 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3. Special: if prompt contains "miratsu style" or "chibi" with Qwen/Qwen-Image, switches to MTWLDFC/miratsu_style.';
+    return 'ModelScope image models. Flags: --negative_prompt "text", --steps N (1-100), --guidance F (or derived from top_p/temperature), --size WxH or --ratio A:B, --seed N. FLUX.1 uses 1024x1024. For Qwen models, supported ratios: 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3. Special: if prompt contains "miratsu style" or "chibi" with Qwen/Qwen-Image, switches to MTWLDFC/miratsu_style. Special: /upload (force upload images to storage).';
   }
   return 'Unknown image model';
 }
@@ -176,11 +176,13 @@ async function buildImageGenerationWaiter(params: {
   contentParts: any[];
   temperature?: number;
   top_p?: number;
-}): Promise<{ ok: true; wait: (signal: AbortSignal) => Promise<WaitResult> } | { ok: false; error: any; status?: number }> {
+}): Promise<{ ok: true; wait: (signal: AbortSignal) => Promise<WaitResult>; taskId: string } | { ok: false; error: any; status?: number }> {
   const { model, headers, authHeader, isPasswordAuth, contentParts, flags, temperature, top_p } = params;
   let prompt = params.prompt || '';
   const links = findLinks(prompt);
   const imgs = hasImageInMessages(contentParts || []);
+  const hasUploadFlag = prompt.toLowerCase().includes('/upload');
+  prompt = prompt.replace(/\/upload/gi, '').trim();
 
   if (model.startsWith('image/doubao')) {
     let apiKey: string | null = null;
@@ -225,24 +227,39 @@ async function buildImageGenerationWaiter(params: {
       const g = typeof flags['guidance'] === 'number' ? flags['guidance'] : guidanceFromTopP(top_p, temperature) ?? 2.5;
       payload = { model: 'doubao-seedream-3-0-t2i-250415', prompt, response_format, size, seed: typeof flags['seed'] === 'number' ? flags['seed'] : -1, guidance_scale: g, watermark };
     }
+    // Generate a synthetic task ID for Doubao since it's synchronous
+    const taskId = `doubao_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
     const wait = async (_signal: AbortSignal) => {
       try {
         const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, body: JSON.stringify(payload) });
         const json: any = await res.json().catch(() => ({} as any));
         if (!res.ok) return { ok: false, error: json?.error || { code: res.status, message: json?.message || res.statusText } } as const;
         const data = json?.data?.[0];
-        const urlOrB64 = data?.url || (data?.b64_json ? `data:image/png;base64,${data.b64_json}` : '');
+        let urlOrB64 = data?.url || (data?.b64_json ? `data:image/png;base64,${data.b64_json}` : '');
+
+        if (data?.b64_json && hasUploadFlag && process.env.S3_API && process.env.S3_PUBLIC_URL && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
+          try {
+            const { uploadBase64ToBlob } = await import('../shared/bucket.mts');
+            const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
+            const blobUrl = await uploadBase64ToBlob(`data:image/png;base64,${data.b64_json}`, timestamp);
+            urlOrB64 = blobUrl;
+          } catch (blobError) {
+            console.warn('Failed to upload to bucket, using base64:', blobError);
+          }
+        }
+
         const usage = json?.usage ? {
           input_tokens: 0,
           output_tokens: json.usage.output_tokens || 0,
           total_tokens: json.usage.total_tokens || 0
         } : { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
-        return { ok: true, text: toMarkdownImage(urlOrB64), usage } as const;
+        return { ok: true, text: toMarkdownImage(urlOrB64), usage, downloadLink: urlOrB64, taskId } as const;
       } catch (e: any) {
         return { ok: false, error: { code: 'network_error', message: e?.message || 'fetch failed' } } as const;
       }
     };
-    return { ok: true, wait };
+    return { ok: true, wait, taskId };
   }
 
   if (model.startsWith('image/')) {
@@ -323,31 +340,37 @@ async function buildImageGenerationWaiter(params: {
     if (steps !== undefined) payload.steps = steps;
     if (seedVal !== undefined) payload.seed = seedVal;
 
-    const wait = async (_signal: AbortSignal) => {
-      try {
-        const res = await fetch(`${base}/images/generations`, { method: 'POST', headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'X-ModelScope-Async-Mode': 'true' }, body: JSON.stringify(payload) });
-        const j: any = await res.json().catch(() => ({} as any));
-        if (!res.ok) return { ok: false, error: j?.error || { code: res.status, message: j?.message || res.statusText } } as const;
-        const taskId = j?.task_id as string;
-        const started = Date.now();
-        while (true) {
-          await sleep(1000);
-          const r = await fetch(`${base}/tasks/${taskId}`, { headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'X-ModelScope-Task-Type': 'image_generation' } });
-          const dj: any = await r.json().catch(() => ({} as any));
-          if (dj.task_status === 'SUCCEED') {
-            const url = dj.output_images?.[0];
-            // ModelScope doesn't return token usage, use zeros
-            return { ok: true, text: toMarkdownImage(url), usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } } as const;
-          } else if (dj.task_status === 'FAILED') {
-            return { ok: false, error: { code: 'failed', message: 'Image Generation Failed.' } } as const;
+    // Create the task first to get the ID immediately
+    try {
+      const res = await fetch(`${base}/images/generations`, { method: 'POST', headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'X-ModelScope-Async-Mode': 'true' }, body: JSON.stringify(payload) });
+      const j: any = await res.json().catch(() => ({} as any));
+      if (!res.ok) return { ok: false, error: j?.error || { code: res.status, message: j?.message || res.statusText } } as const;
+      const taskId = j?.task_id as string;
+
+      const wait = async (_signal: AbortSignal) => {
+        try {
+          const started = Date.now();
+          while (true) {
+            await sleep(1000);
+            const r = await fetch(`${base}/tasks/${taskId}`, { headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'X-ModelScope-Task-Type': 'image_generation' } });
+            const dj: any = await r.json().catch(() => ({} as any));
+            if (dj.task_status === 'SUCCEED') {
+              const url = dj.output_images?.[0];
+              // ModelScope doesn't return token usage, use zeros
+              return { ok: true, text: toMarkdownImage(url), usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 }, downloadLink: url, taskId } as const;
+            } else if (dj.task_status === 'FAILED') {
+              return { ok: false, error: { code: 'failed', message: 'Image Generation Failed.' } } as const;
+            }
+            if (Date.now() - started > 5 * 60_000) return { ok: false, error: { code: 'timeout', message: 'Image generation timeout' } } as const;
           }
-          if (Date.now() - started > 5 * 60_000) return { ok: false, error: { code: 'timeout', message: 'Image generation timeout' } } as const;
+        } catch (e: any) {
+          return { ok: false, error: { code: 'network_error', message: e?.message || 'fetch failed' } } as const;
         }
-      } catch (e: any) {
-        return { ok: false, error: { code: 'network_error', message: e?.message || 'fetch failed' } } as const;
-      }
-    };
-    return { ok: true, wait };
+      };
+      return { ok: true, wait, taskId };
+    } catch (e: any) {
+      return { ok: false, error: { code: 'network_error', message: e?.message || 'fetch failed' } };
+    }
   }
 
   return { ok: false, error: { code: 'unsupported_model', message: 'Unsupported image model' }, status: 400 };

@@ -1,19 +1,43 @@
 import { getStoreWithConfig } from '../shared/store.mts';
 import { responsesBase, streamChatSingleText, streamResponsesSingleText } from './utils.mts';
 
-function toConversationMarkdown(stored: any): string {
-  if (!stored || !Array.isArray(stored.messages)) return 'No conversation found.';
-  const lines: string[] = [];
-  for (const m of stored.messages) {
-    const role = (m.role || '').toLowerCase();
-    let header = '';
-    if (role === 'system') header = 'System';
-    else if (role === 'assistant') header = 'Assistant';
-    else header = 'User';
-    const content = typeof m.content === 'string' ? m.content : (Array.isArray(m.content) ? m.content.map((p: any) => (p?.text || p?.content || '')).filter(Boolean).join('\n') : '');
-    lines.push(`### ${header}\n${content}`);
+function toConversationMarkdown(stored: any, key?: string): string {
+  if (!stored) return 'No content found.';
+
+  // Check if this is a video entry (key starts with vid_)
+  if (key && key.startsWith('vid_')) {
+    try {
+      const videoData = typeof stored === 'string' ? JSON.parse(stored) : stored;
+      const { id, downloadLink, generatedAt, text } = videoData;
+      let result = `**Video ID:** ${id}\n`;
+      if (generatedAt) result += `**Generated:** ${new Date(generatedAt).toLocaleString()}\n`;
+      if (downloadLink) result += `**Download:** [Video Link](${downloadLink})\n`;
+      if (text) result += `**Preview:** ${text}\n`;
+      return result;
+    } catch {
+      // If not valid JSON, return raw content
+      return typeof stored === 'string' ? stored : JSON.stringify(stored);
+    }
   }
-  return lines.join('\n\n');
+
+  // Check if this is a conversation response (key starts with resp_)
+  if (key && key.startsWith('resp_')) {
+    if (!Array.isArray(stored.messages)) return 'No conversation found.';
+    const lines: string[] = [];
+    for (const m of stored.messages) {
+      const role = (m.role || '').toLowerCase();
+      let header = '';
+      if (role === 'system') header = 'System';
+      else if (role === 'assistant') header = 'Assistant';
+      else header = 'User';
+      const content = typeof m.content === 'string' ? m.content : (Array.isArray(m.content) ? m.content.map((p: any) => (p?.text || p?.content || '')).filter(Boolean).join('\n') : '');
+      lines.push(`### ${header}\n${content}`);
+    }
+    return lines.join('\n\n');
+  }
+
+  // For other keys, return raw content as string
+  return typeof stored === 'string' ? stored : JSON.stringify(stored);
 }
 
 function lastUserTextFromMessages(messages: any[]): string {
@@ -62,7 +86,7 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
   const store = getStoreWithConfig('responses', headers);
 
   if (/^\/help$/.test(text)) {
-    const help = 'Commands: "list" | "delete all" | "delete $id" | "$id" to view.';
+    const help = 'Commands: "list" (responses) | "list [prefix]" | "list all" | "delete all" | "delete [id]" | "[id]" to view.';
     const now = Math.floor(Date.now() / 1000);
     if (stream) {
       return streamChatSingleText(model, help);
@@ -124,28 +148,54 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
     }
   }
 
-  if (/^list$/i.test(text)) {
+  if (/^list(?:\s+(.+))?$/i.test(text)) {
+    const match = text.match(/^list(?:\s+(.+))?$/i);
+    const prefix = match?.[1]?.trim();
+
     try {
       if (stream) {
-        let md = 'No responses.';
+        let md = 'No items found.';
         try {
-          const listResult: any = await (store as any).list({ prefix: 'resp' });
+          let listOptions: any = {};
+          if (prefix === 'all' || prefix === 'listall') {
+            // List all items
+          } else if (prefix === 'vid') {
+            listOptions.prefix = 'vid';
+          } else if (prefix) {
+            listOptions.prefix = prefix;
+          } else {
+            listOptions.prefix = 'resp'; // Default to responses
+          }
+
+          const listResult: any = await (store as any).list(listOptions);
           let blobs: any[] = [];
           if (listResult && 'blobs' in listResult && Array.isArray(listResult.blobs)) blobs = listResult.blobs; else {
             for await (const item of listResult) { if (item.blobs) blobs.push(...item.blobs); }
           }
           const ids = blobs.map((b: any) => b.key);
-          md = ids.map((id: string) => `- ${id}`).join('\n') || 'No responses.';
+          md = ids.length > 0 ? ids.map((id: string) => `- ${id}`).join('\n') : 'No items found.';
         } catch { }
         return streamChatSingleText(model, md);
       }
-      const listResult: any = await (store as any).list({ prefix: 'resp' });
+
+      let listOptions: any = {};
+      if (prefix === 'all' || prefix === 'listall') {
+        // List all items
+      } else if (prefix === 'vid') {
+        listOptions.prefix = 'vid';
+      } else if (prefix) {
+        listOptions.prefix = prefix;
+      } else {
+        listOptions.prefix = 'resp'; // Default to responses
+      }
+
+      const listResult: any = await (store as any).list(listOptions);
       let blobs: any[] = [];
       if (listResult && 'blobs' in listResult && Array.isArray(listResult.blobs)) blobs = listResult.blobs; else {
         for await (const item of listResult) { if (item.blobs) blobs.push(...item.blobs); }
       }
       const ids = blobs.map((b: any) => b.key);
-      const md = ids.map((id: string) => `- ${id}`).join('\n') || 'No responses.';
+      const md = ids.length > 0 ? ids.map((id: string) => `- ${id}`).join('\n') : 'No items found.';
       const now = Math.floor(Date.now() / 1000);
       const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: md } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
       return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
@@ -159,13 +209,13 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
   try {
     if (stream) {
       const existing = await (store as any).get(id, { type: 'json' });
-      if (!existing) return streamChatSingleText(model, 'Response not found');
-      const md = toConversationMarkdown(existing);
+      if (!existing) return streamChatSingleText(model, 'Item not found');
+      const md = toConversationMarkdown(existing, id);
       return streamChatSingleText(model, md);
     }
     const existing = await (store as any).get(id, { type: 'json' });
-    if (!existing) return new Response(JSON.stringify({ error: { message: 'Response not found' } }), { status: 404, headers: { 'Content-Type': 'application/json' } });
-    const md = toConversationMarkdown(existing);
+    if (!existing) return new Response(JSON.stringify({ error: { message: 'Item not found' } }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+    const md = toConversationMarkdown(existing, id);
     const now = Math.floor(Date.now() / 1000);
     const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: md } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
     return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
@@ -191,7 +241,7 @@ export async function handleAdminForResponses(args: { input: any; headers: Heade
   const streamTextOnce = (messageText: string) => streamResponsesSingleText(baseObj, messageText, textItemId, true);
 
   if (/^\/help$/.test(text)) {
-    const msg = 'Commands: "list" | "delete all" | "delete $id" | "$id" to view.';
+    const msg = 'Commands: "list" (responses) | "list [prefix]" | "list all" | "delete all" | "delete [id]" | "[id]" to view.';
     if (!stream) return new Response(JSON.stringify(buildCompleted(msg)), { headers: { 'Content-Type': 'application/json' } });
     return streamTextOnce(msg);
   }
@@ -226,15 +276,29 @@ export async function handleAdminForResponses(args: { input: any; headers: Heade
     }
   }
 
-  if (/^list$/i.test(text)) {
+  if (/^list(?:\s+(.+))?$/i.test(text)) {
+    const match = text.match(/^list(?:\s+(.+))?$/i);
+    const prefix = match?.[1]?.trim();
+
     try {
-      const listResult: any = await (responseStore as any).list({ prefix: 'resp' });
+      let listOptions: any = {};
+      if (prefix === 'all' || prefix === 'listall') {
+        // List all items
+      } else if (prefix === 'vid') {
+        listOptions.prefix = 'vid';
+      } else if (prefix) {
+        listOptions.prefix = prefix;
+      } else {
+        listOptions.prefix = 'resp'; // Default to responses
+      }
+
+      const listResult: any = await (responseStore as any).list(listOptions);
       let blobs: any[] = [];
       if (listResult && 'blobs' in listResult && Array.isArray(listResult.blobs)) blobs = listResult.blobs; else {
         for await (const item of listResult) { if (item.blobs) blobs.push(...item.blobs); }
       }
       const ids = blobs.map((b: any) => b.key);
-      const md = ids.map((id: string) => `- ${id}`).join('\n') || 'No responses.';
+      const md = ids.length > 0 ? ids.map((id: string) => `- ${id}`).join('\n') : 'No items found.';
       if (!stream) return new Response(JSON.stringify(buildCompleted(md)), { headers: { 'Content-Type': 'application/json' } });
       return streamTextOnce(md);
     } catch (e: any) {
@@ -246,8 +310,8 @@ export async function handleAdminForResponses(args: { input: any; headers: Heade
   try {
     const id = text;
     const existing = await (responseStore as any).get(id, { type: 'json' });
-    if (!existing) return new Response(JSON.stringify({ error: { message: 'Response not found' } }), { status: 404, headers: { 'Content-Type': 'application/json' } });
-    const md = toConversationMarkdown(existing);
+    if (!existing) return new Response(JSON.stringify({ error: { message: 'Item not found' } }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+    const md = toConversationMarkdown(existing, id);
     if (!stream) return new Response(JSON.stringify(buildCompleted(md)), { headers: { 'Content-Type': 'application/json' } });
     return streamTextOnce(md);
   } catch (e: any) {

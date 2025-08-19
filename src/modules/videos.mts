@@ -11,7 +11,7 @@ function ensureRatioInPrompt(prompt: string): string {
 }
 
 function helpForVideo(model: string) {
-    return 'Flags: --rs/--resolution 480p|720p|1080p, --dur/--duration 3-12, --seed -1|[0,2^32-1], --cf/--camerafixed true|false, --rt/--ratio 16:9 (default of t2v), 4:3, 1:1, 3:4, 9:16, 21:9, adaptive (default of i2v).';
+    return 'Flags: --rs/--resolution 480p|720p|1080p, --dur/--duration 3-12, --seed -1|[0,2^32-1], --cf/--camerafixed true|false, --rt/--ratio 16:9 (default of t2v), 4:3, 1:1, 3:4, 9:16, 21:9, adaptive (default of i2v). Special: /repeat (use same image as first and last frame), /upload (upload images to bucket).';
 }
 
 async function buildVideoGenerationWaiter(params: {
@@ -21,7 +21,7 @@ async function buildVideoGenerationWaiter(params: {
     authHeader: string | null;
     isPasswordAuth: boolean;
     contentParts: any[];
-}): Promise<{ ok: true; wait: (signal: AbortSignal) => Promise<WaitResult> } | { ok: false; error: any; status?: number }> {
+}): Promise<{ ok: true; wait: (signal: AbortSignal) => Promise<WaitResult>; taskId: string } | { ok: false; error: any; status?: number }> {
     const { model, prompt: rawPrompt, headers, authHeader, isPasswordAuth, contentParts } = params;
     const links = findLinks(rawPrompt || '');
     const imgs = hasImageInMessages(contentParts || []);
@@ -46,18 +46,55 @@ async function buildVideoGenerationWaiter(params: {
     }
 
     if (imgs.has || links.length > 0) {
-        const first = imgs.first || links[0] || '';
+        let first = imgs.first || links[0] || '';
+
+        const hasUploadFlag = prompt.toLowerCase().includes('/upload');
+
+        if (first.startsWith('data:') && hasUploadFlag && process.env.S3_API && process.env.S3_PUBLIC_URL && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
+            try {
+                const { uploadBase64ToBlob } = await import('../shared/bucket.mts');
+                const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
+                first = await uploadBase64ToBlob(first, `${timestamp}_first`);
+            } catch (blobError) {
+                console.warn('Failed to upload first frame to bucket, using base64:', blobError);
+            }
+        }
+
         if (modelId.endsWith('i2v-250428')) {
             content.push({ type: 'image_url', image_url: { url: first }, role: 'first_frame' });
-            if (imgs.second || links.length > 1) {
-                const lastUrl = imgs.second || links[links.length - 1] || '';
+
+            // Check if prompt contains /repeat and only has one image
+            const isRepeatMode = prompt.toLowerCase().includes('/repeat');
+            const hasOnlyOneImage = !imgs.second && links.length <= 1;
+
+            if (imgs.second || links.length > 1 || (isRepeatMode && hasOnlyOneImage)) {
+                let lastUrl = imgs.second || links[links.length - 1] || '';
+
+                // If /repeat mode with only one image, use the same image as last frame
+                if (isRepeatMode && hasOnlyOneImage) {
+                    lastUrl = first; // Use the same image as first frame
+                }
+
+                if (lastUrl.startsWith('data:') && hasUploadFlag && process.env.S3_API && process.env.S3_PUBLIC_URL && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
+                    try {
+                        const { uploadBase64ToBlob } = await import('../shared/bucket.mts');
+                        const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
+                        lastUrl = await uploadBase64ToBlob(lastUrl, `${timestamp}_last`);
+                    } catch (blobError) {
+                        console.warn('Failed to upload last frame to bucket, using base64:', blobError);
+                    }
+                }
+
                 content.push({ type: 'image_url', image_url: { url: lastUrl }, role: 'last_frame' });
             }
-            prompt = prompt.replace(first, '').trim();
-            content[0].text = prompt;
+
+            // Remove /repeat and /upload from prompt if present
+            let cleanPrompt = prompt.replace(imgs.first || links[0] || '', '').trim();
+            cleanPrompt = cleanPrompt.replace(/\/repeat/gi, '').replace(/\/upload/gi, '').trim();
+            content[0].text = cleanPrompt;
         } else {
             content.push({ type: 'image_url', image_url: { url: first } });
-            prompt = prompt.replace(first, '').trim();
+            prompt = prompt.replace(imgs.first || links[0] || '', '').trim();
             content[0].text = prompt;
         }
     } else {
@@ -67,39 +104,45 @@ async function buildVideoGenerationWaiter(params: {
         }
     }
 
-    const wait = async (_signal: AbortSignal) => {
-        try {
-            const createRes = await fetch(`${base}/contents/generations/tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, body: JSON.stringify({ model: modelId, content }) });
-            const createJson: any = await createRes.json().catch(() => ({} as any));
-            if (!createRes.ok) return { ok: false, error: createJson?.error || { code: createRes.status, message: createJson?.message || createRes.statusText } } as const;
-            const id = (createJson && (createJson.id || createJson.task_id)) as string;
-            const started = Date.now();
-            while (true) {
-                await sleep(1000);
-                const r = await fetch(`${base}/contents/generations/tasks/${id}`, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` } });
-                const j: any = await r.json().catch(() => ({} as any));
-                const status = (j && j.status) || 'queued';
-                if (status === 'succeeded') {
-                    const url = j?.content?.video_url;
-                    const usage = j?.usage ? {
-                        input_tokens: 0,
-                        output_tokens: j.usage.completion_tokens || 0,
-                        total_tokens: j.usage.total_tokens || 0
-                    } : { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
-                    return { ok: true, text: toMarkdownVideo(url), usage } as const;
-                } else if (status === 'failed') {
-                    const err = j?.error || { code: 'failed', message: 'Video Generation Failed.' };
-                    return { ok: false, error: err } as const;
-                } else if (status === 'cancelled') {
-                    return { ok: true, text: 'Cancelled', usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } } as const;
+    // Create the task first to get the ID immediately
+    try {
+        const createRes = await fetch(`${base}/contents/generations/tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, body: JSON.stringify({ model: modelId, content }) });
+        const createJson: any = await createRes.json().catch(() => ({} as any));
+        if (!createRes.ok) return { ok: false, error: createJson?.error || { code: createRes.status, message: createJson?.message || createRes.statusText }, status: createRes.status };
+        const taskId = (createJson && createJson.id) as string;
+
+        const wait = async (_signal: AbortSignal) => {
+            try {
+                const started = Date.now();
+                while (true) {
+                    await sleep(1000);
+                    const r = await fetch(`${base}/contents/generations/tasks/${taskId}`, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` } });
+                    const j: any = await r.json().catch(() => ({} as any));
+                    const status = (j && j.status) || 'queued';
+                    if (status === 'succeeded') {
+                        const url = j?.content?.video_url;
+                        const usage = j?.usage ? {
+                            input_tokens: 0,
+                            output_tokens: j.usage.completion_tokens || 0,
+                            total_tokens: j.usage.total_tokens || 0
+                        } : { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
+                        return { ok: true, text: toMarkdownVideo(url), usage, downloadLink: url, taskId } as const;
+                    } else if (status === 'failed') {
+                        const err = j?.error || { code: 'failed', message: 'Video Generation Failed.' };
+                        return { ok: false, error: err } as const;
+                    } else if (status === 'cancelled') {
+                        return { ok: true, text: 'Cancelled', usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } } as const;
+                    }
+                    if (Date.now() - started > 10 * 60_000) return { ok: false, error: { code: 'timeout', message: 'Video generation timeout' } } as const;
                 }
-                if (Date.now() - started > 10 * 60_000) return { ok: false, error: { code: 'timeout', message: 'Video generation timeout' } } as const;
+            } catch (e: any) {
+                return { ok: false, error: { code: 'network_error', message: e?.message || 'fetch failed' } } as const;
             }
-        } catch (e: any) {
-            return { ok: false, error: { code: 'network_error', message: e?.message || 'fetch failed' } } as const;
-        }
-    };
-    return { ok: true, wait };
+        };
+        return { ok: true, wait, taskId };
+    } catch (e: any) {
+        return { ok: false, error: { code: 'network_error', message: e?.message || 'fetch failed' } };
+    }
 }
 
 export async function handleVideoForChat(args: { model: string; messages: any[]; headers: Headers; stream?: boolean; authHeader: string | null; isPasswordAuth: boolean; }): Promise<Response> {
@@ -120,7 +163,7 @@ export async function handleVideoForChat(args: { model: string; messages: any[];
     if (!waiter.ok) {
         return new Response(JSON.stringify({ error: waiter.error }), { status: waiter.status || 400, headers: { 'Content-Type': 'application/json' } });
     }
-    if (stream) return streamChatGenerationElapsed(model, waiter.wait);
+    if (stream) return streamChatGenerationElapsed(model, waiter.wait, waiter.taskId);
     // Non-stream: since video is async by provider, return a minimal ack
     const res = await waiter.wait(new AbortController().signal);
     if (!res.ok) return new Response(JSON.stringify({ error: res.error }), { status: 500, headers: { 'Content-Type': 'application/json' } });
@@ -154,7 +197,7 @@ export async function handleVideoForResponses(args: { model: string; input: any;
     }
     if (stream) {
         const baseObj = responsesBase(now, request_id, model, input, null, store, undefined, undefined, undefined, undefined);
-        return streamResponsesGenerationElapsed({ baseObj, requestId: request_id, waitForResult: waiter.wait });
+        return streamResponsesGenerationElapsed({ baseObj, requestId: request_id, waitForResult: waiter.wait, taskId: waiter.taskId, headers });
     }
     // Non-stream: wait for completion
     const res = await waiter.wait(new AbortController().signal);

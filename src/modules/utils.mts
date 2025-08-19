@@ -1,4 +1,4 @@
-export type WaitResult = { ok: true; text: string; usage?: { input_tokens: number; output_tokens: number; total_tokens: number } } | { ok: false; error: any };
+export type WaitResult = { ok: true; text: string; usage?: { input_tokens: number; output_tokens: number; total_tokens: number }; downloadLink?: string; taskId?: string } | { ok: false; error: any };
 
 export function findLinks(text: string): string[] {
   if (!text) return [];
@@ -154,7 +154,7 @@ export function streamResponsesSingleText(baseObj: any, messageText: string, tex
 }
 
 type Usage = { input_tokens: number; output_tokens: number; total_tokens: number };
-type GenResult = { ok: true; text: string; usage?: Usage } | { ok: false; error: any };
+type GenResult = { ok: true; text: string; usage?: Usage; downloadLink?: string; taskId?: string } | { ok: false; error: any };
 
 export function streamResponsesGenerationElapsed(params: {
   baseObj: any;
@@ -163,14 +163,17 @@ export function streamResponsesGenerationElapsed(params: {
   reasoningId?: string;
   textItemId?: string;
   startOutputIndex?: number;
+  taskId?: string;
+  headers?: Headers;
 }): Response {
-  const { baseObj, requestId, waitForResult } = params;
+  const { baseObj, requestId, waitForResult, headers } = params;
   const now = Date.now();
   const enc = new TextEncoder();
   let sequenceNumber = 0;
   const reasoningId = params.reasoningId || `rs_${now}`;
   const textItemId = params.textItemId || `msg_${now}`;
   const startIndex = params.startOutputIndex ?? 0;
+  const taskId = params.taskId;
 
   const ac = new AbortController();
 
@@ -183,6 +186,9 @@ export function streamResponsesGenerationElapsed(params: {
       // reasoning item at startIndex
       emit({ type: 'response.output_item.added', sequence_number: sequenceNumber++, output_index: startIndex, item: { id: reasoningId, type: 'reasoning', summary: [] } });
       emit({ type: 'response.reasoning_summary_part.added', sequence_number: sequenceNumber++, item_id: reasoningId, output_index: startIndex, summary_index: 0, part: { type: 'summary_text', text: '' } });
+      if (taskId) {
+        emit({ type: 'response.reasoning_summary_text.delta', sequence_number: sequenceNumber++, item_id: reasoningId, output_index: startIndex, summary_index: 0, delta: `Task ID: ${taskId}\n` });
+      }
 
       let done = false;
       const started = Date.now();
@@ -206,7 +212,28 @@ export function streamResponsesGenerationElapsed(params: {
           return;
         }
 
-        const finalReasoningText = `${Math.floor((Date.now() - started) / 1000)}s elapsed\n`;
+        // Save to blob store if taskId and link are available
+        if (taskId && result.downloadLink && headers) {
+          try {
+            const { getStoreWithConfig } = await import('../shared/store.mts');
+            const store = getStoreWithConfig('responses', headers);
+            const timestamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+            const vidKey = `vid_${timestamp}`;
+            const videoData = {
+              id: taskId,
+              downloadLink: result.downloadLink,
+              generatedAt: new Date().toISOString(),
+              text: result.text
+            };
+            await (store as any).set(vidKey, JSON.stringify(videoData));
+          } catch (e) {
+            console.error('Failed to save video data to blob store:', e);
+          }
+        }
+
+        const finalReasoningText = taskId ?
+          `Task ID: ${taskId}\n${Math.floor((Date.now() - started) / 1000)}s elapsed\n` :
+          `${Math.floor((Date.now() - started) / 1000)}s elapsed\n`;
         const events = generationFinalizeEvents({ baseObj, reasoningId, textItemId, finalText: result.text, finalReasoningText, usage: result.usage ?? { input_tokens: 0, output_tokens: 0, total_tokens: 0 }, reasoningIndex: startIndex, messageIndex: startIndex + 1 });
         for (const ev of events) emit({ ...ev, sequence_number: sequenceNumber++ });
         controller.close();
@@ -221,7 +248,7 @@ export function streamResponsesGenerationElapsed(params: {
   return new Response(rs, { headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' } });
 }
 
-export function streamChatGenerationElapsed(model: string, waitForResult: (signal: AbortSignal) => Promise<GenResult>): Response {
+export function streamChatGenerationElapsed(model: string, waitForResult: (signal: AbortSignal) => Promise<GenResult>, taskId?: string): Response {
   const now = Date.now();
   const created = Math.floor(now / 1000);
   const baseChunk: any = { id: `chatcmpl-${now}`, object: 'chat.completion.chunk', created, model, choices: [] };
@@ -232,6 +259,11 @@ export function streamChatGenerationElapsed(model: string, waitForResult: (signa
     async start(controller) {
       const started = Date.now();
       let tickerStopped = false;
+
+      // Emit task ID first if provided
+      if (taskId) {
+        controller.enqueue(enc.encode(`data: ${JSON.stringify({ ...baseChunk, choices: [{ index: 0, delta: { reasoning_content: `Task ID: ${taskId}\n` }, finish_reason: null }] })}\n\n`));
+      }
 
       const tick = async () => {
         try {

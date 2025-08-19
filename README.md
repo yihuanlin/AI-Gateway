@@ -277,6 +277,12 @@ TAVILY_API_KEY=tvly-dev-...
 PYTHON_API_KEY=your-python-key
 PYTHON_URL=https://your-python-executor.com
 
+# Optional S3 bucket to upload images for Doubao i2i and i2v (base64 POST extremely slow outside of China)
+S3_ACCESS_KEY=your-s3-access-key
+S3_SECRET_KEY=your-s3-secret-key
+S3_PUBLIC_URL=https://your-s3-public-url.com
+S3_API=https://your-s3-provider-api.com/your-bucket-name
+
 # Use Netlify Blobs in non-Netlify platforms (Responses endpoint datastore)
 NETLIFY_SITE_ID=your-netlify-site-id
 NETLIFY_TOKEN=nfp_...
