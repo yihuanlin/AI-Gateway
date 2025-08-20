@@ -219,57 +219,6 @@ function extractPoeReasoning(text: string): { reasoning: string, content: string
 	}
 }
 
-async function toOpenAIResponse(result: GenerateTextResult<any, any>, model: string, providerName?: string) {
-	const now = Math.floor(Date.now() / 1000);
-
-	const annotations = result.sources ? result.sources.map((source: any) => ({
-		type: (source.sourceType || 'url') + '_citation',
-		url_citation: {
-			url: source.url || '',
-			title: source.title || ''
-		}
-	})) : [];
-
-	let content = result.text || '';
-	let reasoningContent = result.reasoningText || '';
-
-	// Handle Poe-specific reasoning extraction for non-streaming
-	if (providerName === 'poe' && content && !reasoningContent) {
-		const extracted = extractPoeReasoning(content);
-		content = extracted.content;
-		reasoningContent = extracted.reasoning;
-	}
-
-	const choices = content
-		? [
-			{
-				index: 0,
-				message: {
-					role: 'assistant',
-					content: content,
-					reasoning_content: reasoningContent || undefined,
-					tool_calls: result.toolCalls,
-					...(annotations.length > 0 ? { annotations } : {})
-				},
-				finish_reason: result.finishReason,
-			},
-		]
-		: [];
-
-	return {
-		id: `chatcmpl-${now}`,
-		object: 'chat.completion',
-		created: now,
-		model: model,
-		choices: choices,
-		usage: {
-			prompt_tokens: result.usage.inputTokens,
-			completion_tokens: result.usage.outputTokens,
-			total_tokens: result.usage.totalTokens,
-		},
-	};
-}
-
 function addContextMessages(messages: any[], c: Context): any[] {
 	if (!geo) return messages;
 
@@ -1466,7 +1415,6 @@ app.post('/v1/responses', async (c: Context) => {
 				let isPoeProvider = false;
 				let poeReasoningMode = false;
 				let poeReasoningBuffer = '';
-				let poeProcessedLength = 0;
 
 				for (let i = 0; i < maxAttempts; i++) {
 					if (abortController.signal.aborted) break;
@@ -1703,7 +1651,6 @@ app.post('/v1/responses', async (c: Context) => {
 
 												// Reset buffer to contain only processed reasoning content
 												poeReasoningBuffer = reasoningStart;
-												poeProcessedLength = reasoningStart.length;
 											}
 											continue;
 										}
@@ -2153,8 +2100,7 @@ app.post('/v1/responses', async (c: Context) => {
 											const blobStore = getStoreWithConfig('responses', headers);
 											await blobStore.setJSON(responseId, {
 												id: responseId,
-												messages: [...messages, { role: 'assistant', content: collectedText }],
-												assistant: collectedText
+												messages: [...messages, { role: 'assistant', content: collectedText }]
 											});
 										} catch { }
 									}
@@ -2299,8 +2245,7 @@ app.post('/v1/responses', async (c: Context) => {
 			if (store) {
 				try {
 					const blobStore = getStoreWithConfig('responses', headers);
-					// Append assistant reply to the stored message history using processed content
-					await blobStore.setJSON(responseId, { id: responseId, messages: [...messages, { role: 'assistant', content: content }], assistant: content });
+					await blobStore.setJSON(responseId, { id: responseId, messages: [...messages, { role: 'assistant', content: content }] });
 				} catch { }
 			}
 
@@ -2340,7 +2285,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	semanticScholarApiKey = c.req.header('x-semantic-scholar-api-key') || (isPasswordAuth ? process.env.SEMANTIC_SCHOLAR_API_KEY || null : null);
 
 	const body = await c.req.json();
-	const { model, messages = [], tools, stream, temperature, top_p, top_k, max_tokens, stop_sequences, seed, presence_penalty, frequency_penalty, tool_choice, reasoning_effort, thinking, extra_body, text_verbosity, service_tier } = body;
+	const { model, messages = [], tools, stream, temperature, top_p, top_k, max_tokens, stop_sequences, seed, presence_penalty, frequency_penalty, tool_choice, reasoning_effort, thinking, extra_body, text_verbosity, service_tier, store } = body;
 
 	// Get provider API keys from request headers
 	const headers: Record<string, string> = {}
@@ -2361,7 +2306,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	const processedMessages = await processMessages(contextMessages);
 
 	const providerOptionsHeader = c.req.header('x-provider-options');
-	const providerOptions = buildDefaultProviderOptions({ providerOptionsHeader: providerOptionsHeader ?? null, thinking, reasoning_effort, extra_body, text_verbosity, service_tier });
+	const providerOptions = buildDefaultProviderOptions({ providerOptionsHeader: providerOptionsHeader ?? null, thinking, reasoning_effort, extra_body, text_verbosity, service_tier, store });
 
 	// Special routing for custom modules
 	if (typeof model === 'string' && model.startsWith('image/')) {
@@ -2376,25 +2321,25 @@ app.post('/v1/chat/completions', async (c: Context) => {
 		const { handleAdminForChat } = await import('./modules/management.mts');
 		return await handleAdminForChat({ messages: processedMessages, headers: c.req.raw.headers as any, model, stream: !!stream, isPasswordAuth });
 	}
+	const now = Math.floor(Date.now() / 1000);
+	const chunkId = `chatcmpl-${now}`;
 
 	// If streaming, handle retries within a single ReadableStream so we can switch keys on error mid-stream
 	if (stream) {
 		const streamResponse = new ReadableStream({
 			async start(controller) {
-				const now = Math.floor(Date.now() / 1000);
-				const chunkId = `chatcmpl-${now}`;
 				const baseChunk = { id: chunkId, object: 'chat.completion.chunk', created: now, model } as any;
 				const maxAttempts = Math.min(providersToTry.length, MAX_ATTEMPTS);
 				let attemptsTried = 0;
 				let lastStreamError: any = null;
 				let accumulatedCitations: Array<{ type: string, url_citation: { url: string, title: string } }> = [];
+				let accumulatedText = '';
 
 				// Poe-specific reasoning detection state
 				let isPoeProvider = false;
 				let poeReasoningMode = false;
 				let poeReasoningBuffer = '';
 				let poeAccumulatedReasoning = '';
-				let poeProcessedLength = 0;
 
 				for (let i = 0; i < maxAttempts; i++) {
 					if (abortController.signal.aborted) break;
@@ -2472,7 +2417,6 @@ app.post('/v1/chat/completions', async (c: Context) => {
 
 												// Reset buffer to contain only processed reasoning content
 												poeReasoningBuffer = reasoningStart;
-												poeProcessedLength = reasoningStart.length;
 											}
 											break;
 										}
@@ -2521,6 +2465,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 
 												// Continue with post-reasoning content as regular text
 												if (postReasoningContent) {
+													accumulatedText += postReasoningContent;
 													chunk = { ...baseChunk, choices: [{ index: 0, delta: { content: postReasoningContent }, finish_reason: null }] };
 													controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
 												}
@@ -2546,6 +2491,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 									}
 
 									// Regular text handling (non-Poe or non-reasoning content)
+									accumulatedText += part.text;
 									chunk = { ...baseChunk, choices: [{ index: 0, delta: { content: part.text }, finish_reason: null }] };
 									controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
 									break;
@@ -2583,6 +2529,15 @@ app.post('/v1/chat/completions', async (c: Context) => {
 						}
 						// If finished streaming without throwing, end the SSE and return
 						controller.enqueue(TEXT_ENCODER.encode('data: [DONE]\n\n'));
+						if (store) {
+							try {
+								const blobStore = getStoreWithConfig('responses', headers);
+								await blobStore.setJSON(chunkId, {
+									id: chunkId,
+									messages: [...messages, { role: 'assistant', content: accumulatedText }]
+								});
+							} catch { }
+						}
 						controller.close();
 						return;
 					} catch (error: any) {
@@ -2643,8 +2598,61 @@ app.post('/v1/chat/completions', async (c: Context) => {
 			});
 
 			const result = await generateText(commonOptions);
-			const openAIResponse = await toOpenAIResponse(result, model, provider.name);
-			return c.json(openAIResponse);
+
+			const annotations = result.sources ? result.sources.map((source: any) => ({
+				type: (source.sourceType || 'url') + '_citation',
+				url_citation: {
+					url: source.url || '',
+					title: source.title || ''
+				}
+			})) : [];
+
+			let content = result.text || '';
+			let reasoningContent = result.reasoningText || '';
+
+			// Handle Poe-specific reasoning extraction for non-streaming
+			if (provider.name === 'poe' && content && !reasoningContent) {
+				const extracted = extractPoeReasoning(content);
+				content = extracted.content;
+				reasoningContent = extracted.reasoning;
+			}
+
+			const choices = content
+				? [
+					{
+						index: 0,
+						message: {
+							role: 'assistant',
+							content: content,
+							reasoning_content: reasoningContent || undefined,
+							tool_calls: result.toolCalls,
+							...(annotations.length > 0 ? { annotations } : {})
+						},
+						finish_reason: result.finishReason,
+					},
+				]
+				: [];
+
+			if (store) {
+				try {
+					const blobStore = getStoreWithConfig('responses', headers);
+					await blobStore.setJSON(chunkId, { id: chunkId, messages: [...messages, { role: 'assistant', content: content }] });
+				} catch { }
+			}
+
+			return c.json({
+				id: chunkId,
+				object: 'chat.completion',
+				created: now,
+				model: model,
+				choices: choices,
+				usage: {
+					prompt_tokens: result.usage.inputTokens,
+					completion_tokens: result.usage.outputTokens,
+					total_tokens: result.usage.totalTokens,
+				},
+			});
+
 		} catch (error: any) {
 			console.error(`Error with provider ${i + 1}/${providersToTry.length} (${provider.type}${provider.name ? ':' + provider.name : ''}):`, error.message || error);
 			lastError = error;

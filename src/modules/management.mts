@@ -184,8 +184,6 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
       let listOptions: any = {};
       if (prefix === 'all' || prefix === 'listall') {
         // List all items
-      } else if (prefix === 'vid') {
-        listOptions.prefix = 'vid';
       } else if (prefix) {
         listOptions.prefix = prefix;
       } else {
@@ -290,8 +288,6 @@ export async function handleAdminForResponses(args: { input: any; headers: Heade
       let listOptions: any = {};
       if (prefix === 'all' || prefix === 'listall') {
         // List all items
-      } else if (prefix === 'vid') {
-        listOptions.prefix = 'vid';
       } else if (prefix) {
         listOptions.prefix = prefix;
       } else {
