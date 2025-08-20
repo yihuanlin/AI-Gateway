@@ -79,8 +79,11 @@ function lastUserTextFromResponses(input: any): string {
   return '';
 }
 
-export async function handleAdminForChat(args: { messages: any[]; headers: Headers; model: string; stream?: boolean }): Promise<Response> {
-  const { messages, headers, model, stream = false } = args;
+export async function handleAdminForChat(args: { messages: any[]; headers: Headers; model: string; stream?: boolean; isPasswordAuth?: boolean }): Promise<Response> {
+  const { messages, headers, model, stream = false, isPasswordAuth } = args;
+  if (!isPasswordAuth) {
+    return new Response(JSON.stringify({ error: { message: 'Unauthorized' } }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+  }
   let text = lastUserTextFromMessages(messages).trim();
 
   const store = getStoreWithConfig('responses', headers);
@@ -224,8 +227,11 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
   }
 }
 
-export async function handleAdminForResponses(args: { input: any; headers: Headers; model: string; request_id: string; instructions?: any; store?: boolean; stream?: boolean }): Promise<Response> {
-  const { input, headers, model, request_id, instructions = null, store = false, stream = false } = args;
+export async function handleAdminForResponses(args: { input: any; headers: Headers; model: string; request_id: string; instructions?: any; store?: boolean; stream?: boolean, isPasswordAuth?: boolean }): Promise<Response> {
+  const { input, headers, model, request_id, instructions = null, store = false, stream = false, isPasswordAuth = false } = args;
+  if (!isPasswordAuth) {
+    return new Response(JSON.stringify({ error: { message: 'Unauthorized' } }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+  }
   let text = lastUserTextFromResponses(input).trim();
   const responseStore = getStoreWithConfig('responses', headers);
 

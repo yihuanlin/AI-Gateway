@@ -1363,7 +1363,7 @@ app.post('/v1/responses', async (c: Context) => {
 	}
 	if (model === 'admin/magic') {
 		const { handleAdminForResponses } = await import('./modules/management.mts');
-		return await handleAdminForResponses({ input, headers: c.req.raw.headers as any, model, request_id: responseId, instructions, store: false, stream: !!stream });
+		return await handleAdminForResponses({ input, headers: c.req.raw.headers as any, model, request_id: responseId, instructions, store: false, stream: !!stream, isPasswordAuth });
 	}
 
 	// Provider options (map differences)
@@ -2374,7 +2374,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	}
 	if (model === 'admin/magic') {
 		const { handleAdminForChat } = await import('./modules/management.mts');
-		return await handleAdminForChat({ messages: processedMessages, headers: c.req.raw.headers as any, model, stream: !!stream });
+		return await handleAdminForChat({ messages: processedMessages, headers: c.req.raw.headers as any, model, stream: !!stream, isPasswordAuth });
 	}
 
 	// If streaming, handle retries within a single ReadableStream so we can switch keys on error mid-stream
