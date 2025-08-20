@@ -1304,15 +1304,15 @@ app.post('/v1/responses', async (c: Context) => {
 	// Dynamic model routing to reduce cold starts
 	if (typeof model === 'string' && model.startsWith('image/')) {
 		const { handleImageForResponses } = await import('./modules/images.mts');
-		return await handleImageForResponses({ model, input, headers: c.req.raw.headers as any, stream: !!stream, temperature, top_p, request_id: responseId, store: false, authHeader: authHeader || null, isPasswordAuth });
+		return await handleImageForResponses({ model, input, headers: c.req.raw.headers as any, stream: !!stream, temperature, top_p, request_id: responseId, authHeader: authHeader || null, isPasswordAuth });
 	}
 	if (typeof model === 'string' && model.startsWith('video/')) {
 		const { handleVideoForResponses } = await import('./modules/videos.mts');
-		return await handleVideoForResponses({ model, input, headers: c.req.raw.headers as any, stream: !!stream, request_id: responseId, store, authHeader: authHeader || null, isPasswordAuth });
+		return await handleVideoForResponses({ model, input, headers: c.req.raw.headers as any, stream: !!stream, request_id: responseId, authHeader: authHeader || null, isPasswordAuth });
 	}
 	if (model === 'admin/magic') {
 		const { handleAdminForResponses } = await import('./modules/management.mts');
-		return await handleAdminForResponses({ input, headers: c.req.raw.headers as any, model, request_id: responseId, instructions, store: false, stream: !!stream, isPasswordAuth });
+		return await handleAdminForResponses({ input, headers: c.req.raw.headers as any, model, request_id: responseId, instructions, stream: !!stream, isPasswordAuth });
 	}
 
 	// Provider options (map differences)

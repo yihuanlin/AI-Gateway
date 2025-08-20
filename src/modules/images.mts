@@ -73,11 +73,10 @@ export async function handleImageForResponses(args: {
   temperature?: number;
   top_p?: number;
   request_id: string;
-  store: boolean;
   authHeader: string | null;
   isPasswordAuth: boolean;
 }): Promise<Response> {
-  const { model, input, headers, stream = false, temperature, top_p, request_id, store, authHeader, isPasswordAuth } = args;
+  const { model, input, headers, stream = false, temperature, top_p, request_id, authHeader, isPasswordAuth } = args;
   const now = Date.now();
   const last = lastUserPromptFromResponsesInput(input);
   let prompt = last.text || '';

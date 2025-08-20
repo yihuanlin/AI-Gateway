@@ -177,15 +177,15 @@ export async function handleVideoForChat(args: { model: string; messages: any[];
     return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
 }
 
-export async function handleVideoForResponses(args: { model: string; input: any; headers: Headers; stream?: boolean; request_id: string; store: boolean; authHeader: string | null; isPasswordAuth: boolean; }): Promise<Response> {
-    const { model, input, headers, stream = false, request_id, store, authHeader, isPasswordAuth } = args;
+export async function handleVideoForResponses(args: { model: string; input: any; headers: Headers; stream?: boolean; request_id: string; authHeader: string | null; isPasswordAuth: boolean; }): Promise<Response> {
+    const { model, input, headers, stream = false, request_id, authHeader, isPasswordAuth } = args;
     const now = Date.now();
     const last = lastUserPromptFromResponsesInput(input);
     let prompt = last.text || '';
 
     if (prompt.trim() === '/help') {
         const help = helpForVideo(model);
-        const base = responsesBase(now, request_id, model, input, null, store, undefined, undefined, undefined, undefined);
+        const base = responsesBase(now, request_id, model, input, null, true, undefined, undefined, undefined, undefined);
         if (stream) return streamResponsesSingleText(base, help, `msg_${now}`, true);
         const response = { ...base, status: 'completed', output: [{ type: 'message', id: `msg_${now}`, status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: help }] }], usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } };
         return new Response(JSON.stringify(response), { headers: { 'Content-Type': 'application/json' } });
@@ -196,13 +196,13 @@ export async function handleVideoForResponses(args: { model: string; input: any;
         return new Response(JSON.stringify({ error: waiter.error }), { status: waiter.status || 400, headers: { 'Content-Type': 'application/json' } });
     }
     if (stream) {
-        const baseObj = responsesBase(now, request_id, model, input, null, store, undefined, undefined, undefined, undefined);
+        const baseObj = responsesBase(now, request_id, model, input, null, true, undefined, undefined, undefined, undefined);
         return streamResponsesGenerationElapsed({ baseObj, requestId: request_id, waitForResult: waiter.wait, taskId: waiter.taskId, headers });
     }
     // Non-stream: wait for completion
     const res = await waiter.wait(new AbortController().signal);
     if (!res.ok) return new Response(JSON.stringify({ error: res.error }), { status: 500, headers: { 'Content-Type': 'application/json' } });
-    const baseObj = responsesBase(now, request_id, model, input, null, store, undefined, undefined, undefined, undefined);
+    const baseObj = responsesBase(now, request_id, model, input, null, true, undefined, undefined, undefined, undefined);
     // For Responses endpoint, usage format is already correct: { input_tokens, output_tokens, total_tokens }
     const response = { ...baseObj, status: 'completed', output: [{ type: 'message', id: 'msg_' + Date.now(), status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: res.text }] }], usage: res.usage ?? { input_tokens: 0, output_tokens: 0, total_tokens: 0 } };
     return new Response(JSON.stringify(response), { headers: { 'Content-Type': 'application/json' } });

@@ -4,14 +4,14 @@ import { responsesBase, streamChatSingleText, streamResponsesSingleText } from '
 function toConversationMarkdown(stored: any, key?: string): string {
   if (!stored) return 'No content found.';
 
-  // Check if this is a video entry (key starts with vid_)
-  if (key && key.startsWith('vid_')) {
+  // Check if this is a media entry (key starts with media_)
+  if (key && key.startsWith('media_')) {
     try {
-      const videoData = typeof stored === 'string' ? JSON.parse(stored) : stored;
-      const { id, downloadLink, generatedAt, text } = videoData;
-      let result = `**Video ID:** ${id}\n`;
-      if (generatedAt) result += `**Generated:** ${new Date(generatedAt).toLocaleString()}\n`;
-      if (downloadLink) result += `**Download:** [Video Link](${downloadLink})\n`;
+      const mediaData = typeof stored === 'string' ? JSON.parse(stored) : stored;
+      const { id, downloadLink, generatedAt, text } = mediaData;
+      let result = `**Media ID:** ${id}\n`;
+      if (generatedAt) result += `**Generated at:** ${new Date(generatedAt).toLocaleString()}\n`;
+      if (downloadLink) result += `**Download:** [Media Link](${downloadLink})\n`;
       if (text) result += `**Preview:** ${text}\n`;
       return result;
     } catch {
@@ -84,13 +84,13 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
   if (!isPasswordAuth) {
     return new Response(JSON.stringify({ error: { message: 'Unauthorized' } }), { status: 401, headers: { 'Content-Type': 'application/json' } });
   }
+  const now = Math.floor(Date.now() / 1000);
   let text = lastUserTextFromMessages(messages).trim();
 
   const store = getStoreWithConfig('responses', headers);
 
   if (/^\/help$/.test(text)) {
     const help = 'Commands: "list" (responses) | "list [prefix]" | "list all" | "delete all" | "delete [id]" | "[id]" to view.';
-    const now = Math.floor(Date.now() / 1000);
     if (stream) {
       return streamChatSingleText(model, help);
     }
@@ -122,7 +122,6 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
       }
       await Promise.all(blobs.map((b: any) => (store as any).delete(b.key)));
       const msg = `Deleted ${blobs.length} responses.`;
-      const now = Math.floor(Date.now() / 1000);
       const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: msg } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
       return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
     } catch (e: any) {
@@ -143,7 +142,6 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
       if (!existing) return new Response(JSON.stringify({ error: { message: 'Response not found' } }), { status: 404, headers: { 'Content-Type': 'application/json' } });
       await (store as any).delete(id);
       const msg = `Deleted ${id}.`;
-      const now = Math.floor(Date.now() / 1000);
       const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: msg } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
       return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
     } catch (e: any) {
@@ -156,34 +154,13 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
     const prefix = match?.[1]?.trim();
 
     try {
-      if (stream) {
-        let md = 'No items found.';
-        try {
-          let listOptions: any = {};
-          if (prefix === 'all' || prefix === 'listall') {
-            // List all items
-          } else if (prefix === 'vid') {
-            listOptions.prefix = 'vid';
-          } else if (prefix) {
-            listOptions.prefix = prefix;
-          } else {
-            listOptions.prefix = 'resp'; // Default to responses
-          }
-
-          const listResult: any = await (store as any).list(listOptions);
-          let blobs: any[] = [];
-          if (listResult && 'blobs' in listResult && Array.isArray(listResult.blobs)) blobs = listResult.blobs; else {
-            for await (const item of listResult) { if (item.blobs) blobs.push(...item.blobs); }
-          }
-          const ids = blobs.map((b: any) => b.key);
-          md = ids.length > 0 ? ids.map((id: string) => `- ${id}`).join('\n') : 'No items found.';
-        } catch { }
-        return streamChatSingleText(model, md);
-      }
-
       let listOptions: any = {};
-      if (prefix === 'all' || prefix === 'listall') {
+      if (prefix === 'all' || text === 'listall') {
         // List all items
+      } else if (prefix === 'm') {
+        listOptions.prefix = 'media';
+      } else if (prefix === 'c') {
+        listOptions.prefix = 'chatcmpl';
       } else if (prefix) {
         listOptions.prefix = prefix;
       } else {
@@ -197,7 +174,9 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
       }
       const ids = blobs.map((b: any) => b.key);
       const md = ids.length > 0 ? ids.map((id: string) => `- ${id}`).join('\n') : 'No items found.';
-      const now = Math.floor(Date.now() / 1000);
+      if (stream) {
+        return streamChatSingleText(model, md);
+      }
       const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: md } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
       return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
     } catch (e: any) {
@@ -217,7 +196,6 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
     const existing = await (store as any).get(id, { type: 'json' });
     if (!existing) return new Response(JSON.stringify({ error: { message: 'Item not found' } }), { status: 404, headers: { 'Content-Type': 'application/json' } });
     const md = toConversationMarkdown(existing, id);
-    const now = Math.floor(Date.now() / 1000);
     const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: md } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
     return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
   } catch (e: any) {
@@ -286,8 +264,12 @@ export async function handleAdminForResponses(args: { input: any; headers: Heade
 
     try {
       let listOptions: any = {};
-      if (prefix === 'all' || prefix === 'listall') {
+      if (prefix === 'all' || text === 'listall') {
         // List all items
+      } else if (prefix === 'm') {
+        listOptions.prefix = 'media';
+      } else if (prefix === 'c') {
+        listOptions.prefix = 'chatcmpl';
       } else if (prefix) {
         listOptions.prefix = prefix;
       } else {

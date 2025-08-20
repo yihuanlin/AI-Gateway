@@ -218,16 +218,16 @@ export function streamResponsesGenerationElapsed(params: {
             const { getStoreWithConfig } = await import('../shared/store.mts');
             const store = getStoreWithConfig('responses', headers);
             const timestamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
-            const vidKey = `vid_${timestamp}`;
-            const videoData = {
+            const mediaKey = `media_${timestamp}`;
+            const mediaData = {
               id: taskId,
               downloadLink: result.downloadLink,
               generatedAt: new Date().toISOString(),
               text: result.text
             };
-            await (store as any).set(vidKey, JSON.stringify(videoData));
+            await (store as any).set(mediaKey, JSON.stringify(mediaData));
           } catch (e) {
-            console.error('Failed to save video data to blob store:', e);
+            console.error('Failed to save media data to blob store:', e);
           }
         }
 
