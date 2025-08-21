@@ -1,4 +1,4 @@
-async function signRequest(method: string, url: string, headers: Record<string, string>, body: Buffer, accessKey: string, secretKey: string, region: string = 'auto') {
+async function signRequest(method: string, url: string, headers: Record<string, string>, body: Uint8Array, accessKey: string, secretKey: string, region: string = 'auto') {
     const urlObj = new URL(url);
     const pathname = urlObj.pathname;
 
@@ -18,7 +18,10 @@ async function signRequest(method: string, url: string, headers: Record<string, 
         .join(';');
 
     // Create payload hash
-    const payloadHash = await crypto.subtle.digest('SHA-256', body).then(buf =>
+    const bodyBuffer = new ArrayBuffer(body.length);
+    const bodyView = new Uint8Array(bodyBuffer);
+    bodyView.set(body);
+    const payloadHash = await crypto.subtle.digest('SHA-256', bodyBuffer).then(buf =>
         Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
     );
 
@@ -86,20 +89,29 @@ export async function uploadBase64ToBlob(base64Data: string, timestamp?: string)
 
     // Parse base64 data and determine content type
     let contentType = 'image/jpeg';
-    let imageBuffer: Buffer;
+    let imageBuffer: Uint8Array;
 
     if (base64Data.startsWith('data:')) {
         // Extract content type from data URL
         const matches = base64Data.match(/^data:([^;]+);base64,(.+)$/);
         if (matches && matches[2]) {
             contentType = matches[1] || 'image/jpeg';
-            imageBuffer = Buffer.from(matches[2], 'base64');
+            // Convert base64 to Uint8Array using browser-compatible method
+            const binaryString = atob(matches[2]);
+            imageBuffer = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                imageBuffer[i] = binaryString.charCodeAt(i);
+            }
         } else {
             throw new Error('Invalid base64 data URL format');
         }
     } else {
         // Plain base64 string, assume JPEG
-        imageBuffer = Buffer.from(base64Data, 'base64');
+        const binaryString = atob(base64Data);
+        imageBuffer = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+            imageBuffer[i] = binaryString.charCodeAt(i);
+        }
     }
 
     // Determine file extension from content type
@@ -120,10 +132,68 @@ export async function uploadBase64ToBlob(base64Data: string, timestamp?: string)
     // Sign the request
     const signedHeaders = await signRequest('PUT', url, headers, imageBuffer, process.env.S3_ACCESS_KEY, process.env.S3_SECRET_KEY);
 
+    // Create a new ArrayBuffer for edge function compatibility
+    const bodyBuffer = new ArrayBuffer(imageBuffer.length);
+    const bodyView = new Uint8Array(bodyBuffer);
+    bodyView.set(imageBuffer);
+
     const response = await fetch(url, {
         method: 'PUT',
         headers: signedHeaders,
-        body: imageBuffer
+        body: bodyBuffer
+    });
+
+    if (!response.ok) {
+        throw new Error(`Failed to upload to bucket: ${response.status} ${response.statusText}`);
+    }
+
+    // Return the public URL
+    const publicUrl = process.env.S3_PUBLIC_URL.endsWith('/')
+        ? process.env.S3_PUBLIC_URL + filename
+        : process.env.S3_PUBLIC_URL + '/' + filename;
+
+    return publicUrl;
+}
+
+export async function uploadBlobToStorage(blob: Blob, timestamp?: string): Promise<string> {
+    if (!process.env.S3_API || !process.env.S3_PUBLIC_URL || !process.env.S3_ACCESS_KEY || !process.env.S3_SECRET_KEY) {
+        throw new Error('S3_API, S3_PUBLIC_URL, S3_ACCESS_KEY, and S3_SECRET_KEY environment variables are required');
+    }
+
+    // Get content type from blob
+    const contentType = blob.type || 'application/octet-stream';
+
+    // Determine file extension from content type
+    let extension = 'bin';
+    if (contentType.startsWith('image/')) {
+        extension = contentType.split('/')[1] || 'jpg';
+    } else if (contentType.startsWith('video/')) {
+        extension = contentType.split('/')[1] || 'mp4';
+    }
+
+    const fileTimestamp = timestamp || new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
+    const filename = `${fileTimestamp}.${extension}`;
+
+    const url = process.env.S3_API + '/' + filename;
+
+    // Convert blob to Uint8Array for signing
+    const arrayBuffer = await blob.arrayBuffer();
+    const uint8Array = new Uint8Array(arrayBuffer);
+
+    // Prepare headers
+    const headers: Record<string, string> = {
+        'Content-Type': contentType,
+        'Content-Length': blob.size.toString(),
+        'Host': new URL(process.env.S3_API).hostname
+    };
+
+    // Sign the request
+    const signedHeaders = await signRequest('PUT', url, headers, uint8Array, process.env.S3_ACCESS_KEY, process.env.S3_SECRET_KEY);
+
+    const response = await fetch(url, {
+        method: 'PUT',
+        headers: signedHeaders,
+        body: arrayBuffer
     });
 
     if (!response.ok) {

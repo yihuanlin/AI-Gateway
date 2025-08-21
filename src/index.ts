@@ -2692,6 +2692,28 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	return c.json(errorPayload, statusCode);
 })
 
+const CUSTOM_MODEL_LISTS = {
+	poixe: [
+		{ id: 'gpt-5:free', name: 'GPT-5 4K/2K' },
+		{ id: 'gpt-5-mini:free', name: 'GPT-5 Mini 4K' },
+		{ id: 'grok-3-mini:free', name: 'Grok 3 Mini 4K' },
+		{ id: 'grok-4:free', name: 'Grok 4 4K/2K' },
+		{ id: 'claude-sonnet-4-20250514:free', name: 'Claude Sonnet 4 4K/2K' },
+		{ id: 'doubao-seed-1-6-thinking-250615:free', name: 'Doubao Seed 1.6 Thinking 4K/2K' },
+	],
+	doubao: [
+		{ id: 'doubao-seed-1-6-flash-250715', name: 'Doubao Seed 1.6 Flash' },
+		{ id: 'doubao-seed-1-6-thinking-250715', name: 'Doubao Seed 1.6 Thinking' },
+		{ id: 'deepseek-r1-250528', name: 'DeepSeek R1' },
+		{ id: 'deepseek-v3-250324', name: 'DeepSeek V3' },
+		{ id: 'kimi-k2-250711', name: 'Kimi K2' },
+	],
+	cohere: [
+		{ id: 'command-a-03-2025', name: 'Command A' },
+		{ id: 'command-a-vision-07-2025', name: 'Cohere A Vision' },
+	],
+};
+
 function isSupportedProvider(name: string): name is keyof typeof SUPPORTED_PROVIDERS {
 	return Object.prototype.hasOwnProperty.call(SUPPORTED_PROVIDERS, name);
 }
@@ -2712,8 +2734,6 @@ function shouldIncludeModel(model: any, providerName?: string) {
 	if (!providerName && ['mistral', 'alibaba', 'cohere', 'deepseek', 'moonshotai', 'morph', 'zai'].some((e) => modelId.includes(e))) return false;
 	return true;
 }
-
-// Using shared getProviderKeys
 
 async function fetchProviderModels(providerName: string, apiKey: string) {
 	if (!isSupportedProvider(providerName)) {
@@ -2799,20 +2819,43 @@ async function getModelsResponse(apiKey: string, providerKeys: Record<string, st
 		const providerApiKey = keys[randomIndex];
 		const providerPromise = (async () => {
 			try {
-				if (!providerApiKey) throw new Error(`No valid API key found for provider: ${providerName}`);
+				if (!providerApiKey) {
+					throw new Error(`No valid API key found for provider: ${providerName}`);
+				}
+
 				let formattedModels: any[] = [];
-				const providerModels = await fetchProviderModels(providerName, providerApiKey);
-				formattedModels = (providerModels as any).data?.map((model: any) => ({
-					id: `${providerName}/${String(model.id).replace('models/', '')}`,
-					name: `${model.name?.replace(' (free)', '') || parseModelDisplayName(model.id)}`,
-					description: model.description || model.summary || '',
-					object: 'model',
-					created: model.created || 0,
-					owned_by: model.owned_by || providerName,
-				}))?.filter((m: any) => shouldIncludeModel(m, providerName)) || [];
+
+				// Check if this provider has a custom model list (doesn't support /models endpoint)
+				if (CUSTOM_MODEL_LISTS[providerName as keyof typeof CUSTOM_MODEL_LISTS]) {
+					const customModels = CUSTOM_MODEL_LISTS[providerName as keyof typeof CUSTOM_MODEL_LISTS];
+					formattedModels = customModels.map(model => ({
+						id: `${providerName}/${model.id}`,
+						name: model.name,
+						object: 'model',
+						created: 0,
+						owned_by: providerName,
+					})).filter(model => shouldIncludeModel(model, providerName));
+				} else {
+					// Use regular API call for providers that support /models endpoint
+					const providerModels = await fetchProviderModels(providerName, providerApiKey);
+					formattedModels = (providerModels as any).data?.map((model: any) => ({
+						id: `${providerName}/${model.id.replace('models/', '')}`,
+						name: `${model.name?.replace(' (free)', '') || parseModelDisplayName(model.id)}`,
+						description: model.description || model.summary || '',
+						object: 'model',
+						created: model.created || 0,
+						owned_by: model.owned_by || providerName,
+					})).filter((model: any) => {
+						if (!shouldIncludeModel(model, providerName)) {
+							return false;
+						}
+						return true;
+					}) || [];
+				}
 				return formattedModels;
-			} catch (e) {
-				return [] as any[];
+			} catch (error: any) {
+				console.error(`Error with ${providerName} API key:`, error);
+				return [];
 			}
 		})();
 		fetchPromises.push(providerPromise);
@@ -2822,18 +2865,22 @@ async function getModelsResponse(apiKey: string, providerKeys: Record<string, st
 	const allModels: any[] = [];
 	results.forEach((r) => { if (r.status === 'fulfilled' && r.value.length > 0) allModels.push(...r.value); });
 
-	// Inject curated image models (always available)
 	const curated = [
+		{ id: 'admin/magic', name: 'Responses Management', object: 'model', created: 0, owned_by: 'admin' },
 		{ id: 'image/doubao-vision', name: 'Seed Image', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'image/MusePublic/14_ckpt_SD_XL', name: 'Anything XL', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/MusePublic/489_ckpt_FLUX_1', name: 'FLUX.1 [dev]', object: 'model', created: 0, owned_by: 'modelscope' },
-		{ id: 'image/black-forest-labs/FLUX.1-Krea-dev', name: 'FLUX.1 Krea [dev]', object: 'model', created: 0, owned_by: 'modelscope' },
-		{ id: 'image/MusePublic/FLUX.1-Kontext-Dev', name: 'FLUX.1 Kontext [dev]', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/MusePublic/flux-high-res', name: 'FLUX.1 [dev] High-Res', object: 'model', created: 0, owned_by: 'modelscope' },
+		{ id: 'image/black-forest-labs/FLUX.1-Krea-dev', name: 'FLUX.1 Krea [dev]', object: 'model', created: 0, owned_by: 'modelscope' },
+		{ id: 'image/black-forest-labs/FLUX.1-Kontext-dev-vision', name: 'FLUX.1 Kontext [dev]', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'image/Qwen/Qwen-Image', name: 'Qwen-Image', object: 'model', created: 0, owned_by: 'modelscope' },
-		{ id: 'admin/magic', name: 'Responses Management', object: 'model', created: 0, owned_by: 'admin' },
+		{ id: 'image/Qwen/Qwen-Image-Edit-vision', name: 'Qwen-Image-Edit', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'video/doubao-seedance-pro-vision', name: 'Seedance 1.0 Pro', object: 'model', created: 0, owned_by: 'doubao' },
-		{ id: 'video/doubao-seedance-lite-vision', name: 'Seedance 1.0 Lite', object: 'model', created: 0, owned_by: 'doubao' }
+		{ id: 'video/doubao-seedance-lite-vision', name: 'Seedance 1.0 Lite', object: 'model', created: 0, owned_by: 'doubao' },
+		{ id: 'video/Wan-AI/Qwen-Wan2.2-I2V-A14B-vision', name: 'Qwen Wan2.2 I2V', object: 'model', created: 0, owned_by: 'huggingface' },
+		{ id: 'video/Wan-AI/Qwen-Wan2.2-T2V-A14B', name: 'Qwen Wan2.2 T2V', object: 'model', created: 0, owned_by: 'huggingface' },
+		{ id: 'video/Wan-AI/Qwen-Wan2.2-TI2V-5B', name: 'Qwen Wan2.2 T2V 5B', object: 'model', created: 0, owned_by: 'huggingface' },
+		{ id: 'video/Lightricks/LTX-Video-vision', name: 'LTX Video TI2V', object: 'model', created: 0, owned_by: 'huggingface' },
 	];
 	const existingIds = new Set(allModels.map((m) => m.id));
 	for (const m of curated) if (!existingIds.has(m.id)) allModels.push(m);

@@ -11,7 +11,11 @@ function ensureRatioInPrompt(prompt: string): string {
 }
 
 function helpForVideo(model: string) {
-    return 'Flags: --rs/--resolution 480p|720p|1080p, --dur/--duration 3-12, --seed -1|[0,2^32-1], --cf/--camerafixed true|false, --rt/--ratio 16:9 (default of t2v), 4:3, 1:1, 3:4, 9:16, 21:9, adaptive (default of i2v). Special: /repeat (use same image as first and last frame), /upload (upload images to bucket).';
+    if (model.includes('doubao')) {
+        return '**Doubao** Video models (supports both t2v and i2v. To use i2v, include an image in your message).\nFlags: `--rs/--resolution 480p|720p|1080p`, `--dur/--duration 3-12`, `--seed -1|[0,2^32-1]`, `--cf/--camerafixed true|false`, `--rt/--ratio 16:9` (default of t2v), 4:3, 1:1, 3:4, 9:16, 21:9, adaptive (default of i2v). Special: `/repeat` (use same image as first and last frame), `/upload` upload input images to storage.';
+    } else {
+        return '**Hugging Face** Video models (supports both t2v and i2v. To use i2v, include an image in your message).\nFlags: `--frames N` (number of frames), `--guidance F` (guidance scale), `--steps N` (inference steps), `--seed N` (random seed).\nOutput video always uploaded if S3 bucket is configured.';
+    }
 }
 
 async function buildVideoGenerationWaiter(params: {
@@ -27,7 +31,143 @@ async function buildVideoGenerationWaiter(params: {
     const imgs = hasImageInMessages(contentParts || []);
     let prompt = rawPrompt || '';
 
-    // only Doubao Seedance supported in current repo
+    // Check for non-Doubao models - route to Hugging Face
+    if (!model.includes('doubao')) {
+        let apiKey: string | null = null;
+        try {
+            const pk = await getProviderKeys(headers as any, authHeader, isPasswordAuth);
+            const keys = pk['huggingface'] || [];
+            if (keys.length > 0) { const idx = Math.floor(Math.random() * keys.length); apiKey = keys[idx] || null; }
+        } catch { }
+        if (!apiKey) return { ok: false, error: { code: 'no_api_key', message: 'Missing Hugging Face API key' }, status: 401 };
+        const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
+        const taskId = `hf_${timestamp}`;
+
+        // Check if we have images for i2v
+        const hasImages = imgs.has || links.length > 0;
+
+        const wait = async (_signal: AbortSignal) => {
+            try {
+                const { InferenceClient } = await import('@huggingface/inference');
+                const client = new InferenceClient(apiKey);
+
+                // Extract image data if available
+                let imageData: Buffer | null = null;
+                let imageType = 'image/jpeg'; // default
+                if (hasImages) {
+                    const imageUrl = imgs.first || links[0] || '';
+                    if (imageUrl.startsWith('data:')) {
+                        // Base64 image - extract type from header
+                        const base64Match = imageUrl.match(/^data:([^;]+);base64,(.+)$/);
+                        if (base64Match && base64Match[2]) {
+                            imageType = base64Match[1] || 'image/jpeg'; // e.g., 'image/png', 'image/jpeg'
+                            imageData = Buffer.from(base64Match[2], 'base64');
+                        }
+                    } else {
+                        // Download from URL
+                        try {
+                            const response = await fetch(imageUrl);
+                            if (response.ok) {
+                                imageData = Buffer.from(await response.arrayBuffer());
+                                // Try to determine type from Content-Type header
+                                const contentType = response.headers.get('content-type');
+                                if (contentType && contentType.startsWith('image/')) {
+                                    imageType = contentType;
+                                }
+                            }
+                        } catch (e) {
+                            console.warn('Failed to download input image:', e);
+                        }
+                    }
+                }
+
+                // Prepare parameters
+                const parameters: any = {};
+
+                if (typeof prompt === 'string' && prompt.includes('--frames')) {
+                    const frameMatch = prompt.match(/--frames\s+(\d+)/);
+                    if (frameMatch && frameMatch[1]) {
+                        parameters.num_frames = parseInt(frameMatch[1]);
+                        prompt = prompt.replace(/--frames\s+\d+/, '').trim();
+                    }
+                }
+
+                if (typeof prompt === 'string' && prompt.includes('--guidance')) {
+                    const guidanceMatch = prompt.match(/--guidance\s+([\d.]+)/);
+                    if (guidanceMatch && guidanceMatch[1]) {
+                        parameters.guidance_scale = parseFloat(guidanceMatch[1]);
+                        prompt = prompt.replace(/--guidance\s+[\d.]+/, '').trim();
+                    }
+                }
+
+                if (typeof prompt === 'string' && prompt.includes('--steps')) {
+                    const stepsMatch = prompt.match(/--steps\s+(\d+)/);
+                    if (stepsMatch && stepsMatch[1]) {
+                        parameters.num_inference_steps = parseInt(stepsMatch[1]);
+                        prompt = prompt.replace(/--steps\s+\d+/, '').trim();
+                    }
+                }
+
+                if (typeof prompt === 'string' && prompt.includes('--seed')) {
+                    const seedMatch = prompt.match(/--seed\s+(\d+)/);
+                    if (seedMatch && seedMatch[1]) {
+                        parameters.seed = parseInt(seedMatch[1]);
+                        prompt = prompt.replace(/--seed\s+\d+/, '').trim();
+                    }
+                }
+                const modelId = model.replace('video/', '').replace(/-vision$/, '').replace(/Qwen-/, '');
+                // Use imageToVideo if we have image data, otherwise textToVideo
+                let result: Blob;
+                if (imageData) {
+                    result = await client.imageToVideo({
+                        provider: "auto",
+                        inputs: new Blob([new Uint8Array(imageData)], { type: imageType }),
+                        model: modelId,
+                        parameters: { ...parameters, prompt }
+                    });
+                } else {
+                    result = await client.textToVideo({
+                        provider: "auto",
+                        model: modelId,
+                        inputs: prompt,
+                        parameters
+                    });
+                }
+
+                // Upload to S3 bucket if configured (videos are too large for base64 responses)
+                let finalUrl: string;
+                if (process.env.S3_API && process.env.S3_PUBLIC_URL && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
+                    try {
+                        const { uploadBlobToStorage } = await import('../shared/bucket.mts');
+                        const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
+                        finalUrl = await uploadBlobToStorage(result, `vid_${timestamp}`);
+                    } catch (blobError) {
+                        console.warn('Failed to upload video to bucket, using base64:', blobError);
+                        // Fallback to base64 conversion
+                        const arrayBuffer = await result.arrayBuffer();
+                        const buffer = Buffer.from(arrayBuffer);
+                        const base64 = buffer.toString('base64');
+                        finalUrl = `data:video/mp4;base64,${base64}`;
+                    }
+                } else {
+                    // Convert to base64 URL when not uploading to storage
+                    const arrayBuffer = await result.arrayBuffer();
+                    const buffer = Buffer.from(arrayBuffer);
+                    const base64 = buffer.toString('base64');
+                    finalUrl = `data:video/mp4;base64,${base64}`;
+                }
+
+                const usage = { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
+                return { ok: true, text: toMarkdownVideo(finalUrl), usage, downloadLink: finalUrl, taskId } as const;
+            } catch (e: any) {
+                return { ok: false, error: { code: 'network_error', message: e?.message || 'Hugging Face video API failed' } } as const;
+            }
+        };
+
+        return { ok: true, wait, taskId };
+    }
+
+    // Doubao Seedance support
     let apiKey: string | null = null;
     try {
         const pk = await getProviderKeys(headers as any, authHeader, isPasswordAuth);

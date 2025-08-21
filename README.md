@@ -212,16 +212,18 @@ curl -X POST "$HOSTNAME/v1/models" \
 - **Specialised**: Claude, Mistral, Cohere, GitHub Copilot
 
 ### Image Models  
-- **Doubao (ByteDance)**: `image/doubao` - High-quality image generation
-- **ModelScope**: `image/black-forest-labs/FLUX.1-dev`, `image/Qwen/Qwen-Image`, `image/doubao-vision` etc.
-- **Flags**: `--size WxH`, `--ratio A:B`, `--guidance N`, `--steps N`, `--seed N`
+- **Doubao (ByteDance)**: `image/doubao` - i2i and t2i.
+- **Hugging Face**: `image/Qwen/Qwen-Image-Edit-vision`, `image/black-forest-labs/FLUX.1-Kontext-dev-vision` etc. (Add a `-vision` suffix to any Hugging Face Inference model, i2i only)
+- **ModelScope**: `image/black-forest-labs/FLUX.1-dev`, `image/Qwen/Qwen-Image` etc. (Any ModelScope model, t2i only)
+- **Flags**: `--size WxH`, `--ratio A:B`, `--guidance N`, `--steps N`, `--seed N` etc. (Prompt /help for help)
 
 ### Video Models
-- **Doubao Seedance**: `video/doubao-seedance`, `video/doubao-seedance-pro`  
-- **Flags**: `--ratio 16:9`, `--duration 3-12`, `--resolution 720p`
+- **Doubao Seedance**: `video/doubao-seedance`, `video/doubao-seedance-pro` (t2v and i2v)
+- **Hugging Face**: `video/Wan-AI/Qwen-Wan2.2-I2V-A14B-vision` etc. (Any Hugging Face Inference model, t2v and i2v)
+- **Flags**: `--ratio 16:9`, `--duration 3-12`, `--resolution 720p` etc. (Prompt /help for help)
 
 ### Admin Models
-- **System Management**: `admin/magic`
+- **System Management**: `admin/magic` (Prompt /help for help)
 
 ## 📝 Response Management Examples
 
@@ -277,7 +279,7 @@ TAVILY_API_KEY=tvly-dev-...
 PYTHON_API_KEY=your-python-key
 PYTHON_URL=https://your-python-executor.com
 
-# Optional S3 bucket to upload images for Doubao i2i and i2v (base64 POST extremely slow outside of China)
+# Optional S3 bucket to upload images for Doubao i2i and i2v inputs (triggered by /upload in prompt) and Hugging Face i2i and i2v outputs (always enabled if set)
 S3_ACCESS_KEY=your-s3-access-key
 S3_SECRET_KEY=your-s3-secret-key
 S3_PUBLIC_URL=https://your-s3-public-url.com
@@ -305,6 +307,7 @@ INFINI_API_KEY=sk-...
 POIXE_API_KEY=sk-...
 COPILOT_API_KEY=ghu_...
 POE_API_KEY=your-poe-api-key
+HUGGINGFACE_API_KEY=hf_...
 ```
 
 ## 🔌 Supported Providers
@@ -314,8 +317,9 @@ POE_API_KEY=your-poe-api-key
 - **Direct Providers**: Google, OpenAI, Groq, Cerebras, etc.
 
 ### Multimedia Generation  
-- **Doubao (ByteDance)**: Image and video generation
-- **ModelScope**: FLUX, Qwen-Image, and community models
+- **Doubao (ByteDance)**: i2i, t2i, i2v, and t2v
+- **ModelScope**: Community models for t2i
+- **Hugging Face**: Community models for i2i, t2v, and i2v
 
 ### Tools & Extensions
 - **Python Execution**: Code interpreter

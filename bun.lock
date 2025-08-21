@@ -9,6 +9,7 @@
         "@ai-sdk/groq": "^2.0.10",
         "@ai-sdk/openai": "^2.0.15",
         "@ai-sdk/openai-compatible": "^1.0.7",
+        "@huggingface/inference": "^4.7.1",
         "@netlify/blobs": "^10.0.8",
         "ai": "^5.0.15",
         "hono": "^4.9.2",
@@ -38,6 +39,12 @@
     "@envelop/instrumentation": ["@envelop/instrumentation@1.0.0", "", { "dependencies": { "@whatwg-node/promise-helpers": "^1.2.1", "tslib": "^2.5.0" } }, "sha512-cxgkB66RQB95H3X27jlnxCRNTmPuSTgmBAq6/4n2Dtv4hsk4yz8FadA1ggmd0uZzvKqWD6CR+WFgTjhDqg7eyw=="],
 
     "@fastify/busboy": ["@fastify/busboy@3.2.0", "", {}, "sha512-m9FVDXU3GT2ITSe0UaMA5rU3QkfC/UXtCU8y0gSN/GugTqtVldOBWIB5V6V3sbmenVZUIpU6f+mPEO2+m5iTaA=="],
+
+    "@huggingface/inference": ["@huggingface/inference@4.7.1", "", { "dependencies": { "@huggingface/jinja": "^0.5.1", "@huggingface/tasks": "^0.19.35" } }, "sha512-gXrMocGDsE6kUZPEj82c3O+/OKnIfbHvg9rYjGA6svbWrYVmHCIAdCrrgCwNl2v5GELfPJrrfIv0bvzCTfa64A=="],
+
+    "@huggingface/jinja": ["@huggingface/jinja@0.5.1", "", {}, "sha512-yUZLld4lrM9iFxHCwFQ7D1HW2MWMwSbeB7WzWqFYDWK+rEb+WldkLdAJxUPOmgICMHZLzZGVcVjFh3w/YGubng=="],
+
+    "@huggingface/tasks": ["@huggingface/tasks@0.19.36", "", {}, "sha512-oBXkEndtoLScX4aljFM1mXlFvAI6kYzCjhLV+2/ekyU1vn4Ypl2csDuAI6PRLGWGW8g0q9uGtBtFHfS4uMiYPQ=="],
 
     "@netlify/blobs": ["@netlify/blobs@10.0.8", "", { "dependencies": { "@netlify/dev-utils": "4.1.1", "@netlify/runtime-utils": "2.1.0" } }, "sha512-zvMCtMfek7f+ky8jB3mR5zQE4ai94/SisOvQZJ+7kOfKn7poY027WnG4ngcogCQmOMQLSScvzGheojN5HjenCQ=="],
 

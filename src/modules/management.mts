@@ -90,7 +90,7 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
   const store = getStoreWithConfig('responses', headers);
 
   if (/^\/help$/.test(text)) {
-    const help = 'Commands: "list" (responses) | "list [prefix]" | "list all" | "delete all" | "delete [id]" | "[id]" to view.';
+    const help = 'Commands: `list` (responses) | `list [prefix]` | `ls` (== `list all`) | `delete all` | `delete [id]` | `[id]` to view.';
     if (stream) {
       return streamChatSingleText(model, help);
     }
@@ -98,7 +98,7 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
     return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
   }
 
-  if (/^delete\s+all$|^deleteall$/i.test(text)) {
+  if (/^delete\s+all$|^deleteall$|^rm\s+-rf$/i.test(text)) {
     // Delete all
     try {
       if (stream) {
@@ -129,7 +129,7 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
     }
   }
 
-  if (/^delete\s+\S+$/i.test(text)) {
+  if (/^(?:delete|rm)\s+\S+$/i.test(text)) {
     const id = text.split(/\s+/)[1];
     try {
       if (stream) {
@@ -149,13 +149,13 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
     }
   }
 
-  if (/^list(?:\s+(.+))?$/i.test(text)) {
-    const match = text.match(/^list(?:\s+(.+))?$/i);
+  if (/^(?:list|ls)(?:\s+(.+))?$/i.test(text)) {
+    const match = text.match(/^(?:list|ls)(?:\s+(.+))?$/i);
     const prefix = match?.[1]?.trim();
 
     try {
       let listOptions: any = {};
-      if (prefix === 'all' || text === 'listall') {
+      if (prefix === 'all' || text === 'ls') {
         // List all items
       } else if (prefix === 'm') {
         listOptions.prefix = 'media';
@@ -223,12 +223,12 @@ export async function handleAdminForResponses(args: { input: any; headers: Heade
   const streamTextOnce = (messageText: string) => streamResponsesSingleText(baseObj, messageText, textItemId, true);
 
   if (/^\/help$/.test(text)) {
-    const msg = 'Commands: "list" (responses) | "list [prefix]" | "list all" | "delete all" | "delete [id]" | "[id]" to view.';
+    const msg = 'Commands: `list` (responses) | `list [prefix]` | `ls` (== `list all`) | `delete all` | `delete [id]` | `[id]` to view.';
     if (!stream) return new Response(JSON.stringify(buildCompleted(msg)), { headers: { 'Content-Type': 'application/json' } });
     return streamTextOnce(msg);
   }
 
-  if (/^delete\s+all$|^deleteall$/i.test(text)) {
+  if (/^delete\s+all$|^deleteall$|^rm\s+-rf$/i.test(text)) {
     try {
       const listResult: any = await (responseStore as any).list();
       let blobs: any[] = [];
@@ -244,7 +244,7 @@ export async function handleAdminForResponses(args: { input: any; headers: Heade
     }
   }
 
-  if (/^delete\s+\S+$/i.test(text)) {
+  if (/^(?:delete|rm)\s+\S+$/i.test(text)) {
     const id = text.split(/\s+/)[1];
     try {
       const existing = await (responseStore as any).get(id, { type: 'json' });
@@ -258,13 +258,13 @@ export async function handleAdminForResponses(args: { input: any; headers: Heade
     }
   }
 
-  if (/^list(?:\s+(.+))?$/i.test(text)) {
-    const match = text.match(/^list(?:\s+(.+))?$/i);
+  if (/^(?:list|ls)(?:\s+(.+))?$/i.test(text)) {
+    const match = text.match(/^(?:list|ls)(?:\s+(.+))?$/i);
     const prefix = match?.[1]?.trim();
 
     try {
       let listOptions: any = {};
-      if (prefix === 'all' || text === 'listall') {
+      if (prefix === 'all' || text === 'ls') {
         // List all items
       } else if (prefix === 'm') {
         listOptions.prefix = 'media';

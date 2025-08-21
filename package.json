@@ -17,6 +17,7 @@
     "@ai-sdk/groq": "^2.0.10",
     "@ai-sdk/openai": "^2.0.15",
     "@ai-sdk/openai-compatible": "^1.0.7",
+    "@huggingface/inference": "^4.7.1",
     "@netlify/blobs": "^10.0.8",
     "ai": "^5.0.15",
     "hono": "^4.9.2",

@@ -3,9 +3,25 @@ import { SUPPORTED_PROVIDERS, getProviderKeys } from '../shared/providers.mts';
 
 export type ImageResult = {
   usage: { input_tokens: number; output_tokens: number; total_tokens: number } | null;
-  content: string; // markdown image
-  data: any; // provider raw result
+  data: any;
 };
+
+function toMarkdownImage(url: string): string {
+  return `![Generated Image](${url})`;
+}
+
+function getHelpForModel(model: string) {
+  if (model.startsWith('image/doubao')) {
+    return 'Use **Doubao** t2i model *doubao-seedream-3-0-t2i-250415* or i2i *doubao-seededit-3-0-i2i-250628* (if has an input image).\nFlags: `--format url|b64_json`, `--size {WxH}|--ratio {e.g., 16:9}`, `--seed N`, `--guidance F`.\n`/upload` upload input images to storage .';
+  }
+  if (model.endsWith('-vision') && !model.includes('doubao')) {
+    return '**Hugging Face** Image-to-Image models (requires input image).\nFlags: `--guidance F`, `--negative_prompt "text"`, `--steps N (1-100)"`, `--size WxH` or `--ratio A:B`.\n`/upload` upload input images to storage (output images are always uploaded if S3 bucket is configured).\nSpecial prompt trigger for Kontext models:\n`Make a shot in the same scene of...`\n`Remove ...`\n`redepthkontext ...`\n`Place it`\n`Fuse this image into background`\n`Convert this image into pencil drawing art style`\n`Turn this image into the Clay_Toy style.`';
+  }
+  if (model.startsWith('image/')) {
+    return '**ModelScope** Text-to-Image models.\nFlags: `--negative_prompt "text"`, `--steps N (1-100)`, `--guidance F` (or derived from `top_p`/`temperature`), `--size WxH` or `--ratio A:B`, `--seed N`.\nFLUX.1 uses support any ratio. For Qwen models, supported ratios: 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3.\n`/upload` upload input images to storage.\nIf prompt contains `miratsu style` or `chibi` with Qwen/Qwen-Image, switches to **MTWLDFC/miratsu_style**.';
+  }
+  return 'Unknown image model';
+}
 
 export async function handleImageForChat(args: {
   model: string;
@@ -140,11 +156,6 @@ function extractFlags(prompt: string) {
   return { cleaned, flags };
 }
 
-function toMarkdownImage(urlOrData: string): string {
-  const isData = urlOrData.startsWith('data:image/');
-  return `![Generated Image](${isData ? urlOrData : urlOrData})`;
-}
-
 function guidanceFromTopP(topP?: number, temperature?: number): number | undefined {
   if (typeof topP === 'number') {
     const t = typeof temperature === 'number' ? temperature : 1;
@@ -155,14 +166,56 @@ function guidanceFromTopP(topP?: number, temperature?: number): number | undefin
   return undefined;
 }
 
-function getHelpForModel(model: string) {
-  if (model.startsWith('image/doubao')) {
-    return 'Use Doubao: t2i model doubao-seedream-3-0-t2i-250415 or i2i doubao-seededit-3-0-i2i-250628. Flags: --format url|b64_json, --size {WxH}|--ratio {e.g., 16:9}, --seed N, --guidance F. i2i: /upload (upload images to bucket).';
+function ratioToSize(r: string, model: string): string | null {
+  const ratio = String(r).trim();
+
+  // Parse ratio
+  const parts = ratio.split(':').map(n => parseFloat(n));
+  if (parts.length !== 2 || parts.some(isNaN)) return null;
+  const [w, h] = parts;
+  if (w === undefined || h === undefined || h === 0) return null;
+  const aspectRatio = w / h;
+
+  if (/qwen/i.test(model)) {
+    // Use preconfigured values for Qwen
+    const qwenMap: Record<string, [number, number]> = {
+      '1:1': [1328, 1328], '16:9': [1664, 928], '9:16': [928, 1664],
+      '4:3': [1472, 1140], '3:4': [1140, 1472], '3:2': [1584, 1056], '2:3': [1056, 1584],
+    };
+    const v = qwenMap[ratio];
+    return v ? `${v[0]}x${v[1]}` : null;
+  } else if (/flux/i.test(model)) {
+    // FLUX: base 1440x1440, adapt to ratio
+    const base = 1440;
+    const area = base * base;
+    const width = Math.round(Math.sqrt(area * aspectRatio) / 2) * 2;
+    const height = Math.round(area / width / 2) * 2;
+    return `${width}x${height}`;
+  } else if (/(diffusion|high-res)/i.test(model)) {
+    // Diffusion/high-res: base 2048x2048, adapt to ratio
+    const base = 2048;
+    const area = base * base;
+    const width = Math.round(Math.sqrt(area * aspectRatio) / 2) * 2;
+    const height = Math.round(area / width / 2) * 2;
+    return `${width}x${height}`;
   }
-  if (model.startsWith('image/')) {
-    return 'ModelScope image models. Flags: --negative_prompt "text", --steps N (1-100), --guidance F (or derived from top_p/temperature), --size WxH or --ratio A:B, --seed N. FLUX.1 uses 1024x1024. For Qwen models, supported ratios: 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3. Special: if prompt contains "miratsu style" or "chibi" with Qwen/Qwen-Image, switches to MTWLDFC/miratsu_style. Special: /upload (force upload images to storage).';
+
+  return null;
+}
+
+function getSizeString(flags: Record<string, any>, effectiveModel: string): string | undefined {
+  let sizeStr: string | undefined = undefined;
+  if (typeof flags['size'] === 'string') {
+    sizeStr = flags['size'] as string;
+  } else if (typeof flags['ratio'] === 'string') {
+    sizeStr = ratioToSize(flags['ratio'] as string, effectiveModel) || undefined;
+  } else {
+    // Default sizes based on model
+    if (/flux/i.test(effectiveModel)) sizeStr = '1440x1440';
+    else if (/(diffusion|high-res)/i.test(effectiveModel)) sizeStr = '2048x2048';
+    else if (/qwen/i.test(effectiveModel)) sizeStr = '1328x1328';
   }
-  return 'Unknown image model';
+  return sizeStr;
 }
 
 async function buildImageGenerationWaiter(params: {
@@ -261,6 +314,141 @@ async function buildImageGenerationWaiter(params: {
     return { ok: true, wait, taskId };
   }
 
+  if (model.endsWith('-vision')) {
+    let apiKey: string | null = null;
+    try {
+      const pk = await getProviderKeys(headers as any, authHeader, isPasswordAuth);
+      const keys = pk['huggingface'] || [];
+      if (keys.length > 0) { const idx = Math.floor(Math.random() * keys.length); apiKey = keys[idx] || null; }
+    } catch { }
+    if (!apiKey) return { ok: false, error: { code: 'no_api_key', message: 'Missing Hugging Face API key' }, status: 401 };
+
+    let modelId = model.replace(/-vision$/, '').replace("image/", '');
+    if (/Kontext/i.test(modelId)) {
+      if (prompt.toLowerCase().startsWith("remove")) {
+        modelId = 'starsfriday/Kontext-Remover-General-LoRA';
+      } else if (prompt == "Place it") {
+        modelId = 'ilkerzgi/Overlay-Kontext-Dev-LoRA';
+      } else if (/Make a shot in the same scene of/i.test(prompt)) {
+        modelId = 'peteromallet/Flux-Kontext-InScene';
+      } else if (/redepthkontext/i.test(prompt)) {
+        modelId = 'thedeoxen/FLUX.1-Kontext-dev-reference-depth-fusion-LORA';
+      } else if (prompt == "Fuse this image into background") {
+        modelId = 'gokaygokay/Fuse-it-Kontext-Dev-LoRA';
+      } else if (prompt == "Convert this image into pencil drawing art style") {
+        modelId = 'fal/Pencil-Drawing-Kontext-Dev-LoRA';
+      } else if (prompt == "Turn this image into the Clay_Toy style.") {
+        modelId = 'Kontext-Style/Clay_Toy_lora';
+      }
+    }
+    const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
+    const taskId = `hf_${timestamp}`;
+
+    // Get input image data (must have an image for i2i)
+    if (!imgs.has && links.length === 0) {
+      return { ok: false, error: { code: 'missing_image', message: 'Image-to-image requires an input image' }, status: 400 };
+    }
+
+    const wait = async (_signal: AbortSignal) => {
+      try {
+        const { InferenceClient } = await import('@huggingface/inference');
+        const client = new InferenceClient(apiKey);
+
+        // Get image data
+        let imageData: Buffer;
+        let inputImageType = 'image/jpeg'; // default
+        const imageUrl = imgs.first || links[0] || '';
+
+        if (imageUrl.startsWith('data:')) {
+          // Base64 image - extract type from header
+          const base64Match = imageUrl.match(/^data:([^;]+);base64,(.+)$/);
+          if (!base64Match || !base64Match[2]) {
+            return { ok: false, error: { code: 'invalid_image', message: 'Invalid base64 image format' } } as const;
+          }
+          inputImageType = base64Match[1] || 'image/jpeg';
+          imageData = Buffer.from(base64Match[2], 'base64');
+        } else {
+          // Download from URL
+          const response = await fetch(imageUrl);
+          if (!response.ok) {
+            return { ok: false, error: { code: 'download_failed', message: 'Failed to download input image' } } as const;
+          }
+          imageData = Buffer.from(await response.arrayBuffer());
+          // Try to determine type from Content-Type header
+          const contentType = response.headers.get('content-type');
+          if (contentType && contentType.startsWith('image/')) {
+            inputImageType = contentType;
+          }
+        }
+
+        // Prepare parameters
+        const parameters: any = { prompt };
+
+        if (typeof flags['guidance'] === 'number') {
+          parameters.guidance_scale = Number(flags['guidance']);
+        }
+        if (typeof flags['negative_prompt'] === 'string') {
+          parameters.negative_prompt = flags['negative_prompt'] as string;
+        }
+        if (typeof flags['steps'] === 'number') {
+          parameters.num_inference_steps = Math.max(1, Math.min(100, Number(flags['steps'])));
+        }
+
+        // Handle size/ratio
+        if (typeof flags['size'] === 'string' || typeof flags['ratio'] === 'string') {
+          const sizeStr = getSizeString(flags, modelId);
+          if (sizeStr && sizeStr.includes('x')) {
+            const sizeParts = sizeStr.split('x').map(n => parseInt(n));
+            const width = sizeParts[0];
+            const height = sizeParts[1];
+            if (width && height && !isNaN(width) && !isNaN(height)) {
+              parameters.target_size = { width, height };
+            }
+          }
+        }
+
+        const result = await client.imageToImage({
+          provider: "auto",
+          model: modelId,
+          inputs: new Blob([new Uint8Array(imageData)], { type: inputImageType }),
+          parameters
+        });
+
+        // Upload to blob storage if configured
+        let finalUrl: string;
+        if (process.env.S3_API && process.env.S3_PUBLIC_URL && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
+          try {
+            const { uploadBlobToStorage } = await import('../shared/bucket.mts');
+            const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
+            finalUrl = await uploadBlobToStorage(result, timestamp);
+          } catch (blobError) {
+            console.warn('Failed to upload to bucket, using base64:', blobError);
+            // Fallback to base64 conversion
+            const arrayBuffer = await result.arrayBuffer();
+            const buffer = Buffer.from(arrayBuffer);
+            const base64 = buffer.toString('base64');
+            const outputImageType = result.type || inputImageType || 'image/jpeg';
+            finalUrl = `data:${outputImageType};base64,${base64}`;
+          }
+        } else {
+          // Convert to base64 URL when not uploading to storage
+          const arrayBuffer = await result.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+          const base64 = buffer.toString('base64');
+          const outputImageType = result.type || inputImageType || 'image/jpeg';
+          finalUrl = `data:${outputImageType};base64,${base64}`;
+        }
+
+        const usage = { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
+        return { ok: true, text: toMarkdownImage(finalUrl), usage, downloadLink: finalUrl, taskId } as const;
+      } catch (e: any) {
+        return { ok: false, error: { code: 'network_error', message: e?.message || 'Hugging Face API failed' } } as const;
+      }
+    };
+
+    return { ok: true, wait, taskId };
+  }
+
   if (model.startsWith('image/')) {
     const modelId = model.replace(/^image\//, '');
     let apiKey: string | null = null;
@@ -278,50 +466,7 @@ async function buildImageGenerationWaiter(params: {
       effectiveModel = 'MTWLDFC/miratsu_style';
     }
 
-    function ratioToSize(r: string, model: string): string | null {
-      const ratio = String(r).trim();
-
-      // Parse ratio
-      const parts = ratio.split(':').map(n => parseFloat(n));
-      if (parts.length !== 2 || parts.some(isNaN)) return null;
-      const [w, h] = parts;
-      if (w === undefined || h === undefined || h === 0) return null;
-      const aspectRatio = w / h;
-
-      if (/qwen/i.test(model)) {
-        const qwenMap: Record<string, [number, number]> = {
-          '1:1': [1328, 1328], '16:9': [1664, 928], '9:16': [928, 1664],
-          '4:3': [1472, 1140], '3:4': [1140, 1472], '3:2': [1584, 1056], '2:3': [1056, 1584],
-        };
-        const v = qwenMap[ratio];
-        return v ? `${v[0]}x${v[1]}` : null;
-      } else if (/flux/i.test(model)) {
-        const base = 1440;
-        const area = base * base;
-        const width = Math.round(Math.sqrt(area * aspectRatio) / 2) * 2;
-        const height = Math.round(area / width / 2) * 2;
-        return `${width}x${height}`;
-      } else if (/(_SD_|high-res)/i.test(model)) {
-        const base = 2048;
-        const area = base * base;
-        const width = Math.round(Math.sqrt(area * aspectRatio) / 2) * 2;
-        const height = Math.round(area / width / 2) * 2;
-        return `${width}x${height}`;
-      }
-
-      return null;
-    }
-
-    let sizeStr: string | undefined = undefined;
-    if (typeof flags['size'] === 'string') {
-      sizeStr = flags['size'] as string;
-    } else if (typeof flags['ratio'] === 'string') {
-      sizeStr = ratioToSize(flags['ratio'] as string, effectiveModel) || undefined;
-    } else {
-      if (/flux/i.test(effectiveModel)) sizeStr = '1440x1440';
-      else if (/(_SD_|high-res)/i.test(effectiveModel)) sizeStr = '2048x2048';
-      else if (/qwen/i.test(effectiveModel)) sizeStr = '1328x1328';
-    }
+    let sizeStr: string | undefined = getSizeString(flags, effectiveModel);
 
     const guidance = typeof flags['guidance'] === 'number' ? Number(flags['guidance']) : guidanceFromTopP(top_p, temperature) ?? 3.5;
     const negative_prompt = typeof flags['negative_prompt'] === 'string' ? (flags['negative_prompt'] as string) : undefined;
@@ -351,7 +496,6 @@ async function buildImageGenerationWaiter(params: {
             const dj: any = await r.json().catch(() => ({} as any));
             if (dj.task_status === 'SUCCEED') {
               const url = dj.output_images?.[0];
-              // ModelScope doesn't return token usage, use zeros
               return { ok: true, text: toMarkdownImage(url), usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 }, downloadLink: url, taskId } as const;
             } else if (dj.task_status === 'FAILED') {
               return { ok: false, error: { code: 'failed', message: 'Image Generation Failed.' } } as const;

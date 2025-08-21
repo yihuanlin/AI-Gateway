@@ -13,7 +13,8 @@ export const SUPPORTED_PROVIDERS = {
   nvidia: { baseURL: 'https://integrate.api.nvidia.com/v1' },
   mistral: { baseURL: 'https://api.mistral.ai/v1' },
   cohere: { baseURL: 'https://api.cohere.ai/compatibility/v1' },
-  poixe: { baseURL: 'https://api.poixe.com/v1' }
+  poixe: { baseURL: 'https://api.poixe.com/v1' },
+  huggingface: { baseURL: 'https://router.huggingface.co/v1' }
 } as const;
 
 export const PROVIDER_KEYS = Object.keys(SUPPORTED_PROVIDERS);
