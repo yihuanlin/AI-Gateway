@@ -416,7 +416,8 @@ function buildDefaultProviderOptions(args: {
 		},
 		custom: {
 			reasoning_effort: reasoning_effort || "medium",
-			extra_body: extra_body,
+			...(extra_body && { extra_body }),
+			...(thinking && { thinking }),
 		},
 	};
 	return providerOptions;
@@ -2705,6 +2706,7 @@ const CUSTOM_MODEL_LISTS = {
 		{ id: 'doubao-seed-1-6-flash-250715', name: 'Doubao Seed 1.6 Flash' },
 		{ id: 'doubao-seed-1-6-thinking-250715', name: 'Doubao Seed 1.6 Thinking' },
 		{ id: 'deepseek-v3-1-250821', name: 'DeepSeek V3.1' },
+		{ id: 'deepseek-r1-250528', name: 'DeepSeek R1' },
 		{ id: 'kimi-k2-250711', name: 'Kimi K2' },
 	],
 	cohere: [

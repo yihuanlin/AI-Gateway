@@ -12,15 +12,15 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@ai-sdk/gateway": "^1.0.7",
-    "@ai-sdk/google": "^2.0.6",
-    "@ai-sdk/groq": "^2.0.10",
-    "@ai-sdk/openai": "^2.0.15",
-    "@ai-sdk/openai-compatible": "^1.0.7",
+    "@ai-sdk/gateway": "^1.0.11",
+    "@ai-sdk/google": "^2.0.8",
+    "@ai-sdk/groq": "^2.0.13",
+    "@ai-sdk/openai": "^2.0.19",
+    "@ai-sdk/openai-compatible": "^1.0.11",
     "@huggingface/inference": "^4.7.1",
     "@netlify/blobs": "^10.0.8",
-    "ai": "^5.0.15",
-    "hono": "^4.9.2",
+    "ai": "^5.0.22",
+    "hono": "^4.9.4",
     "zod": "^4.0.17"
   },
   "devDependencies": {
