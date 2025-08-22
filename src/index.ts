@@ -2704,13 +2704,13 @@ const CUSTOM_MODEL_LISTS = {
 	doubao: [
 		{ id: 'doubao-seed-1-6-flash-250715', name: 'Doubao Seed 1.6 Flash' },
 		{ id: 'doubao-seed-1-6-thinking-250715', name: 'Doubao Seed 1.6 Thinking' },
-		{ id: 'deepseek-r1-250528', name: 'DeepSeek R1' },
-		{ id: 'deepseek-v3-250324', name: 'DeepSeek V3' },
+		{ id: 'deepseek-v3-1-250821', name: 'DeepSeek V3.1' },
 		{ id: 'kimi-k2-250711', name: 'Kimi K2' },
 	],
 	cohere: [
 		{ id: 'command-a-03-2025', name: 'Command A' },
 		{ id: 'command-a-vision-07-2025', name: 'Cohere A Vision' },
+		{ id: 'command-a-reasoning-08-2025', name: 'Command A Reasoning' },
 	],
 };
 
