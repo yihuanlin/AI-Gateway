@@ -15,10 +15,11 @@ const app = new Hono()
 
 // Pre-compiled constants for /v1/chat/completions
 const TEXT_ENCODER = new TextEncoder();
-const EXCLUDED_TOOLS = new Set(['code_execution', 'python_executor', 'web_search', 'fetch', 'google_search', 'web_search_preview', 'url_context', 'browser_search']);
+const EXCLUDED_TOOLS = new Set(['code_execution', 'python_executor', 'web_search', 'fetch', 'google_search', 'web_search_preview', 'url_context', 'browser_search', 'scholar_search', 'paper_recommendations', 'ensembl_api']);
 const RESEARCH_KEYWORDS = ['scientific', 'biolog', 'research', 'paper'];
 const MAX_ATTEMPTS = 3;
 
+let accumulatedSources: Array<{ title: string, url: string, type: string }> = [];
 let tavilyApiKey: string | null = null;
 let pythonApiKey: string | null = null;
 let pythonUrl: string | null = null;
@@ -891,6 +892,20 @@ const tavilySearchTool = tool({
 					}
 					const data = await response.json() as any;
 					const rawContent = data.results?.[0]?.raw_content;
+
+					// Add search results to accumulatedSources
+					if (data.results && Array.isArray(data.results)) {
+						data.results.forEach((result: any) => {
+							if (result.url) {
+								accumulatedSources.push({
+									title: result.title || '',
+									url: result.url,
+									type: 'url_citation'
+								});
+							}
+						});
+					}
+
 					return {
 						query,
 						results: data.results?.map((result: any) => ({
@@ -969,7 +984,23 @@ const jinaReaderTool = tool({
 				throw new Error(`Jina Reader API error (${response.status}): ${errorText}`);
 			}
 
-			return await response.text();
+			const text = await response.text();
+			// Use the first non-empty line as the title
+			let title = '';
+			for (const line of text.split('\n')) {
+				const trimmed = line.trim();
+				if (trimmed !== '') {
+					title = trimmed;
+					break;
+				}
+			}
+			accumulatedSources.push({
+				title,
+				url,
+				type: 'url_citation'
+			});
+
+			return text;
 
 		} catch (error: any) {
 			return {
@@ -1021,6 +1052,13 @@ const ensemblApiTool = tool({
 				};
 			}
 
+			// Add fetched URL to accumulatedSources
+			accumulatedSources.push({
+				title: 'Ensembl API for ' + path,
+				url: fullUrl,
+				type: 'url_citation'
+			});
+
 			return await response.json();
 
 		} catch (error: any) {
@@ -1038,7 +1076,6 @@ const semanticScholarSearchTool = tool({
 	inputSchema: object({
 		query: string({ message: 'Search query text' }),
 		type: optional(zenum(['paper', 'author'], { message: 'Type of search: "paper" for papers or "author" for authors (default: "paper")' })),
-		fields: optional(string({ message: 'Comma-separated list of fields to return (e.g., "title,authors,year,abstract")' })),
 		limit: optional(number({ message: 'Maximum number of results (default: 10, max: 100 for papers, max: 1000 for authors)' })),
 		offset: optional(number({ message: 'Used for pagination to get more results (default: 0)' })),
 		year: optional(string({ message: 'Filter by publication year or range (e.g., "2020", "2018-2022")' })),
@@ -1053,11 +1090,14 @@ const semanticScholarSearchTool = tool({
 		},
 	},
 	execute: async (params) => {
-		const { query, type = 'paper', fields, limit = 10, offset = 0, year, venue, fieldsOfStudy, minCitationCount, publicationTypes } = params;
+		const { query, type = 'paper', limit = 10, offset = 0, year, venue, fieldsOfStudy, minCitationCount, publicationTypes } = params;
 		console.log(`Semantic Scholar ${type} search: ${query}`);
 		try {
 			const baseUrl = 'https://api.semanticscholar.org/graph/v1';
 			const endpoint = type === 'paper' ? 'paper/search' : 'author/search';
+			const fields = type === 'paper'
+				? 'url,title,abstract,citationCount,influentialCitationCount,openAccessPdf,publicationTypes,publicationDate,journal,authors.name,authors.hIndex,authors.affiliations'
+				: 'url,name,affiliations,homepage,paperCount,citationCount,hIndex,papers.title,papers.year,papers.journal,papers.citationCount,papers.influentialCitationCount';
 
 			const params = new URLSearchParams();
 			params.append('query', query);
@@ -1108,15 +1148,38 @@ const semanticScholarSearchTool = tool({
 			}
 
 			const data = await response.json() as any;
-			return {
-				query: query,
-				type: type,
-				url: fullUrl,
-				total: data.total || 0,
-				offset: data.offset || 0,
-				next: data.next,
-				results: data.data || data
-			};
+
+			// Add URLs to accumulatedSources based on search type
+			if (data.data && Array.isArray(data.data)) {
+				data.data.forEach((item: any) => {
+					if (type === 'paper') {
+						const paperUrl = item.url || item.openAccessPdf?.url;
+						if (paperUrl) {
+							accumulatedSources.push({
+								title: item.title || '',
+								url: paperUrl,
+								type: 'url_citation'
+							});
+						}
+					} else if (type === 'author') {
+						if (item.url) {
+							accumulatedSources.push({
+								title: item.name || ' - Semantic Scholar',
+								url: item.url,
+								type: 'url_citation'
+							});
+						}
+						if (item.homepage) {
+							accumulatedSources.push({
+								title: item.name + ' - Homepage',
+								url: item.homepage,
+								type: 'url_citation'
+							});
+						}
+					}
+				});
+			}
+			return data;
 
 		} catch (error: any) {
 			const message = error?.name === 'AbortError' ? 'Request to Semantic Scholar API timed out' : (error?.message || 'Unknown error');
@@ -1133,12 +1196,11 @@ const semanticScholarSearchTool = tool({
 const semanticScholarRecommendationsTool = tool({
 	description: 'Get paper recommendations from Semantic Scholar based on example papers',
 	inputSchema: object({
-		paperId: optional(string({ message: 'Single paper ID to get recommendations for' })),
+		paperId: optional(string({ message: 'Single paper ID to get recommendations for, can be Semantic Scholar ID, DOI, or PMID etc.' })),
 		positivePaperIds: optional(array(string({ message: 'Paper ID' }), { message: 'Array of paper IDs that represent positive examples (for batch recommendations)' })),
 		negativePaperIds: optional(array(string({ message: 'Paper ID' }), { message: 'Array of paper IDs that represent negative examples (for batch recommendations)' })),
-		fields: optional(string({ message: 'Comma-separated list of fields to return (e.g., "title,authors,year,abstract")' })),
 		limit: optional(number({ message: 'Maximum number of recommendations (default: 10, max: 100)' })),
-		from: optional(zenum(['recent', 'all-cs'], { message: 'Pool of papers to recommend from (default: recent)' })),
+		from: optional(zenum(['recent', 'all'], { message: 'Pool of papers to recommend from (default: recent; only works with single paper recommendations using paperId)' })),
 	}),
 	providerOptions: {
 		anthropic: {
@@ -1146,10 +1208,11 @@ const semanticScholarRecommendationsTool = tool({
 		},
 	},
 	execute: async (params) => {
-		const { paperId, positivePaperIds, negativePaperIds, fields, limit = 10, from = 'recent' } = params;
+		const { paperId, positivePaperIds, negativePaperIds, limit = 10, from = 'recent' } = params;
 		console.log(`Semantic Scholar recommendations for: ${paperId || `${positivePaperIds?.length || 0} positive papers`}`);
 		try {
 			const baseUrl = 'https://api.semanticscholar.org/recommendations/v1';
+			const fields = 'url,title,abstract,citationCount,influentialCitationCount,openAccessPdf,publicationTypes,publicationDate,journal,author';
 			let url: string;
 			let method: string = 'GET';
 			let body: any = null;
@@ -1158,15 +1221,15 @@ const semanticScholarRecommendationsTool = tool({
 				// Single paper recommendation
 				const params = new URLSearchParams();
 				params.append('limit', Math.min(limit, 100).toString());
-				params.append('from', from);
-				if (fields) params.append('fields', fields);
+				params.append('from', from === 'all' ? 'all-cs' : 'recent');
+				params.append('fields', fields);
 
 				url = `${baseUrl}/papers/forpaper/${paperId}?${params.toString()}`;
 			} else if (positivePaperIds && positivePaperIds.length > 0) {
 				// Batch recommendations
 				const params = new URLSearchParams();
 				params.append('limit', Math.min(limit, 100).toString());
-				if (fields) params.append('fields', fields);
+				params.append('fields', fields);
 
 				url = `${baseUrl}/papers?${params.toString()}`;
 				method = 'POST';
@@ -1216,11 +1279,23 @@ const semanticScholarRecommendationsTool = tool({
 			}
 
 			const data = await response.json() as any;
-			return {
-				url: url,
-				method: method,
-				recommendations: data.recommendedPapers || data.data || data
-			};
+
+			// Add recommendation URLs to accumulatedSources
+			const recommendations = data.recommendedPapers || data.data || data;
+			if (recommendations && Array.isArray(recommendations)) {
+				recommendations.forEach((paper: any) => {
+					const paperUrl = paper.url || paper.openAccessPdf?.url;
+					if (paperUrl) {
+						accumulatedSources.push({
+							title: paper.title || '',
+							url: paperUrl,
+							type: 'url_citation'
+						});
+					}
+				});
+			}
+
+			return recommendations;
 
 		} catch (error: any) {
 			const message = error?.name === 'AbortError' ? 'Request to Semantic Scholar Recommendations API timed out' : (error?.message || 'Unknown error');
@@ -1420,7 +1495,6 @@ app.post('/v1/responses', async (c: Context) => {
 				let lastStreamError: any = null;
 				let textItemId: string | null = null;
 				let collectedText = '';
-				let accumulatedSources: Array<{ title: string, url: string, type: string }> = [];
 				let reasoningItemId: string | null = null;
 				let reasoningText = '';
 				let reasoningSummaryIndex = 0;
@@ -2738,7 +2812,7 @@ function shouldIncludeModel(model: any, providerName?: string) {
 	const modelId = String(model.id || '').toLowerCase();
 	const commonExclusions = [
 		'gemma', 'rerank', 'distill', 'parse', 'embed', 'bge-', 'tts', 'phi', 'live', 'audio', 'lite',
-		'qwen2', 'qwen-2', 'qwen1', 'qwq', 'qvq', 'gemini-1', 'learnlm', 'gemini-exp',
+		'qwen2', 'qwen-2', 'qwen1', 'qwq', 'qvq', 'gemini-1', 'learnlm', 'gemini-exp', 'gpt-4', 'gpt-3',
 		'turbo', 'claude-3', 'voxtral', 'pixtral', 'mixtral', 'ministral', '-24', 'moderation', 'saba', '-ocr-',
 		'transcribe', 'dall', 'davinci', 'babbage', 'hailuo', 'kling', 'wan', 'ideogram', 'background'
 	];
@@ -2746,7 +2820,7 @@ function shouldIncludeModel(model: any, providerName?: string) {
 	if (!modelId.includes('super') && ((['nemotron', 'llama'].some((e) => modelId.includes(e))) || modelId.includes('nvidia'))) return false;
 	if (providerName === 'openrouter' && !modelId.includes(':free')) return false;
 	if (providerName !== 'mistral' && modelId.includes('mistral')) return false;
-	if (providerName === 'chatgpt' && (modelId.split('-').length - 1) > 2) return false;
+	if (providerName === 'chatgpt' && modelId.split('-').length > 4) return false;
 	if (!providerName && ['mistral', 'alibaba', 'cohere', 'deepseek', 'moonshotai', 'morph', 'zai'].some((e) => modelId.includes(e))) return false;
 	return true;
 }
