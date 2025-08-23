@@ -805,6 +805,7 @@ const pythonExecutorTool = tool({
 			}
 
 			if (!response.ok || data.error) {
+				console.error(`Python server error (${response.status}): ${data?.error || text.slice(0, 500)}`);
 				return {
 					success: false,
 					error: data?.error || `Python server error (${response.status})`,
@@ -1001,6 +1002,7 @@ const jinaReaderTool = tool({
 			return text;
 
 		} catch (error: any) {
+			console.error(`Jina Reader error: ${error.message || 'Unknown error'}`);
 			return {
 				url,
 				error: `Failed to fetch content: ${error.message || 'Unknown error'}`,
@@ -1373,13 +1375,9 @@ app.post('/v1/responses', async (c: Context) => {
 		if (instructions) {
 			history = [{ role: 'system', content: String(instructions) }, ...history];
 		}
-		if (!previous_response_id) {
-			const combined = [...history, ...mapped];
-			// Add context messages using shared function
-			const contextMessages = addContextMessages(combined, c);
-			return processMessages(contextMessages);
-		}
-		return processMessages(history);
+		const combined = [...history, ...mapped];
+		const contextMessages = addContextMessages(combined, c);
+		return processMessages(contextMessages);
 	};
 
 	const messages = await toAiSdkMessages();
@@ -1995,7 +1993,15 @@ app.post('/v1/responses', async (c: Context) => {
 											output_index: outputIndex,
 											item: completedTextItem
 										});
-
+										if (store) {
+											try {
+												const blobStore = getStoreWithConfig('responses', headers);
+												await blobStore.setJSON(responseId, {
+													id: responseId,
+													messages: [...messages, { role: 'assistant', content: collectedText }]
+												});
+											} catch { }
+										}
 										collectedText = '';
 										accumulatedSources = [];
 										textItemId = null;
@@ -2158,6 +2164,16 @@ app.post('/v1/responses', async (c: Context) => {
 											output_index: outputIndex,
 											item: completedTextItem
 										});
+										// Save conversation
+										if (store) {
+											try {
+												const blobStore = getStoreWithConfig('responses', headers);
+												await blobStore.setJSON(responseId, {
+													id: responseId,
+													messages: [...messages, { role: 'assistant', content: collectedText }]
+												});
+											} catch { }
+										}
 										collectedText = '';
 										accumulatedSources = [];
 										textItemId = null;
@@ -2180,17 +2196,6 @@ app.post('/v1/responses', async (c: Context) => {
 										sequence_number: sequenceNumber++,
 										response: completed
 									});
-
-									// Save conversation
-									if (store) {
-										try {
-											const blobStore = getStoreWithConfig('responses', headers);
-											await blobStore.setJSON(responseId, {
-												id: responseId,
-												messages: [...messages, { role: 'assistant', content: collectedText }]
-											});
-										} catch { }
-									}
 									controller.close();
 									return;
 								}
