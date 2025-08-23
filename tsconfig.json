@@ -22,15 +22,10 @@
     "exactOptionalPropertyTypes": true,
     "useUnknownInCatchVariables": true,
     "allowImportingTsExtensions": true,
-    "noEmit": true
+    "noEmit": true,
+    "incremental": true,
   },
   "include": [
     "src"
   ],
-  "exclude": [
-    "node_modules",
-    "dist",
-    "netlify",
-    "functions"
-  ]
 }

@@ -50,7 +50,7 @@ function randomId(prefix: string) {
 function startsWithThinking(text: string): boolean {
 	// Remove leading whitespace and empty newlines
 	const lines = text.split('\n');
-	const nonEmptyLines = [];
+	const nonEmptyLines: string[] = [];
 
 	for (const line of lines) {
 		const trimmed = line.trim();

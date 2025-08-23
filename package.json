@@ -1,15 +1,11 @@
 {
-  "name": "vercel-ai-gateway",
+  "name": "ai-gateway",
   "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --watch --env-file=.env.local dist/index.js --port 8888",
-    "build": "tsc",
-    "build:netlify": "mkdir -p netlify/edge-functions && cp src/index.ts netlify/edge-functions/index.ts && cp -R src/modules netlify/edge-functions/ && cp -R src/shared netlify/edge-functions/",
-    "watch:netlify": "fswatch -o src | xargs -n1 -I{} netlify build",
-    "dev:netlify": "trap 'jobs -p | xargs -r kill' EXIT; (bun run watch:netlify &) && netlify build && netlify dev",
-    "start": "node dist/index.js"
+    "dev": "bun run build && netlify dev",
+    "build": "mkdir -p netlify/edge-functions && cp src/index.ts netlify/edge-functions/index.ts && cp -R src/modules netlify/edge-functions/ && cp -R src/shared netlify/edge-functions/"
   },
   "dependencies": {
     "@ai-sdk/gateway": "^1.0.11",

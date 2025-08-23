@@ -1,5 +1,5 @@
 [build]
-  command = "bun run build:netlify && rm -rf src README.md"
+  command = "bun run build && rm -rf src README.md"
 
 [[edge_functions]]
   function = "index"
