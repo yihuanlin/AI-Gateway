@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import type { Context } from 'hono'
-import { generateText, stepCountIs, streamText, tool, type GenerateTextResult } from 'ai'
+import { generateText, stepCountIs, streamText, tool } from 'ai'
 import { createGateway } from '@ai-sdk/gateway'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { openai, createOpenAI } from '@ai-sdk/openai'
@@ -13,11 +13,9 @@ import { string, number, boolean, array, object, optional, int, enum as zenum } 
 
 const app = new Hono()
 
-// SUPPORTED_PROVIDERS centralized in shared/providers
-
 // Pre-compiled constants for /v1/chat/completions
 const TEXT_ENCODER = new TextEncoder();
-const EXCLUDED_TOOLS = new Set(['code_execution', 'python_executor', 'tavily_search', 'jina_reader', 'google_search', 'web_search_preview', 'url_context', 'browser_search']);
+const EXCLUDED_TOOLS = new Set(['code_execution', 'python_executor', 'web_search', 'fetch', 'google_search', 'web_search_preview', 'url_context', 'browser_search']);
 const RESEARCH_KEYWORDS = ['scientific', 'biolog', 'research', 'paper'];
 const MAX_ATTEMPTS = 3;
 
@@ -388,14 +386,28 @@ function buildDefaultProviderOptions(args: {
 	text_verbosity?: any,
 	service_tier?: any,
 	reasoning_summary?: any,
-	store?: any
+	store?: any,
+	model?: any
 }) {
-	const { providerOptionsHeader, thinking, reasoning_effort, extra_body, text_verbosity, service_tier, reasoning_summary, store } = args;
+	const { providerOptionsHeader, thinking, reasoning_effort, extra_body, text_verbosity, service_tier, reasoning_summary, store, model } = args;
+	if (model.startsWith('anthropic/')) {
+		return {
+			anthropic:
+			{
+				thinking: thinking || { type: "enabled", budgetTokens: 4000 },
+				cacheControl: { type: "ephemeral" },
+			}
+		};
+	}
+	if (model.startsWith('xai/')) {
+		return {
+			xai: {
+				searchParameters: { mode: "auto", returnCitations: true },
+				...(reasoning_effort && { reasoningEffort: reasoning_effort }),
+			}
+		};
+	}
 	const providerOptions = providerOptionsHeader ? JSON.parse(providerOptionsHeader) : {
-		anthropic: {
-			thinking: thinking || { type: "enabled", budgetTokens: 4000 },
-			cacheControl: { type: "ephemeral" },
-		},
 		openai: {
 			reasoningEffort: reasoning_effort || "medium",
 			reasoningSummary: reasoning_summary || "auto",
@@ -403,10 +415,6 @@ function buildDefaultProviderOptions(args: {
 			serviceTier: service_tier || "auto",
 			store: store || false,
 			promptCacheKey: 'ai-gateway',
-		},
-		xai: {
-			searchParameters: { mode: "auto", returnCitations: true },
-			...(reasoning_effort && { reasoningEffort: reasoning_effort }),
 		},
 		google: {
 			thinkingConfig: {
@@ -427,7 +435,7 @@ type Attempt = { type: 'gateway' | 'custom', name?: string, apiKey: string, mode
 
 const getGatewayForAttempt = async (attempt: Attempt) => {
 	if (attempt.type === 'gateway') {
-		const gatewayOptions: any = { apiKey: attempt.apiKey, baseURL: 'https://ai-gateway.vercel.sh/v1/ai' };
+		const gatewayOptions: any = { apiKey: attempt.apiKey };
 		if (attempt.model === 'anthropic/claude-sonnet-4') {
 			gatewayOptions.headers = { 'anthropic-beta': 'context-1m-2025-08-07' };
 		}
@@ -631,8 +639,6 @@ function buildAiSdkTools(model: string, userTools: any[] | undefined, messages: 
 			}
 		});
 
-		const googleIncompatible = (!['google', 'gemini'].some(prefix => model.startsWith(prefix)) || Object.keys(aiSdkTools).length > 0);
-
 		const messageText = messages.map((msg: any) =>
 			typeof msg.content === 'string'
 				? msg.content.toLowerCase()
@@ -642,6 +648,13 @@ function buildAiSdkTools(model: string, userTools: any[] | undefined, messages: 
 		).join(' ');
 
 		const containsResearchKeywords = RESEARCH_KEYWORDS.some(keyword => messageText.includes(keyword));
+		if (containsResearchKeywords) {
+			aiSdkTools.ensembl_api = ensemblApiTool;
+			aiSdkTools.scholar_search = semanticScholarSearchTool;
+			aiSdkTools.paper_recommendations = semanticScholarRecommendationsTool;
+		}
+
+		const googleIncompatible = (!['google', 'gemini'].some(prefix => model.startsWith(prefix)) || Object.keys(aiSdkTools).length > 0);
 
 		if (model.startsWith('openai')) {
 			aiSdkTools.web_search_preview = openai.tools.webSearchPreview({});
@@ -649,15 +662,10 @@ function buildAiSdkTools(model: string, userTools: any[] | undefined, messages: 
 		} else if (model.startsWith('groq/openai')) {
 			aiSdkTools.browser_search = groq.tools.browserSearch({});
 		} else if (googleIncompatible && !model.startsWith('xai')) {
-			if (tavilyApiKey) aiSdkTools.tavily_search = tavilySearchTool;
-		}
-		if (containsResearchKeywords) {
-			aiSdkTools.ensembl_api = ensemblApiTool;
-			aiSdkTools.semantic_scholar_search = semanticScholarSearchTool;
-			aiSdkTools.semantic_scholar_recommendations = semanticScholarRecommendationsTool;
+			if (tavilyApiKey) aiSdkTools.web_search = tavilySearchTool;
 		}
 		if (googleIncompatible) {
-			aiSdkTools.jina_reader = jinaReaderTool;
+			aiSdkTools.fetch = jinaReaderTool;
 			if (!model.startsWith('openai') && pythonApiKey && pythonUrl) {
 				aiSdkTools.python_executor = pythonExecutorTool;
 			}
@@ -757,9 +765,8 @@ const buildCommonOptions = (
 	} as any;
 };
 
-// Tools definitions
 const pythonExecutorTool = tool({
-	description: 'Execute Python code remotely via a secure Python execution API. Installed packages include: numpy, pandas.',
+	description: 'Execute Python code remotely. Installed packages: numpy, pandas',
 	inputSchema: object({
 		code: string({ message: 'The Python code to execute.' }),
 	}),
@@ -821,13 +828,16 @@ const pythonExecutorTool = tool({
 });
 
 const tavilySearchTool = tool({
-	description: 'Web search tool using Tavily AI search engine',
+	description: 'Web search using Tavily',
 	inputSchema: object({
 		query: string({ message: 'Search query' }),
 		max_results: optional(number({ message: 'Maximum number of results to return (default: 5, max: 20)' })),
 		include_raw_content: optional(boolean({ message: 'Include the cleaned and parsed HTML content of each search result (default: false)' })),
 		include_domains: optional(array(string({ message: 'Domain to include' }), { message: 'List of domains to include in the search' })),
 		exclude_domains: optional(array(string({ message: 'Domain to exclude' }), { message: 'List of domains to exclude from the search' })),
+		start_date: optional(string({ message: 'Start date for search results (format: YYYY-MM-DD)' })),
+		deep_search: optional(boolean({ message: 'Enable deep search for more comprehensive results (default: false)' })),
+		include_images: optional(boolean({ message: 'Include images in the search results (default: false)' })),
 	}),
 	providerOptions: {
 		anthropic: {
@@ -835,7 +845,7 @@ const tavilySearchTool = tool({
 		},
 	},
 	execute: async (params) => {
-		const { query, max_results, include_domains, exclude_domains, include_raw_content } = params;
+		const { query, max_results, include_domains, exclude_domains, include_raw_content, start_date, deep_search, include_images } = params;
 		console.log(`Tavily search with query: ${query}`);
 		try {
 			if (!tavilyApiKey) {
@@ -844,6 +854,8 @@ const tavilySearchTool = tool({
 
 			const maxResults = max_results || 5;
 			const includeRawContent = include_raw_content || false;
+			const topic = query.toLowerCase().includes('news') ? 'news' : 'general';
+			const search_depth = deep_search ? 'advanced' : 'basic';
 			const apiKeys = tavilyApiKey.split(',').map((key: string) => key.trim());
 			let lastError: any;
 
@@ -851,14 +863,17 @@ const tavilySearchTool = tool({
 				const currentApiKey = apiKeys[i];
 
 				try {
-					const searchPayload = {
+					let searchPayload = {
 						query,
+						topic,
+						start_date,
+						search_depth,
 						max_results: Math.min(maxResults, 20),
-						include_answer: true,
-						include_images: false,
 						include_raw_content: includeRawContent,
+						auto_parameters: true,
 						...(include_domains && { include_domains }),
-						...(exclude_domains && { exclude_domains })
+						...(exclude_domains && { exclude_domains }),
+						...(include_images && { include_images, include_image_descriptions: true }),
 					};
 
 					const response = await fetch('https://api.tavily.com/search', {
@@ -875,20 +890,18 @@ const tavilySearchTool = tool({
 						throw new Error(`Tavily API error (${response.status}): ${errorText}`);
 					}
 					const data = await response.json() as any;
+					const rawContent = data.results?.[0]?.raw_content;
 					return {
 						query,
-						answer: data.answer || '',
 						results: data.results?.map((result: any) => ({
 							title: result.title,
 							url: result.url,
+							relevance: result.score,
 							content: result.content,
-							score: result.score
+							...(rawContent && { raw_content: rawContent })
 						})) || [],
 						images: data.images || [],
-						follow_up_questions: data.follow_up_questions || [],
-						search_depth: data.search_depth || 'basic'
 					};
-
 				} catch (error: any) {
 					console.error(`Error with Tavily API key ${i + 1}/${apiKeys.length}:`, error.message);
 					lastError = error;
@@ -913,7 +926,7 @@ const tavilySearchTool = tool({
 });
 
 const jinaReaderTool = tool({
-	description: 'Fetch and extract clean content from web pages using Jina Reader API',
+	description: 'Fetch web pages as markdown',
 	inputSchema: object({
 		url: string({ message: 'The URL of the webpage to fetch content from' }),
 	}),
@@ -1327,6 +1340,7 @@ app.post('/v1/responses', async (c: Context) => {
 		service_tier,
 		reasoning_summary: reasoning?.summary || undefined,
 		store,
+		model,
 	});
 
 	// Rebuild tools based on actual messages context
@@ -2307,7 +2321,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	const processedMessages = await processMessages(contextMessages);
 
 	const providerOptionsHeader = c.req.header('x-provider-options');
-	const providerOptions = buildDefaultProviderOptions({ providerOptionsHeader: providerOptionsHeader ?? null, thinking, reasoning_effort, extra_body, text_verbosity, service_tier, store });
+	const providerOptions = buildDefaultProviderOptions({ providerOptionsHeader: providerOptionsHeader ?? null, thinking, reasoning_effort, extra_body, text_verbosity, service_tier, store, model });
 
 	// Special routing for custom modules
 	if (typeof model === 'string' && model.startsWith('image/')) {
@@ -2794,7 +2808,7 @@ async function getModelsResponse(apiKey: string, providerKeys: Record<string, st
 		const gatewayPromise = (async () => {
 			try {
 				if (!currentApiKey) throw new Error('No valid gateway API key found');
-				const gateway = createGateway({ apiKey: currentApiKey, baseURL: 'https://ai-gateway.vercel.sh/v1/ai' });
+				const gateway = createGateway({ apiKey: currentApiKey });
 				const availableModels = await gateway.getAvailableModels();
 				const now = Math.floor(Date.now() / 1000);
 				return availableModels.models
