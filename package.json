@@ -20,6 +20,7 @@
     "@huggingface/inference": "^4.7.1",
     "@netlify/blobs": "^10.0.8",
     "ai": "^5.0.22",
+    "ai-sdk-provider-gemini-cli": "^1.1.1",
     "hono": "^4.9.4",
     "zod": "^4.1.0"
   },

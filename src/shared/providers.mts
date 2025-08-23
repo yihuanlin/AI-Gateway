@@ -14,7 +14,8 @@ export const SUPPORTED_PROVIDERS = {
   mistral: { baseURL: 'https://api.mistral.ai/v1' },
   cohere: { baseURL: 'https://api.cohere.ai/compatibility/v1' },
   poixe: { baseURL: 'https://api.poixe.com/v1' },
-  huggingface: { baseURL: 'https://router.huggingface.co/v1' }
+  huggingface: { baseURL: 'https://router.huggingface.co/v1' },
+  geminicli: { baseURL: 'https://cloudcode-pa.googleapis.com/v1internal' },
 } as const;
 
 export const PROVIDER_KEYS = Object.keys(SUPPORTED_PROVIDERS);
@@ -40,7 +41,8 @@ export async function getProviderKeys(headers: any, authHeader: string | null, i
       continue;
     }
     if (isPasswordAuth) {
-      const envKeyName = `${provider.toUpperCase()}_API_KEY`;
+      const providerName = provider.endsWith('cli') ? provider.slice(0, -3) : provider;
+      const envKeyName = `${providerName.toUpperCase()}_API_KEY`;
       const envValue = (process as any).env?.[envKeyName];
       if (envValue) {
         providerKeys[provider] = String(envValue).split(',').map((k: string) => k.trim());

@@ -6,6 +6,7 @@ import { createGateway } from '@ai-sdk/gateway'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { openai, createOpenAI } from '@ai-sdk/openai'
 import { google, createGoogleGenerativeAI } from '@ai-sdk/google'
+import { createGeminiProvider } from 'ai-sdk-provider-gemini-cli';
 import { groq, createGroq } from '@ai-sdk/groq';
 import { SUPPORTED_PROVIDERS, getProviderKeys, fetchCopilotToken } from './shared/providers.mts'
 import { getStoreWithConfig } from './shared/store.mts'
@@ -345,6 +346,11 @@ async function createCustomProvider(providerName: string, apiKey: string) {
 				apiKey: apiKey,
 				baseURL: config.baseURL,
 			}).responses;
+		case 'geminicli':
+			return createGeminiProvider({
+				apiKey: apiKey,
+				authType: 'api-key',
+			});
 		case 'gemini':
 			return createGoogleGenerativeAI({
 				apiKey: apiKey,
@@ -2801,6 +2807,10 @@ const CUSTOM_MODEL_LISTS = {
 		{ id: 'command-a-03-2025', name: 'Command A' },
 		{ id: 'command-a-vision-07-2025', name: 'Cohere A Vision' },
 		{ id: 'command-a-reasoning-08-2025', name: 'Command A Reasoning' },
+	],
+	geminicli: [
+		{ id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro' },
+		{ id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
 	],
 };
 
