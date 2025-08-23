@@ -203,8 +203,8 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
   }
 }
 
-export async function handleAdminForResponses(args: { input: any; headers: Headers; model: string; request_id: string; instructions?: any; store?: boolean; stream?: boolean, isPasswordAuth?: boolean }): Promise<Response> {
-  const { input, headers, model, request_id, instructions = null, store = false, stream = false, isPasswordAuth = false } = args;
+export async function handleAdminForResponses(args: { input: any; headers: Headers; model: string; request_id: string; store?: boolean; stream?: boolean, isPasswordAuth?: boolean }): Promise<Response> {
+  const { input, headers, model, request_id, store = false, stream = false, isPasswordAuth = false } = args;
   if (!isPasswordAuth) {
     return new Response(JSON.stringify({ error: { message: 'Unauthorized' } }), { status: 401, headers: { 'Content-Type': 'application/json' } });
   }
@@ -212,7 +212,7 @@ export async function handleAdminForResponses(args: { input: any; headers: Heade
   const responseStore = getStoreWithConfig('responses', headers);
 
   const now = Date.now();
-  const baseObj = responsesBase(now, request_id, model, input, instructions, store, undefined, undefined, undefined, undefined);
+  const baseObj = responsesBase(now, request_id, model, input, null, store, undefined, undefined, undefined, undefined);
 
   const buildCompleted = (messageText: string) => {
     const finalItem = { id: textItemId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: messageText }] };

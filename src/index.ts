@@ -530,7 +530,7 @@ function responsesInputToAiSdkMessages(input: any): any[] {
 		for (const item of input) {
 			// Handle function_call_output messages (responses format)
 			if (item?.type === 'function_call_output') {
-				messages.push(item); // Pass through unchanged
+				messages.push(item); // Handled by processMessages()
 				continue;
 			}
 
@@ -538,7 +538,7 @@ function responsesInputToAiSdkMessages(input: any): any[] {
 
 			// Handle assistant messages with string content
 			if (role === 'assistant' && typeof item?.content === 'string') {
-				messages.push({ role: 'assistant', content: item.content });
+				messages.push({ role: 'assistant', content: { type: 'text', text: item.content } });
 				continue;
 			}
 
@@ -566,17 +566,15 @@ function responsesInputToAiSdkMessages(input: any): any[] {
 			const parts: any[] = [];
 			for (const part of contentArr) {
 				if (!part) continue;
-				if (part.type === 'input_text' && typeof part.text === 'string') {
+				if (part.type.includes('text') && typeof part.text === 'string') {
 					parts.push({ type: 'text', text: part.text });
-				} else if (part.type === 'text' && typeof part.text === 'string') {
-					parts.push({ type: 'text', text: part.text });
-				} else if (part.type === 'input_image') {
+				} else if (part.type.includes('image')) {
 					const imageSrc = part?.image_url?.url || part?.url || part?.image || part?.data;
 					if (imageSrc) {
 						const mediaType = part?.media_type || part?.mediaType;
 						parts.push(mediaType ? { type: 'image', image: imageSrc, mediaType } : { type: 'image', image: imageSrc });
 					}
-				} else if (part.type === 'input_file') {
+				} else if (part.type.includes('file')) {
 					const data = part?.data || part?.file_data || part?.url;
 					const mediaType = part?.media_type || part?.mediaType || 'application/octet-stream';
 					if (data) parts.push({ type: 'file', data, mediaType });
@@ -1365,17 +1363,17 @@ app.post('/v1/responses', async (c: Context) => {
 			try {
 				const blobStore = getStoreWithConfig('responses', headers);
 				const existing: any = await blobStore.get(previous_response_id, { type: 'json' as any });
-				if (existing && existing.messages && Array.isArray(existing.messages)) history = existing.messages;
+				if (existing && existing.messages && Array.isArray(existing.messages)) {
+					history = existing.messages.filter((m: any) => m?.role !== 'system');
+				}
 			} catch { }
 		}
 
 		const mapped = responsesInputToAiSdkMessages(input);
-
-		// Prepend instructions as system only for first request (no continuation)
+		if (instructions) {
+			history = [{ role: 'system', content: String(instructions) }, ...history];
+		}
 		if (!previous_response_id) {
-			if (instructions) {
-				history = [{ role: 'system', content: String(instructions) }, ...history];
-			}
 			const combined = [...history, ...mapped];
 			// Add context messages using shared function
 			const contextMessages = addContextMessages(combined, c);
@@ -1401,7 +1399,7 @@ app.post('/v1/responses', async (c: Context) => {
 	}
 	if (model === 'admin/magic') {
 		const { handleAdminForResponses } = await import('./modules/management.mts');
-		return await handleAdminForResponses({ input, headers: c.req.raw.headers as any, model, request_id: responseId, instructions, stream: !!stream, isPasswordAuth });
+		return await handleAdminForResponses({ input, headers: c.req.raw.headers as any, model, request_id: responseId, stream: !!stream, isPasswordAuth });
 	}
 
 	// Provider options (map differences)
