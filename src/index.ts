@@ -1400,11 +1400,18 @@ app.post('/v1/responses', async (c: Context) => {
 		return await handleAdminForResponses({ input, headers: c.req.raw.headers as any, model, request_id: responseId, stream: !!stream, isPasswordAuth });
 	}
 
-	// Provider options (map differences)
+	let thinking: Record<string, any> | undefined = undefined;
+	aiSdkTools = buildAiSdkTools(model, tools, messages);
+	if (Object.keys(aiSdkTools).length === 0 && model.startsWith('doubao/deepseek-v3-1')) {
+		thinking = {
+			type: 'enabled',
+		};
+	}
+
 	const providerOptionsHeader = c.req.header('x-provider-options');
 	const providerOptions = buildDefaultProviderOptions({
 		providerOptionsHeader: providerOptionsHeader ?? null,
-		thinking: undefined,
+		thinking,
 		reasoning_effort: reasoning?.effort || undefined,
 		extra_body,
 		text_verbosity: text?.verbosity || undefined,
@@ -1414,10 +1421,6 @@ app.post('/v1/responses', async (c: Context) => {
 		model,
 	});
 
-	// Rebuild tools based on actual messages context
-	aiSdkTools = buildAiSdkTools(model, tools, messages);
-
-	// Prepare providers to try
 	const { providersToTry } = prepareProvidersToTry({ model, providerKeys, isPasswordAuth, authApiKey: apiKey });
 
 	const commonParams = {
@@ -2377,8 +2380,8 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	semanticScholarApiKey = c.req.header('x-semantic-scholar-api-key') || (isPasswordAuth ? process.env.SEMANTIC_SCHOLAR_API_KEY || null : null);
 
 	const body = await c.req.json();
-	const { model, messages = [], tools, stream, temperature, top_p, top_k, max_tokens, stop_sequences, seed, presence_penalty, frequency_penalty, tool_choice, reasoning_effort, thinking, extra_body, text_verbosity, service_tier, store } = body;
-
+	const { model, messages = [], tools, stream, temperature, top_p, top_k, max_tokens, stop_sequences, seed, presence_penalty, frequency_penalty, tool_choice, reasoning_effort, thinking, extra_body, text_verbosity, service_tier, store = true } = body;
+	let thinkingConfig = thinking;
 	// Get provider API keys from request headers
 	const headers: Record<string, string> = {}
 	c.req.raw.headers.forEach((value, key) => {
@@ -2391,6 +2394,11 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	// Use async provider keys function for better performance
 	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
 	const aiSdkTools: Record<string, any> = buildAiSdkTools(model, tools, contextMessages);
+	if (Object.keys(aiSdkTools).length === 0 && model.startsWith('doubao/deepseek-v3-1')) {
+		thinkingConfig = {
+			type: 'enabled',
+		};
+	}
 
 	// Parse the model name to determine provider(s)
 	const { providersToTry } = prepareProvidersToTry({ model, providerKeys, isPasswordAuth, authApiKey: apiKey });
@@ -2398,7 +2406,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	const processedMessages = await processMessages(contextMessages);
 
 	const providerOptionsHeader = c.req.header('x-provider-options');
-	const providerOptions = buildDefaultProviderOptions({ providerOptionsHeader: providerOptionsHeader ?? null, thinking, reasoning_effort, extra_body, text_verbosity, service_tier, store, model });
+	const providerOptions = buildDefaultProviderOptions({ providerOptionsHeader: providerOptionsHeader ?? null, thinking: thinkingConfig, reasoning_effort, extra_body, text_verbosity, service_tier, store, model });
 
 	// Special routing for custom modules
 	if (typeof model === 'string' && model.startsWith('image/')) {
