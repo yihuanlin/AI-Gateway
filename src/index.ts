@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import type { Context } from 'hono'
-import { generateText, stepCountIs, streamText, tool, type GenerateTextResult } from 'ai'
+import { generateText, stepCountIs, streamText, tool } from 'ai'
 import { createGateway } from '@ai-sdk/gateway'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { openai, createOpenAI } from '@ai-sdk/openai'
@@ -13,11 +13,9 @@ import { string, number, boolean, array, object, optional, int, enum as zenum } 
 
 const app = new Hono()
 
-// SUPPORTED_PROVIDERS centralized in shared/providers
-
 // Pre-compiled constants for /v1/chat/completions
 const TEXT_ENCODER = new TextEncoder();
-const EXCLUDED_TOOLS = new Set(['code_execution', 'python_executor', 'tavily_search', 'jina_reader', 'google_search', 'web_search_preview', 'url_context', 'browser_search']);
+const EXCLUDED_TOOLS = new Set(['code_execution', 'python_executor', 'web_search', 'jina_reader', 'google_search', 'web_search_preview', 'url_context', 'browser_search']);
 const RESEARCH_KEYWORDS = ['scientific', 'biolog', 'research', 'paper'];
 const MAX_ATTEMPTS = 3;
 
@@ -333,7 +331,7 @@ async function processMessages(contextMessages: any[]): Promise<any[]> {
 	return processedMessages;
 }
 
-async function createCustomProvider(providerName: string, apiKey: string) {
+async function createCustomProvider(providerName: string, apiKey: string, model: string) {
 	const config = SUPPORTED_PROVIDERS[providerName as keyof typeof SUPPORTED_PROVIDERS];
 	if (!config) {
 		throw new Error(`Unsupported provider: ${providerName}`);
@@ -371,12 +369,26 @@ async function createCustomProvider(providerName: string, apiKey: string) {
 				},
 			});
 		default:
+			if (model.startsWith('doubao/doubao')) {
+				return createOpenAI({
+					name: 'doubao',
+					apiKey: apiKey,
+					baseURL: config.baseURL,
+					headers: {
+						'ark-beta-web-search': 'true',
+					},
+				}).responses;
+			}
 			return createOpenAICompatible({
 				name: 'custom',
 				apiKey: apiKey,
 				baseURL: config.baseURL,
 				includeUsage: true,
+				headers: {
+					"model": model
+				}
 			});
+
 	}
 }
 
@@ -388,22 +400,28 @@ function buildDefaultProviderOptions(args: {
 	text_verbosity?: any,
 	service_tier?: any,
 	reasoning_summary?: any,
-	store?: any
+	store?: any,
+	model?: any
 }) {
-	const { providerOptionsHeader, thinking, reasoning_effort, extra_body, text_verbosity, service_tier, reasoning_summary, store } = args;
+	const { providerOptionsHeader, thinking, reasoning_effort, extra_body, text_verbosity, service_tier, reasoning_summary, store, model } = args;
 	const providerOptions = providerOptionsHeader ? JSON.parse(providerOptionsHeader) : {
 		anthropic: {
 			thinking: thinking || { type: "enabled", budgetTokens: 4000 },
 			cacheControl: { type: "ephemeral" },
 		},
-		openai: {
-			reasoningEffort: reasoning_effort || "medium",
-			reasoningSummary: reasoning_summary || "auto",
-			textVerbosity: text_verbosity || "medium",
-			serviceTier: service_tier || "auto",
-			store: store || false,
-			promptCacheKey: 'ai-gateway',
-		},
+		openai: (typeof model === 'string' && model.startsWith('doubao/doubao'))
+			? {
+				caching: { type: "enabled" },
+			}
+			: {
+
+				reasoningEffort: reasoning_effort || "medium",
+				reasoningSummary: reasoning_summary || "auto",
+				textVerbosity: text_verbosity || "medium",
+				serviceTier: service_tier || "auto",
+				store: store || false,
+				promptCacheKey: 'ai-gateway',
+			},
 		xai: {
 			searchParameters: { mode: "auto", returnCitations: true },
 			...(reasoning_effort && { reasoningEffort: reasoning_effort }),
@@ -433,7 +451,7 @@ const getGatewayForAttempt = async (attempt: Attempt) => {
 		}
 		return createGateway(gatewayOptions);
 	}
-	return await createCustomProvider(attempt.name!, attempt.apiKey);
+	return await createCustomProvider(attempt.name!, attempt.apiKey, attempt.model);
 };
 
 function prepareProvidersToTry(args: {
@@ -631,8 +649,6 @@ function buildAiSdkTools(model: string, userTools: any[] | undefined, messages: 
 			}
 		});
 
-		const googleIncompatible = (!['google', 'gemini'].some(prefix => model.startsWith(prefix)) || Object.keys(aiSdkTools).length > 0);
-
 		const messageText = messages.map((msg: any) =>
 			typeof msg.content === 'string'
 				? msg.content.toLowerCase()
@@ -642,19 +658,23 @@ function buildAiSdkTools(model: string, userTools: any[] | undefined, messages: 
 		).join(' ');
 
 		const containsResearchKeywords = RESEARCH_KEYWORDS.some(keyword => messageText.includes(keyword));
+		if (containsResearchKeywords) {
+			aiSdkTools.ensembl_api = ensemblApiTool;
+			aiSdkTools.semantic_scholar_search = semanticScholarSearchTool;
+			aiSdkTools.semantic_scholar_recommendations = semanticScholarRecommendationsTool;
+		}
+
+		const googleIncompatible = (!['google', 'gemini'].some(prefix => model.startsWith(prefix)) || Object.keys(aiSdkTools).length > 0);
 
 		if (model.startsWith('openai')) {
 			aiSdkTools.web_search_preview = openai.tools.webSearchPreview({});
 			aiSdkTools.code_interpreter = openai.tools.codeInterpreter({});
 		} else if (model.startsWith('groq/openai')) {
 			aiSdkTools.browser_search = groq.tools.browserSearch({});
+		} else if (model.startsWith('doubao/doubao')) {
+			aiSdkTools.web_search = openai.tools.doubaoWebSearch({});
 		} else if (googleIncompatible && !model.startsWith('xai')) {
-			if (tavilyApiKey) aiSdkTools.tavily_search = tavilySearchTool;
-		}
-		if (containsResearchKeywords) {
-			aiSdkTools.ensembl_api = ensemblApiTool;
-			aiSdkTools.semantic_scholar_search = semanticScholarSearchTool;
-			aiSdkTools.semantic_scholar_recommendations = semanticScholarRecommendationsTool;
+			if (tavilyApiKey) aiSdkTools.web_search = tavilySearchTool;
 		}
 		if (googleIncompatible) {
 			aiSdkTools.jina_reader = jinaReaderTool;
@@ -757,7 +777,6 @@ const buildCommonOptions = (
 	} as any;
 };
 
-// Tools definitions
 const pythonExecutorTool = tool({
 	description: 'Execute Python code remotely via a secure Python execution API. Installed packages include: numpy, pandas.',
 	inputSchema: object({
@@ -1327,6 +1346,7 @@ app.post('/v1/responses', async (c: Context) => {
 		service_tier,
 		reasoning_summary: reasoning?.summary || undefined,
 		store,
+		model,
 	});
 
 	// Rebuild tools based on actual messages context
@@ -2307,7 +2327,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	const processedMessages = await processMessages(contextMessages);
 
 	const providerOptionsHeader = c.req.header('x-provider-options');
-	const providerOptions = buildDefaultProviderOptions({ providerOptionsHeader: providerOptionsHeader ?? null, thinking, reasoning_effort, extra_body, text_verbosity, service_tier, store });
+	const providerOptions = buildDefaultProviderOptions({ providerOptionsHeader: providerOptionsHeader ?? null, thinking, reasoning_effort, extra_body, text_verbosity, service_tier, store, model });
 
 	// Special routing for custom modules
 	if (typeof model === 'string' && model.startsWith('image/')) {

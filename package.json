@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch --env-file=.env.local dist/index.js --port 8888",
-    "build": "tsc",
-    "build:netlify": "mkdir -p netlify/edge-functions && cp src/index.ts netlify/edge-functions/index.ts && cp -R src/modules netlify/edge-functions/ && cp -R src/shared netlify/edge-functions/",
+    "build": "node scripts/patch-openai.js && tsc",
+    "patch-openai": "node scripts/patch-openai.js",
+    "build:netlify": "node scripts/patch-openai.js && mkdir -p netlify/edge-functions && cp src/index.ts netlify/edge-functions/index.ts && cp -R src/modules netlify/edge-functions/ && cp -R src/shared netlify/edge-functions/",
     "watch:netlify": "fswatch -o src | xargs -n1 -I{} netlify build",
     "dev:netlify": "trap 'jobs -p | xargs -r kill' EXIT; (bun run watch:netlify &) && netlify build && netlify dev",
     "start": "node dist/index.js"
