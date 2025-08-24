@@ -823,7 +823,7 @@ const pythonExecutorTool = tool({
 			cacheControl: { type: 'ephemeral' },
 		},
 	},
-	execute: async ({ code }: { code: string }) => {
+	execute: async ({ code }: { code: string }, { abortSignal }: { abortSignal?: AbortSignal }) => {
 		console.log(`Executing remote Python code: ${code.substring(0, 100)}...`);
 		try {
 			if (!pythonUrl) {
@@ -832,6 +832,15 @@ const pythonExecutorTool = tool({
 
 			const controller = new AbortController();
 			const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s
+
+			if (abortSignal) {
+				abortSignal.addEventListener('abort', () => {
+					controller.abort();
+				});
+				if (abortSignal.aborted) {
+					controller.abort();
+				}
+			}
 
 			const response = await fetch(pythonUrl, {
 				method: 'POST',
@@ -870,7 +879,7 @@ const pythonExecutorTool = tool({
 				...(data.result !== undefined && { result: data.result }),
 			};
 		} catch (error: any) {
-			const message = error?.name === 'AbortError' ? 'Request to Python server timed out' : (error?.message || 'Unknown error');
+			const message = error?.name === 'AbortError' ? 'Request to Python server timed out or was cancelled' : (error?.message || 'Unknown error');
 			return { success: false, error: message };
 		}
 	},
@@ -893,7 +902,7 @@ const tavilySearchTool = tool({
 			cacheControl: { type: 'ephemeral' },
 		},
 	},
-	execute: async (params) => {
+	execute: async (params, { abortSignal }: { abortSignal?: AbortSignal }) => {
 		const { query, max_results, include_domains, exclude_domains, include_raw_content, start_date, deep_search, include_images } = params;
 		console.log(`Tavily search with query: ${query}`);
 		try {
@@ -929,15 +938,27 @@ const tavilySearchTool = tool({
 						...(country && { country })
 					};
 
+					const controller = new AbortController();
+					const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+					if (abortSignal) {
+						abortSignal.addEventListener('abort', () => {
+							controller.abort();
+						});
+						if (abortSignal.aborted) {
+							controller.abort();
+						}
+					}
+
 					const response = await fetch('https://api.tavily.com/search', {
 						method: 'POST',
 						headers: {
 							'Content-Type': 'application/json',
 							'Authorization': `Bearer ${currentApiKey}`
 						},
-						body: JSON.stringify(searchPayload)
+						body: JSON.stringify(searchPayload),
+						signal: controller.signal
 					});
-
+					clearTimeout(timeoutId);
 					if (!response.ok) {
 						const errorText = await response.text();
 						throw new Error(`Tavily API error (${response.status}): ${errorText}`);
@@ -1004,7 +1025,7 @@ const jinaReaderTool = tool({
 	},
 	execute: async ({ url }: {
 		url: string;
-	}) => {
+	}, { abortSignal }: { abortSignal?: AbortSignal }) => {
 		console.log(`Jina Reader fetching content from: ${url}`);
 		try {
 			try {
@@ -1018,6 +1039,15 @@ const jinaReaderTool = tool({
 
 			const controller = new AbortController();
 			const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
+			if (abortSignal) {
+				abortSignal.addEventListener('abort', () => {
+					controller.abort();
+				});
+				if (abortSignal.aborted) {
+					controller.abort();
+				}
+			}
 
 			const headers: Record<string, string> = {
 				'X-Base': 'final'
@@ -1056,9 +1086,10 @@ const jinaReaderTool = tool({
 
 		} catch (error: any) {
 			console.error(`Jina Reader error: ${error.message || 'Unknown error'}`);
+			const message = error?.name === 'AbortError' ? 'Request was cancelled or timed out' : (error?.message || 'Unknown error');
 			return {
 				url,
-				error: `Failed to fetch content: ${error.message || 'Unknown error'}`,
+				error: `Failed to fetch content: ${message}`,
 				success: false
 			};
 		}
@@ -1075,7 +1106,7 @@ const ensemblApiTool = tool({
 			cacheControl: { type: 'ephemeral' },
 		},
 	},
-	execute: async ({ path }: { path: string }) => {
+	execute: async ({ path }: { path: string }, { abortSignal }: { abortSignal?: AbortSignal }) => {
 		console.log(`Ensembl API request to path: ${path}`);
 		try {
 			const cleanPath = path.startsWith('/') ? path.slice(1) : path;
@@ -1084,6 +1115,15 @@ const ensemblApiTool = tool({
 
 			const controller = new AbortController();
 			const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
+			if (abortSignal) {
+				abortSignal.addEventListener('abort', () => {
+					controller.abort();
+				});
+				if (abortSignal.aborted) {
+					controller.abort();
+				}
+			}
 
 			const response = await fetch(fullUrl, {
 				method: 'GET',
@@ -1115,7 +1155,7 @@ const ensemblApiTool = tool({
 			return await response.json();
 
 		} catch (error: any) {
-			const message = error?.name === 'AbortError' ? 'Request to Ensembl API timed out' : (error?.message || 'Unknown error');
+			const message = error?.name === 'AbortError' ? 'Request to Ensembl API timed out or was cancelled' : (error?.message || 'Unknown error');
 			return {
 				error: `Ensembl API request failed: ${message}`,
 				path: path
@@ -1142,7 +1182,7 @@ const semanticScholarSearchTool = tool({
 			cacheControl: { type: 'ephemeral' },
 		},
 	},
-	execute: async (params) => {
+	execute: async (params, { abortSignal }: { abortSignal?: AbortSignal }) => {
 		const { query, type = 'paper', limit = 10, offset = 0, year, venue, fieldsOfStudy, minCitationCount, publicationTypes } = params;
 		console.log(`Semantic Scholar ${type} search: ${query}`);
 		try {
@@ -1170,7 +1210,16 @@ const semanticScholarSearchTool = tool({
 			const fullUrl = `${baseUrl}/${endpoint}?${params.toString()}`;
 
 			const controller = new AbortController();
-			const timeoutId = setTimeout(() => controller.abort(), 30000);
+			const timeoutId = setTimeout(() => controller.abort(), 60000);
+
+			if (abortSignal) {
+				abortSignal.addEventListener('abort', () => {
+					controller.abort();
+				});
+				if (abortSignal.aborted) {
+					controller.abort();
+				}
+			}
 
 			const headers: Record<string, string> = {
 				'Content-Type': 'application/json',
@@ -1235,7 +1284,7 @@ const semanticScholarSearchTool = tool({
 			return data;
 
 		} catch (error: any) {
-			const message = error?.name === 'AbortError' ? 'Request to Semantic Scholar API timed out' : (error?.message || 'Unknown error');
+			const message = error?.name === 'AbortError' ? 'Request to Semantic Scholar API timed out or was cancelled' : (error?.message || 'Unknown error');
 			console.log(`Semantic Scholar search failed: ${message}`);
 			return {
 				error: `Semantic Scholar search failed: ${message}`,
@@ -1260,7 +1309,7 @@ const semanticScholarRecommendationsTool = tool({
 			cacheControl: { type: 'ephemeral' },
 		},
 	},
-	execute: async (params) => {
+	execute: async (params, { abortSignal }: { abortSignal?: AbortSignal }) => {
 		const { paperId, positivePaperIds, negativePaperIds, limit = 10, from = 'recent' } = params;
 		console.log(`Semantic Scholar recommendations for: ${paperId || `${positivePaperIds?.length || 0} positive papers`}`);
 		try {
@@ -1298,6 +1347,15 @@ const semanticScholarRecommendationsTool = tool({
 
 			const controller = new AbortController();
 			const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+			if (abortSignal) {
+				abortSignal.addEventListener('abort', () => {
+					controller.abort();
+				});
+				if (abortSignal.aborted) {
+					controller.abort();
+				}
+			}
 
 			const headers: Record<string, string> = {
 				'Content-Type': 'application/json',
@@ -1351,7 +1409,7 @@ const semanticScholarRecommendationsTool = tool({
 			return recommendations;
 
 		} catch (error: any) {
-			const message = error?.name === 'AbortError' ? 'Request to Semantic Scholar Recommendations API timed out' : (error?.message || 'Unknown error');
+			const message = error?.name === 'AbortError' ? 'Request to Semantic Scholar Recommendations API timed out or was cancelled' : (error?.message || 'Unknown error');
 			console.log(`Semantic Scholar recommendations failed: ${message}`);
 			return {
 				error: `Semantic Scholar recommendations failed: ${message}`
@@ -1375,6 +1433,15 @@ app.post('/v1/responses', async (c: Context) => {
 	if (!apiKey) return c.text('Unauthorized', 401);
 
 	const abortController = new AbortController();
+	if (c.req.raw?.signal) {
+		c.req.raw.signal.addEventListener('abort', () => {
+			abortController.abort();
+		});
+		// If already aborted, abort immediately
+		if (c.req.raw.signal.aborted) {
+			abortController.abort();
+		}
+	}
 
 	const body = await c.req.json();
 	const {
@@ -1421,8 +1488,6 @@ app.post('/v1/responses', async (c: Context) => {
 		headers[key.toLowerCase().replace(/-/g, '_')] = value;
 	});
 	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
-	let aiSdkTools: Record<string, any> = buildAiSdkTools(model, tools, []);
-
 	const toAiSdkMessages = async (): Promise<any[]> => {
 		// Seed from previous stored conversation if provided
 		let history: any[] = [];
@@ -1446,15 +1511,26 @@ app.post('/v1/responses', async (c: Context) => {
 	};
 
 	const messages = await toAiSdkMessages();
-
+	let modelId: string = model;
 	let thinking: Record<string, any> | undefined = undefined;
-	aiSdkTools = buildAiSdkTools(model, tools, messages);
-	if (Object.keys(aiSdkTools).length === 0 && model.startsWith('doubao/deepseek-v3-1')) {
+	if (modelId.startsWith('doubao/')) {
+		if (Array.isArray(messages) && messages.length > 0) {
+			const lastMsg = messages[messages.length - 1];
+			const parts = Array.isArray(lastMsg?.content) ? lastMsg.content : [];
+			const hasImage = parts.some((p: any) => p?.type === 'image');
+			if (hasImage) {
+				modelId = 'doubao/doubao-seed-1-6-vision-250815';
+			}
+		}
+	}
+	const aiSdkTools: Record<string, any> = buildAiSdkTools(modelId, tools, messages);
+	if (Object.keys(aiSdkTools).length === 0 && modelId.startsWith('doubao/deepseek-v3-1')) {
 		thinking = {
 			type: 'enabled',
 		};
 	}
 
+	const { providersToTry } = prepareProvidersToTry({ model: modelId, providerKeys, isPasswordAuth, authApiKey: apiKey });
 	const providerOptionsHeader = c.req.header('x-provider-options');
 	const providerOptions = buildDefaultProviderOptions({
 		providerOptionsHeader: providerOptionsHeader ?? null,
@@ -1465,11 +1541,8 @@ app.post('/v1/responses', async (c: Context) => {
 		service_tier,
 		reasoning_summary: reasoning?.summary || undefined,
 		store,
-		model,
+		model: modelId,
 	});
-
-	const { providersToTry } = prepareProvidersToTry({ model, providerKeys, isPasswordAuth, authApiKey: apiKey });
-
 	const commonParams = {
 		messages,
 		aiSdkTools,
@@ -1503,7 +1576,7 @@ app.post('/v1/responses', async (c: Context) => {
 					instructions,
 					max_output_tokens: max_output_tokens ?? null,
 					max_tool_calls: null,
-					model,
+					model: modelId,
 					output: outputItems,
 					parallel_tool_calls: true,
 					previous_response_id: previous_response_id || null,
@@ -1998,7 +2071,7 @@ app.post('/v1/responses', async (c: Context) => {
 
 										outputIndex = textOutputIndex;
 									}
-									if (!collectedText && model === 'cerebras/qwen-3-235b-a22b-thinking-2507') {
+									if (!collectedText && modelId === 'cerebras/qwen-3-235b-a22b-thinking-2507') {
 										text = '<think>' + text;
 									}
 									collectedText += text;
@@ -2372,7 +2445,7 @@ app.post('/v1/responses', async (c: Context) => {
 				input: inputNormalized,
 				instructions,
 				max_output_tokens: max_output_tokens ?? null,
-				model,
+				model: modelId,
 				output,
 				previous_response_id: previous_response_id || null,
 				reasoning: reasoning,
@@ -2421,6 +2494,15 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	}
 
 	const abortController = new AbortController();
+	if (c.req.raw?.signal) {
+		c.req.raw.signal.addEventListener('abort', () => {
+			abortController.abort();
+		});
+		// If already aborted, abort immediately
+		if (c.req.raw.signal.aborted) {
+			abortController.abort();
+		}
+	}
 
 	let gateway;
 
@@ -2432,7 +2514,6 @@ app.post('/v1/chat/completions', async (c: Context) => {
 
 	const body = await c.req.json();
 	const { model, messages = [], tools, stream, temperature, top_p, top_k, max_tokens, stop_sequences, seed, presence_penalty, frequency_penalty, tool_choice, reasoning_effort, thinking, extra_body, text_verbosity, service_tier, store = true } = body;
-	let thinkingConfig = thinking;
 	const contextMessages = addContextMessages(messages, c);
 	const processedMessages = await processMessages(contextMessages);
 
@@ -2454,23 +2535,50 @@ app.post('/v1/chat/completions', async (c: Context) => {
 		headers[key.toLowerCase().replace(/-/g, '_')] = value
 	})
 	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
-	const aiSdkTools: Record<string, any> = buildAiSdkTools(model, tools, contextMessages);
-	if (Object.keys(aiSdkTools).length === 0 && model.startsWith('doubao/deepseek-v3-1')) {
+	let modelId: string = model;
+	let thinkingConfig = thinking;
+	if (modelId.startsWith('doubao/')) {
+		if (Array.isArray(processedMessages) && processedMessages.length > 0) {
+			const lastMsg = processedMessages[processedMessages.length - 1];
+			const parts = Array.isArray(lastMsg?.content) ? lastMsg.content : [];
+			const hasImage = parts.some((p: any) => p?.type === 'image');
+			if (hasImage) {
+				modelId = 'doubao/doubao-seed-1-6-vision-250815';
+			}
+		}
+	}
+	const aiSdkTools: Record<string, any> = buildAiSdkTools(modelId, tools, processedMessages);
+	if (Object.keys(aiSdkTools).length === 0 && modelId.startsWith('doubao/deepseek-v3-1')) {
 		thinkingConfig = {
 			type: 'enabled',
 		};
 	}
-	const { providersToTry } = prepareProvidersToTry({ model, providerKeys, isPasswordAuth, authApiKey: apiKey });
+	const { providersToTry } = prepareProvidersToTry({ model: modelId, providerKeys, isPasswordAuth, authApiKey: apiKey });
 	const providerOptionsHeader = c.req.header('x-provider-options');
-	const providerOptions = buildDefaultProviderOptions({ providerOptionsHeader: providerOptionsHeader ?? null, thinking: thinkingConfig, reasoning_effort, extra_body, text_verbosity, service_tier, store, model });
+	const providerOptions = buildDefaultProviderOptions({ providerOptionsHeader: providerOptionsHeader ?? null, thinking: thinkingConfig, reasoning_effort, extra_body, text_verbosity, service_tier, store, model: modelId });
+	const commonParams = {
+		messages: processedMessages,
+		aiSdkTools,
+		temperature,
+		top_p,
+		top_k,
+		max_tokens,
+		seed,
+		stop_sequences,
+		presence_penalty,
+		frequency_penalty,
+		tool_choice,
+		abortSignal: abortController.signal,
+		providerOptions,
+		reasoning_effort,
+	};
 	const now = Math.floor(Date.now() / 1000);
 	const chunkId = `chatcmpl-${now}`;
-
 	// If streaming, handle retries within a single ReadableStream so we can switch keys on error mid-stream
 	if (stream) {
 		const streamResponse = new ReadableStream({
 			async start(controller) {
-				const baseChunk = { id: chunkId, object: 'chat.completion.chunk', created: now, model } as any;
+				const baseChunk = { id: chunkId, object: 'chat.completion.chunk', created: now, model: modelId } as any;
 				const maxAttempts = Math.min(providersToTry.length, MAX_ATTEMPTS);
 				let attemptsTried = 0;
 				let lastStreamError: any = null;
@@ -2493,22 +2601,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 						// Check if this is Poe provider
 						isPoeProvider = attempt.name === 'poe';
 
-						const commonOptions = buildCommonOptions(gw, attempt, {
-							messages: processedMessages,
-							aiSdkTools,
-							temperature,
-							top_p,
-							top_k,
-							max_tokens,
-							seed,
-							stop_sequences,
-							presence_penalty,
-							frequency_penalty,
-							tool_choice,
-							abortSignal: abortController.signal,
-							providerOptions,
-							reasoning_effort,
-						});
+						const commonOptions = buildCommonOptions(gw, attempt, commonParams);
 
 						const result = streamText(commonOptions);
 						// Forward chunks; on error, try next key/provider
@@ -2729,22 +2822,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 		try {
 			attemptsTried++;
 			const gw = await getGatewayForAttempt(provider);
-			const commonOptions = buildCommonOptions(gw, provider, {
-				messages: processedMessages,
-				aiSdkTools,
-				temperature,
-				top_p,
-				top_k,
-				max_tokens,
-				seed,
-				stop_sequences,
-				presence_penalty,
-				frequency_penalty,
-				tool_choice,
-				abortSignal: abortController.signal,
-				providerOptions,
-				reasoning_effort,
-			});
+			const commonOptions = buildCommonOptions(gw, provider, commonParams);
 
 			const result = await generateText(commonOptions);
 
