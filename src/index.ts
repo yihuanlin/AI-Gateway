@@ -1668,9 +1668,10 @@ app.post('/v1/responses', async (c: Context) => {
 									break;
 								}
 								case 'text-delta': {
+									let text: string = part.text;
 									// Handle Poe-specific reasoning detection
 									if (isPoeProvider) {
-										poeReasoningBuffer += part.text;
+										poeReasoningBuffer += text;
 
 										// Check if reasoning is starting
 										if (!poeReasoningMode && startsWithThinking(poeReasoningBuffer)) {
@@ -1892,7 +1893,7 @@ app.post('/v1/responses', async (c: Context) => {
 												continue;
 											} else {
 												// Still in reasoning mode, add to reasoning
-												const newReasoningText = part.text;
+												const newReasoningText = text;
 												const cleanedNewReasoningText = cleanPoeReasoningDelta(newReasoningText);
 												reasoningText += cleanedNewReasoningText;
 												emit({
@@ -1950,15 +1951,17 @@ app.post('/v1/responses', async (c: Context) => {
 
 										outputIndex = textOutputIndex;
 									}
-
-									collectedText += part.text;
+									if (!collectedText && model === 'cerebras/qwen-3-235b-a22b-thinking-2507') {
+										text = '<think>' + text;
+									}
+									collectedText += text;
 									emit({
 										type: 'response.output_text.delta',
 										sequence_number: sequenceNumber++,
 										item_id: textItemId,
 										output_index: outputIndex,
 										content_index: 0,
-										delta: part.text
+										delta: text
 									});
 									break;
 								}
@@ -2489,9 +2492,10 @@ app.post('/v1/chat/completions', async (c: Context) => {
 									controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
 									break;
 								case 'text-delta':
+									let text: string = part.text;
 									// Handle Poe-specific reasoning detection
 									if (isPoeProvider) {
-										poeReasoningBuffer += part.text;
+										poeReasoningBuffer += text;
 
 										// Check if reasoning is starting
 										if (!poeReasoningMode && startsWithThinking(poeReasoningBuffer)) {
@@ -2572,7 +2576,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 												break;
 											} else {
 												// Still in reasoning mode, add to reasoning
-												const newReasoningText = part.text;
+												const newReasoningText = text;
 												const cleanedNewReasoningText = cleanPoeReasoningDelta(newReasoningText);
 												poeAccumulatedReasoning += cleanedNewReasoningText;
 												chunk = { ...baseChunk, choices: [{ index: 0, delta: { reasoning_content: cleanedNewReasoningText }, finish_reason: null }] };
@@ -2589,10 +2593,12 @@ app.post('/v1/chat/completions', async (c: Context) => {
 											}
 										}
 									}
-
+									if (!accumulatedText && model === 'cerebras/qwen-3-235b-a22b-thinking-2507') {
+										text = '<think>' + text;
+									}
 									// Regular text handling (non-Poe or non-reasoning content)
-									accumulatedText += part.text;
-									chunk = { ...baseChunk, choices: [{ index: 0, delta: { content: part.text }, finish_reason: null }] };
+									accumulatedText += text;
+									chunk = { ...baseChunk, choices: [{ index: 0, delta: { content: text }, finish_reason: null }] };
 									controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
 									break;
 								case 'source':
