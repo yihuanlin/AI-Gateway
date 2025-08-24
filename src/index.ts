@@ -28,7 +28,9 @@ let geo: {
 	city?: string;
 	country?: { code: string; name: string };
 	timezone?: string;
+	subdivision?: { code: string; name: string };
 } | null = null;
+let isResearchMode: boolean = false;
 
 // Helper functions
 
@@ -403,10 +405,43 @@ function buildDefaultProviderOptions(args: {
 	if (model.startsWith('xai/')) {
 		return {
 			xai: {
-				searchParameters: { mode: "auto", returnCitations: true },
+				searchParameters: {
+					mode: 'auto',
+					returnCitations: true,
+					maxSearchResults: isResearchMode ? 20 : 50,
+					sources: [
+						{
+							type: 'web',
+							...(!isResearchMode && geo?.country?.code ?
+								{ country: { country: geo.country.code } } : {})
+						},
+						...(!isResearchMode ? [{
+							type: 'x'
+						},
+						{
+							type: 'news',
+							include: false,
+							...(!isResearchMode && geo?.country?.code ?
+								{ country: { country: geo.country.code } } : {})
+						}] : []),
+					]
+				},
 				...(reasoning_effort && { reasoningEffort: reasoning_effort }),
 			}
 		};
+	}
+	if (model.startsWith('perplexity/')) {
+		if (isResearchMode) {
+			return {
+				perplexity: {
+					search_mode: 'academic',
+					web_search_options: {
+						search_context_size: 'high',
+					},
+				}
+			};
+		}
+		return {};
 	}
 	const providerOptions = providerOptionsHeader ? JSON.parse(providerOptionsHeader) : {
 		openai: {
@@ -597,9 +632,25 @@ function responsesInputToAiSdkMessages(input: any): any[] {
 // Build AI SDK tools from OpenAI tools array with shared heuristics
 function buildAiSdkTools(model: string, userTools: any[] | undefined, messages: any[]): Record<string, any> {
 	let aiSdkTools: Record<string, any> = {};
+	function buildResearchTools() {
+		const messageText = messages.map((msg: any) =>
+			typeof msg.content === 'string'
+				? msg.content.toLowerCase()
+				: Array.isArray(msg.content)
+					? msg.content.map((p: any) => (p?.text || '')).join(' ').toLowerCase()
+					: ''
+		).join(' ');
+		isResearchMode = RESEARCH_KEYWORDS.some(keyword => messageText.includes(keyword));
+		if (isResearchMode) {
+			aiSdkTools.ensembl_api = ensemblApiTool;
+			aiSdkTools.scholar_search = semanticScholarSearchTool;
+			aiSdkTools.paper_recommendations = semanticScholarRecommendationsTool;
+		}
+	}
 
-	// Only build tools if userTools is explicitly provided as an array (even if empty)
-	if (Array.isArray(userTools)) {
+	if (model.startsWith('perplexity')) {
+		buildResearchTools();
+	} else if (Array.isArray(userTools)) {
 		userTools.forEach((userTool: any) => {
 			// Support both OpenAI Chat-style and flat Responses-style tool schemas
 			const isFunctionType = userTool?.type === 'function';
@@ -638,25 +689,23 @@ function buildAiSdkTools(model: string, userTools: any[] | undefined, messages: 
 			}
 		});
 
-		const messageText = messages.map((msg: any) =>
-			typeof msg.content === 'string'
-				? msg.content.toLowerCase()
-				: Array.isArray(msg.content)
-					? msg.content.map((p: any) => (p?.text || '')).join(' ').toLowerCase()
-					: ''
-		).join(' ');
-
-		const containsResearchKeywords = RESEARCH_KEYWORDS.some(keyword => messageText.includes(keyword));
-		if (containsResearchKeywords) {
-			aiSdkTools.ensembl_api = ensemblApiTool;
-			aiSdkTools.scholar_search = semanticScholarSearchTool;
-			aiSdkTools.paper_recommendations = semanticScholarRecommendationsTool;
-		}
+		buildResearchTools();
 
 		const googleIncompatible = (!['google', 'gemini'].some(prefix => model.startsWith(prefix)) || Object.keys(aiSdkTools).length > 0);
 
 		if (model.startsWith('openai')) {
-			aiSdkTools.web_search_preview = openai.tools.webSearchPreview({});
+			aiSdkTools.web_search_preview = openai.tools.webSearchPreview({
+				searchContextSize: isResearchMode ? 'high' : 'medium',
+				...(!isResearchMode && geo ? {
+					userLocation: {
+						type: 'approximate',
+						...(geo.city && { city: geo.city }),
+						...(geo.subdivision?.name && { region: geo.subdivision.name }),
+						...(geo.country?.code && { country: geo.country.code }),
+						...(geo.timezone && { timezone: geo.timezone }),
+					}
+				} : {})
+			});
 			aiSdkTools.code_interpreter = openai.tools.codeInterpreter({});
 		} else if (model.startsWith('groq/openai')) {
 			aiSdkTools.browser_search = groq.tools.browserSearch({});
@@ -665,7 +714,7 @@ function buildAiSdkTools(model: string, userTools: any[] | undefined, messages: 
 		}
 		if (googleIncompatible) {
 			aiSdkTools.fetch = jinaReaderTool;
-			if (!model.startsWith('openai') && pythonApiKey && pythonUrl) {
+			if (!isResearchMode && !model.startsWith('openai') && pythonApiKey && pythonUrl) {
 				aiSdkTools.python_executor = pythonExecutorTool;
 			}
 		} else {
@@ -831,12 +880,12 @@ const tavilySearchTool = tool({
 	description: 'Web search using Tavily',
 	inputSchema: object({
 		query: string({ message: 'Search query' }),
-		max_results: optional(number({ message: 'Maximum number of results to return (default: 5, max: 20)' })),
+		max_results: optional(number({ message: `Maximum number of results to return (default: ${isResearchMode ? '10' : '5'}, max: 20)` })),
 		include_raw_content: optional(boolean({ message: 'Include the cleaned and parsed HTML content of each search result (default: false)' })),
 		include_domains: optional(array(string({ message: 'Domain to include' }), { message: 'List of domains to include in the search' })),
 		exclude_domains: optional(array(string({ message: 'Domain to exclude' }), { message: 'List of domains to exclude from the search' })),
 		start_date: optional(string({ message: 'Start date for search results (format: YYYY-MM-DD)' })),
-		deep_search: optional(boolean({ message: 'Enable deep search for more comprehensive results (default: false)' })),
+		deep_search: optional(boolean({ message: `Enable deep search for more comprehensive results (default: ${isResearchMode ? 'true' : 'false'})` })),
 		include_images: optional(boolean({ message: 'Include images in the search results (default: false)' })),
 	}),
 	providerOptions: {
@@ -852,12 +901,15 @@ const tavilySearchTool = tool({
 				return { error: 'Tavily API key is not configured' };
 			}
 
-			const maxResults = max_results || 5;
+			const maxResults = max_results || (isResearchMode ? 10 : 5);
 			const includeRawContent = include_raw_content || false;
 			const topic = query.toLowerCase().includes('news') ? 'news' : 'general';
-			const search_depth = deep_search ? 'advanced' : 'basic';
+			const search_depth = deep_search || isResearchMode ? 'advanced' : 'basic';
 			const apiKeys = tavilyApiKey.split(',').map((key: string) => key.trim());
-			let lastError: any;
+			let lastError: Error | null = null;
+			const country: string | undefined = !isResearchMode
+				? geo?.country?.name?.toLocaleLowerCase()
+				: undefined;
 
 			for (let i = 0; i < apiKeys.length; i++) {
 				const currentApiKey = apiKeys[i];
@@ -874,6 +926,7 @@ const tavilySearchTool = tool({
 						...(include_domains && { include_domains }),
 						...(exclude_domains && { exclude_domains }),
 						...(include_images && { include_images, include_image_descriptions: true }),
+						...(country && { country })
 					};
 
 					const response = await fetch('https://api.tavily.com/search', {
@@ -1323,12 +1376,6 @@ app.post('/v1/responses', async (c: Context) => {
 
 	const abortController = new AbortController();
 
-	// Headers and aux keys
-	tavilyApiKey = c.req.header('x-tavily-api-key') || (isPasswordAuth ? process.env.TAVILY_API_KEY || null : null);
-	pythonApiKey = c.req.header('x-python-api-key') || (isPasswordAuth ? process.env.PYTHON_API_KEY || null : null);
-	pythonUrl = c.req.header('x-python-url') || (isPasswordAuth ? process.env.PYTHON_URL || null : null);
-	semanticScholarApiKey = c.req.header('x-semantic-scholar-api-key') || (isPasswordAuth ? process.env.SEMANTIC_SCHOLAR_API_KEY || null : null);
-
 	const body = await c.req.json();
 	const {
 		model,
@@ -1349,7 +1396,25 @@ app.post('/v1/responses', async (c: Context) => {
 		service_tier,
 		store = true,
 	} = body || {};
-
+	const now = Date.now();
+	const responseId = request_id || 'resp_' + new Date(now).toISOString().slice(0, 16).replace(/[-:T]/g, '');
+	if (typeof model === 'string' && model.startsWith('image/')) {
+		const { handleImageForResponses } = await import('./modules/images.mts');
+		return await handleImageForResponses({ model, input, headers: c.req.raw.headers as any, stream: !!stream, temperature, top_p, request_id: responseId, authHeader: authHeader || null, isPasswordAuth });
+	}
+	if (typeof model === 'string' && model.startsWith('video/')) {
+		const { handleVideoForResponses } = await import('./modules/videos.mts');
+		return await handleVideoForResponses({ model, input, headers: c.req.raw.headers as any, stream: !!stream, request_id: responseId, authHeader: authHeader || null, isPasswordAuth });
+	}
+	if (model === 'admin/magic') {
+		const { handleAdminForResponses } = await import('./modules/management.mts');
+		return await handleAdminForResponses({ input, headers: c.req.raw.headers as any, model, request_id: responseId, stream: !!stream, isPasswordAuth });
+	}
+	// Headers and aux keys
+	tavilyApiKey = c.req.header('x-tavily-api-key') || (isPasswordAuth ? process.env.TAVILY_API_KEY || null : null);
+	pythonApiKey = c.req.header('x-python-api-key') || (isPasswordAuth ? process.env.PYTHON_API_KEY || null : null);
+	pythonUrl = c.req.header('x-python-url') || (isPasswordAuth ? process.env.PYTHON_URL || null : null);
+	semanticScholarApiKey = c.req.header('x-semantic-scholar-api-key') || (isPasswordAuth ? process.env.SEMANTIC_SCHOLAR_API_KEY || null : null);
 	// Provider keys and headers map
 	const headers: Record<string, string> = {};
 	c.req.raw.headers.forEach((value, key) => {
@@ -1381,24 +1446,6 @@ app.post('/v1/responses', async (c: Context) => {
 	};
 
 	const messages = await toAiSdkMessages();
-
-	// Storage preparation (needed for admin/magic routing id reference)
-	const now = Date.now();
-	const responseId = request_id || 'resp_' + new Date(now).toISOString().slice(0, 16).replace(/[-:T]/g, '');
-
-	// Dynamic model routing to reduce cold starts
-	if (typeof model === 'string' && model.startsWith('image/')) {
-		const { handleImageForResponses } = await import('./modules/images.mts');
-		return await handleImageForResponses({ model, input, headers: c.req.raw.headers as any, stream: !!stream, temperature, top_p, request_id: responseId, authHeader: authHeader || null, isPasswordAuth });
-	}
-	if (typeof model === 'string' && model.startsWith('video/')) {
-		const { handleVideoForResponses } = await import('./modules/videos.mts');
-		return await handleVideoForResponses({ model, input, headers: c.req.raw.headers as any, stream: !!stream, request_id: responseId, authHeader: authHeader || null, isPasswordAuth });
-	}
-	if (model === 'admin/magic') {
-		const { handleAdminForResponses } = await import('./modules/management.mts');
-		return await handleAdminForResponses({ input, headers: c.req.raw.headers as any, model, request_id: responseId, stream: !!stream, isPasswordAuth });
-	}
 
 	let thinking: Record<string, any> | undefined = undefined;
 	aiSdkTools = buildAiSdkTools(model, tools, messages);
@@ -2283,6 +2330,7 @@ app.post('/v1/responses', async (c: Context) => {
 				url: source.url || '',
 				type: (source.sourceType || 'url') + '_citation'
 			})) : [];
+			accumulatedSources.push(...annotations);
 
 			// Construct Responses API output
 			const inputNormalized = typeof input === 'string'
@@ -2311,7 +2359,7 @@ app.post('/v1/responses', async (c: Context) => {
 					id: randomId('msg'),
 					status: 'completed',
 					role: 'assistant',
-					content: [{ type: 'output_text', text: content, annotations }]
+					content: [{ type: 'output_text', text: content, annotations: accumulatedSources }]
 				});
 			}
 			const responsePayload = {
@@ -2385,33 +2433,9 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	const body = await c.req.json();
 	const { model, messages = [], tools, stream, temperature, top_p, top_k, max_tokens, stop_sequences, seed, presence_penalty, frequency_penalty, tool_choice, reasoning_effort, thinking, extra_body, text_verbosity, service_tier, store = true } = body;
 	let thinkingConfig = thinking;
-	// Get provider API keys from request headers
-	const headers: Record<string, string> = {}
-	c.req.raw.headers.forEach((value, key) => {
-		headers[key.toLowerCase().replace(/-/g, '_')] = value
-	})
-
-	// Add context messages using shared function
 	const contextMessages = addContextMessages(messages, c);
-
-	// Use async provider keys function for better performance
-	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
-	const aiSdkTools: Record<string, any> = buildAiSdkTools(model, tools, contextMessages);
-	if (Object.keys(aiSdkTools).length === 0 && model.startsWith('doubao/deepseek-v3-1')) {
-		thinkingConfig = {
-			type: 'enabled',
-		};
-	}
-
-	// Parse the model name to determine provider(s)
-	const { providersToTry } = prepareProvidersToTry({ model, providerKeys, isPasswordAuth, authApiKey: apiKey });
-
 	const processedMessages = await processMessages(contextMessages);
 
-	const providerOptionsHeader = c.req.header('x-provider-options');
-	const providerOptions = buildDefaultProviderOptions({ providerOptionsHeader: providerOptionsHeader ?? null, thinking: thinkingConfig, reasoning_effort, extra_body, text_verbosity, service_tier, store, model });
-
-	// Special routing for custom modules
 	if (typeof model === 'string' && model.startsWith('image/')) {
 		const { handleImageForChat } = await import('./modules/images.mts');
 		return await handleImageForChat({ model, messages: processedMessages, headers: c.req.raw.headers as any, stream: !!stream, temperature, top_p, authHeader: authHeader || null, isPasswordAuth });
@@ -2424,6 +2448,21 @@ app.post('/v1/chat/completions', async (c: Context) => {
 		const { handleAdminForChat } = await import('./modules/management.mts');
 		return await handleAdminForChat({ messages: processedMessages, headers: c.req.raw.headers as any, model, stream: !!stream, isPasswordAuth });
 	}
+
+	const headers: Record<string, string> = {}
+	c.req.raw.headers.forEach((value, key) => {
+		headers[key.toLowerCase().replace(/-/g, '_')] = value
+	})
+	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
+	const aiSdkTools: Record<string, any> = buildAiSdkTools(model, tools, contextMessages);
+	if (Object.keys(aiSdkTools).length === 0 && model.startsWith('doubao/deepseek-v3-1')) {
+		thinkingConfig = {
+			type: 'enabled',
+		};
+	}
+	const { providersToTry } = prepareProvidersToTry({ model, providerKeys, isPasswordAuth, authApiKey: apiKey });
+	const providerOptionsHeader = c.req.header('x-provider-options');
+	const providerOptions = buildDefaultProviderOptions({ providerOptionsHeader: providerOptionsHeader ?? null, thinking: thinkingConfig, reasoning_effort, extra_body, text_verbosity, service_tier, store, model });
 	const now = Math.floor(Date.now() / 1000);
 	const chunkId = `chatcmpl-${now}`;
 
@@ -2435,7 +2474,6 @@ app.post('/v1/chat/completions', async (c: Context) => {
 				const maxAttempts = Math.min(providersToTry.length, MAX_ATTEMPTS);
 				let attemptsTried = 0;
 				let lastStreamError: any = null;
-				let accumulatedCitations: Array<{ type: string, url_citation: { url: string, title: string } }> = [];
 				let accumulatedText = '';
 
 				// Poe-specific reasoning detection state
@@ -2603,12 +2641,10 @@ app.post('/v1/chat/completions', async (c: Context) => {
 									break;
 								case 'source':
 									// Accumulate citations for later inclusion in finish
-									accumulatedCitations.push({
-										type: part.sourceType + '_citation',
-										url_citation: {
-											url: part.url || '',
-											title: part.title || ''
-										}
+									accumulatedSources.push({
+										type: (part.sourceType || 'url') + '_citation',
+										url: part.url || '',
+										title: part.title || ''
 									});
 									break;
 								case 'tool-call':
@@ -2624,7 +2660,14 @@ app.post('/v1/chat/completions', async (c: Context) => {
 									}
 									break;
 								case 'finish':
-									if (accumulatedCitations.length > 0) {
+									if (accumulatedSources.length > 0) {
+										const accumulatedCitations = accumulatedSources.map(source => ({
+											type: source.type === 'url_citation' ? 'url_citation' : `${source.type}_citation`,
+											url_citation: {
+												url: source.url,
+												title: source.title
+											}
+										}));
 										const citationsChunk = { ...baseChunk, choices: [{ index: 0, delta: { annotations: accumulatedCitations }, finish_reason: null }] };
 										controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(citationsChunk)}\n\n`));
 									}
@@ -2707,11 +2750,17 @@ app.post('/v1/chat/completions', async (c: Context) => {
 
 			const annotations = result.sources ? result.sources.map((source: any) => ({
 				type: (source.sourceType || 'url') + '_citation',
-				url_citation: {
-					url: source.url || '',
-					title: source.title || ''
-				}
+				url: source.url || '',
+				title: source.title || '',
 			})) : [];
+			accumulatedSources.push(...annotations);
+			const accumulatedCitations = accumulatedSources.map(source => ({
+				type: source.type === 'url_citation' ? 'url_citation' : `${source.type}_citation`,
+				url_citation: {
+					url: source.url,
+					title: source.title
+				}
+			}));
 
 			let content = result.text || '';
 			let reasoningContent = result.reasoningText || '';
@@ -2732,7 +2781,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 							content: content,
 							reasoning_content: reasoningContent || undefined,
 							tool_calls: result.toolCalls,
-							...(annotations.length > 0 ? { annotations } : {})
+							...(accumulatedCitations.length > 0 ? { annotations: accumulatedCitations } : {})
 						},
 						finish_reason: result.finishReason,
 					},
