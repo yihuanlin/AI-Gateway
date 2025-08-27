@@ -14,7 +14,7 @@ import { string, number, boolean, array, object, optional, int, enum as zenum } 
 const app = new Hono()
 const TEXT_ENCODER = new TextEncoder();
 const EXCLUDED_TOOLS = new Set(['code_execution', 'python_executor', 'web_search', 'fetch', 'google_search', 'web_search_preview', 'url_context', 'browser_search', 'scholar_search', 'paper_recommendations', 'ensembl_api']);
-const RESEARCH_KEYWORDS = ['scientific', 'biolog', 'research', 'paper'];
+const RESEARCH_KEYWORDS = ['research', 'paper'];
 const MAX_ATTEMPTS = 3;
 
 let accumulatedSources: Array<{ title: string, url: string, type: string }> = [];
@@ -481,43 +481,45 @@ function buildDefaultProviderOptions(args: {
 	service_tier?: any,
 	reasoning_summary?: any,
 	store?: any,
-	model?: any
+	model?: any,
+	search?: boolean,
 }) {
-	const { providerOptionsHeader, thinking, reasoning_effort, extra_body, text_verbosity, service_tier, reasoning_summary, store, model } = args;
+	const { providerOptionsHeader, thinking, reasoning_effort, extra_body, text_verbosity, service_tier, reasoning_summary, store, model, search } = args;
 	if (model.startsWith('anthropic/')) {
 		return {
 			anthropic:
 			{
-				thinking: thinking || { type: "enabled", budgetTokens: 4000 },
+				thinking: thinking || { type: "enabled", budgetTokens: isResearchMode ? 8000 : 4000 },
 				cacheControl: { type: "ephemeral" },
 			}
 		};
 	}
-	if (model.startsWith('xai/') && !model.includes('code')) {
+	if (model.startsWith('xai/')) {
 		return {
 			xai: {
-				searchParameters: {
-					mode: 'auto',
-					returnCitations: true,
-					maxSearchResults: isResearchMode ? 20 : 50,
-					sources: [
-						{
-							type: 'web',
-							...(!isResearchMode && geo?.country?.code ?
-								{ country: { country: geo.country.code } } : {})
-						},
-						...(!isResearchMode ? [{
-							type: 'x'
-						},
-						{
-							type: 'news',
-							include: false,
-							...(!isResearchMode && geo?.country?.code ?
-								{ country: { country: geo.country.code } } : {})
-						}] : []),
-					]
-				},
-				...(reasoning_effort && { reasoningEffort: reasoning_effort }),
+				...(search && {
+					searchParameters: {
+						mode: 'auto',
+						returnCitations: true,
+						maxSearchResults: isResearchMode ? 30 : 15,
+						sources: [
+							{
+								type: 'web',
+								...(!isResearchMode && geo?.country?.code ?
+									{ country: geo.country.code } : {})
+							},
+							...(!isResearchMode ? [{
+								type: 'x'
+							},
+							{
+								type: 'news',
+								...(!isResearchMode && geo?.country?.code ?
+									{ country: geo.country.code } : {})
+							}] : []),
+						]
+					}
+				}),
+				...((model.startsWith('xai/grok-3') && (reasoning_effort || isResearchMode)) && { reasoningEffort: reasoning_effort || (isResearchMode ? 'high' : 'low') }),
 			}
 		};
 	}
@@ -536,7 +538,7 @@ function buildDefaultProviderOptions(args: {
 	}
 	const providerOptions = providerOptionsHeader ? JSON.parse(providerOptionsHeader) : {
 		openai: {
-			reasoningEffort: reasoning_effort || "medium",
+			reasoningEffort: reasoning_effort || (isResearchMode ? 'high' : "medium"),
 			reasoningSummary: reasoning_summary || "auto",
 			textVerbosity: text_verbosity || "medium",
 			serviceTier: service_tier || "auto",
@@ -554,7 +556,7 @@ function buildDefaultProviderOptions(args: {
 			}),
 		},
 		custom: {
-			reasoning_effort: reasoning_effort || "medium",
+			reasoning_effort: reasoning_effort || (isResearchMode ? 'high' : "medium"),
 			...(extra_body && { extra_body }),
 			...(thinking && { thinking }),
 		},
@@ -735,17 +737,9 @@ function responsesInputToAiSdkMessages(input: any): any[] {
 }
 
 // Build AI SDK tools from OpenAI tools array with shared heuristics
-function buildAiSdkTools(model: string, userTools: any[] | undefined, messages: any[]): Record<string, any> {
+function buildAiSdkTools(model: string, userTools: any[] | undefined): Record<string, any> {
 	let aiSdkTools: Record<string, any> = {};
 	function buildResearchTools() {
-		const messageText = messages.map((msg: any) =>
-			typeof msg.content === 'string'
-				? msg.content.toLowerCase()
-				: Array.isArray(msg.content)
-					? msg.content.map((p: any) => (p?.text || '')).join(' ').toLowerCase()
-					: ''
-		).join(' ');
-		isResearchMode = RESEARCH_KEYWORDS.some(keyword => messageText.includes(keyword));
 		if (isResearchMode) {
 			aiSdkTools.ensembl_api = ensemblApiTool;
 			aiSdkTools.scholar_search = semanticScholarSearchTool;
@@ -1622,6 +1616,7 @@ app.post('/v1/responses', async (c: Context) => {
 	const messages = await toAiSdkMessages();
 	let modelId: string = model;
 	let thinking: Record<string, any> | undefined = undefined;
+	let search: boolean = false;
 	if (modelId.startsWith('doubao/')) {
 		if (Array.isArray(messages) && messages.length > 0) {
 			const lastMsg = messages[messages.length - 1];
@@ -1632,11 +1627,23 @@ app.post('/v1/responses', async (c: Context) => {
 			}
 		}
 	}
-	const aiSdkTools: Record<string, any> = buildAiSdkTools(modelId, tools, messages);
-	if (Object.keys(aiSdkTools).length === 0 && modelId.startsWith('doubao/deepseek-v3-1')) {
-		thinking = {
-			type: 'enabled',
-		};
+	const messageText = messages.map((msg: any) =>
+		typeof msg.content === 'string'
+			? msg.content.toLowerCase()
+			: Array.isArray(msg.content)
+				? msg.content.map((p: any) => (p?.text || '')).join(' ').toLowerCase()
+				: ''
+	).join(' ');
+	isResearchMode = RESEARCH_KEYWORDS.some(keyword => messageText.includes(keyword));
+	const aiSdkTools: Record<string, any> = buildAiSdkTools(modelId, tools);
+	if (Object.keys(aiSdkTools).length === 0) {
+		if (modelId.startsWith('doubao/deepseek-v3-1')) {
+			thinking = {
+				type: 'enabled',
+			};
+		}
+	} else {
+		search = true;
 	}
 
 	const { providersToTry } = prepareProvidersToTry({ model: modelId, providerKeys, isPasswordAuth, authApiKey: apiKey });
@@ -1651,6 +1658,7 @@ app.post('/v1/responses', async (c: Context) => {
 		reasoning_summary: reasoning?.summary || undefined,
 		store,
 		model: modelId,
+		search,
 	});
 	const commonParams = {
 		messages,
@@ -2578,12 +2586,14 @@ app.post('/v1/responses', async (c: Context) => {
 				const msg = lastStreamError?.message || 'An unknown error occurred';
 				const statusCode = lastStreamError?.statusCode || 500;
 				const message = `${statusCode} All ${attemptsTried} attempt(s) failed. Last error: ${msg}`
-				emit({
-					type: 'error',
-					sequence_number: sequenceNumber++,
-					code: statusCode,
-					message
-				});
+				if (lastStreamError) {
+					emit({
+						type: 'error',
+						sequence_number: sequenceNumber++,
+						code: statusCode,
+						message
+					});
+				}
 				emit({
 					type: 'response.failed',
 					sequence_number: sequenceNumber++,
@@ -2807,6 +2817,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
 	let modelId: string = model;
 	let thinkingConfig = thinking;
+	let search: boolean = false;
 	if (modelId.startsWith('doubao/')) {
 		if (Array.isArray(processedMessages) && processedMessages.length > 0) {
 			const lastMsg = processedMessages[processedMessages.length - 1];
@@ -2817,11 +2828,23 @@ app.post('/v1/chat/completions', async (c: Context) => {
 			}
 		}
 	}
-	const aiSdkTools: Record<string, any> = buildAiSdkTools(modelId, tools, processedMessages);
-	if (Object.keys(aiSdkTools).length === 0 && modelId.startsWith('doubao/deepseek-v3-1')) {
-		thinkingConfig = {
-			type: 'enabled',
-		};
+	const messageText = processedMessages.map((msg: any) =>
+		typeof msg.content === 'string'
+			? msg.content.toLowerCase()
+			: Array.isArray(msg.content)
+				? msg.content.map((p: any) => (p?.text || '')).join(' ').toLowerCase()
+				: ''
+	).join(' ');
+	isResearchMode = RESEARCH_KEYWORDS.some(keyword => messageText.includes(keyword));
+	const aiSdkTools: Record<string, any> = buildAiSdkTools(modelId, tools);
+	if (Object.keys(aiSdkTools).length === 0) {
+		if (modelId.startsWith('doubao/deepseek-v3-1')) {
+			thinkingConfig = {
+				type: 'enabled',
+			};
+		}
+	} else {
+		search = true;
 	}
 	const { providersToTry } = prepareProvidersToTry({ model: modelId, providerKeys, isPasswordAuth, authApiKey: apiKey });
 	const providerOptionsHeader = c.req.header('x-provider-options');
@@ -2841,6 +2864,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 		abortSignal: abortController.signal,
 		providerOptions,
 		reasoning_effort,
+		search,
 	};
 	const now = Math.floor(Date.now() / 1000);
 	const chunkId = `chatcmpl-${now}`;
@@ -3113,11 +3137,13 @@ app.post('/v1/chat/completions', async (c: Context) => {
 				}
 
 				// If all attempts failed
-				const statusCode = lastStreamError?.statusCode || 500;
-				const errMsg = lastStreamError?.message || 'An unknown error occurred';
-				const refusal = `${statusCode} All ${attemptsTried} attempt(s) failed. Last error: ${errMsg}`;
-				const errorChunk = { ...baseChunk, choices: [{ index: 0, delta: { refusal, content: '**Error**: ' + refusal }, finish_reason: 'stop' }] };
-				controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(errorChunk)}\n\n`));
+				if (lastStreamError) {
+					const statusCode = lastStreamError?.statusCode || 500;
+					const errMsg = lastStreamError?.message || 'An unknown error occurred';
+					const refusal = `${statusCode} All ${attemptsTried} attempt(s) failed. Last error: ${errMsg}`;
+					const errorChunk = { ...baseChunk, choices: [{ index: 0, delta: { refusal, content: '**Error**: ' + refusal }, finish_reason: 'stop' }] };
+					controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(errorChunk)}\n\n`));
+				}
 				controller.enqueue(TEXT_ENCODER.encode('data: [DONE]\n\n'));
 				controller.close();
 			},
