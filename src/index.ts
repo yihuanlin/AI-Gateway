@@ -8,6 +8,7 @@ import { openai, createOpenAI } from '@ai-sdk/openai'
 import { google, createGoogleGenerativeAI } from '@ai-sdk/google'
 import { groq, createGroq } from '@ai-sdk/groq';
 import { SUPPORTED_PROVIDERS, getProviderKeys, fetchCopilotToken } from './shared/providers.mts'
+import { uploadBlobToStorage } from './shared/bucket.mts'
 import { getStoreWithConfig } from './shared/store.mts'
 import { string, number, boolean, array, object, optional, int, enum as zenum } from 'zod/mini'
 
@@ -46,8 +47,6 @@ function randomId(prefix: string) {
 		return `${prefix}_${hex}`;
 	}
 }
-
-// getProviderKeys centralized in shared/providers
 
 function startsWithThinking(text: string): boolean {
 	// Remove leading whitespace and empty newlines
@@ -244,17 +243,107 @@ function addContextMessages(messages: any[], c: Context): any[] {
 	return messages;
 }
 
-async function processMessages(contextMessages: any[]): Promise<any[]> {
+async function processMessages(contextMessages: any[], options?: { extractMarkdownImages?: boolean }): Promise<any[]> {
 	const processedMessages: any[] = [];
 
-	// First pass: process tool calls and assistant messages
+	const extractFromText = async (text: string): Promise<{ cleaned: string; files: any[] }> => {
+		const imgRegex = /!\[Generated Image\]\(([^\)]+)\)/g;
+		let match: RegExpExecArray | null;
+		let cleaned = text;
+		const files: any[] = [];
+		while ((match = imgRegex.exec(text)) !== null) {
+			const urlStr = String(match[1] || '').trim();
+			if (!urlStr) continue;
+			let mediaType: string = 'image/png';
+			let data: Uint8Array | null = null;
+			if (urlStr.startsWith('data:')) {
+				const dm = urlStr.match(/^data:([^;]+);base64,(.+)$/);
+				if (dm && dm[1] && dm[2]) {
+					mediaType = String(dm[1]);
+					const b64 = dm[2];
+					const bin = atob(b64);
+					const bytes = new Uint8Array(bin.length);
+					for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+					data = bytes;
+				}
+			} else if (urlStr.startsWith('http://') || urlStr.startsWith('https://')) {
+				try {
+					const resp = await fetch(urlStr);
+					const ct = resp.headers.get('content-type');
+					if (ct) mediaType = ct.split(';')[0] as string;
+					const ab = await resp.arrayBuffer();
+					data = new Uint8Array(ab);
+				} catch { }
+			}
+			if (data) {
+				files.push({ type: 'file', data, mediaType });
+				cleaned = cleaned.replace(match[0], '').trim();
+			}
+		}
+		return { cleaned, files };
+	};
+
+	const appendToolCallsToContent = async (content: any, tool_calls: any[]): Promise<any> => {
+		if (!Array.isArray(tool_calls) || tool_calls.length === 0) return content;
+		// Build appended string for each tool call including optional results
+		const buildBlock = async (toolCall: any): Promise<string> => {
+			const toolName = toolCall?.function?.name;
+			const args = toolCall?.function?.arguments;
+			let block = `\n<tool_use_result>\n  <name>${toolName}</name>\n  <arguments>${args}</arguments>`;
+			// Find matching tool result in chat or responses format
+			let toolResultMessage = contextMessages.find((m: any) => m.role === 'tool' && m.tool_call_id === toolCall.id);
+			if (!toolResultMessage) {
+				toolResultMessage = contextMessages.find((m: any) => m.type === 'function_call_output' && m.call_id === toolCall.id);
+			}
+			if (toolResultMessage) {
+				let resultText = toolResultMessage.content || toolResultMessage.output;
+				if (typeof resultText === 'string') {
+					try {
+						const parsed = JSON.parse(resultText);
+						if (Array.isArray(parsed) && parsed[0] && parsed[0].text) {
+							resultText = parsed[0].text;
+						}
+					} catch { }
+				}
+				block += `\n  <result>${resultText}</result>`;
+			}
+			block += `\n</tool_use_result>`;
+			return block;
+		};
+		if (content === undefined || content === null) {
+			let appended = '';
+			for (const tc of tool_calls) appended += await buildBlock(tc);
+			return appended;
+		}
+		if (typeof content === 'string') {
+			let appended = content;
+			for (const tc of tool_calls) appended += await buildBlock(tc);
+			return appended;
+		}
+		if (Array.isArray(content)) {
+			// Ensure there is a text part to append to; if not, create one
+			let lastText = content.length > 0 ? content[content.length - 1] : null;
+			if (!lastText || lastText.type !== 'text' || typeof lastText.text !== 'string') {
+				lastText = { type: 'text', text: '' };
+				content.push(lastText);
+			}
+			for (const tc of tool_calls) {
+				lastText.text += await buildBlock(tc);
+			}
+			return content;
+		}
+		if (typeof content === 'object' && content && typeof content.text === 'string') {
+			let appended = content.text;
+			for (const tc of tool_calls) appended += await buildBlock(tc);
+			return { ...content, text: appended };
+		}
+		return content;
+	};
+
 	for (let mi = 0; mi < contextMessages.length; mi++) {
 		const message = contextMessages[mi];
-
-		// Skip tool messages (chat completions format) 
+		if (!message) continue;
 		if (message.role === 'tool') continue;
-
-		// Handle function_call_output (responses format)
 		if (message.type === 'function_call_output') {
 			let resultText = message.output;
 			if (typeof resultText === 'string') {
@@ -265,72 +354,77 @@ async function processMessages(contextMessages: any[]): Promise<any[]> {
 					}
 				} catch { }
 			}
-
-			// Add a tool use message format that AI SDK understands
-			processedMessages.push({
-				role: 'assistant',
-				content: `<tool_use_result>\n  <result>${resultText}</result>\n</tool_use_result>`
-			});
+			processedMessages.push({ role: 'assistant', content: `<tool_use_result>\n  <result>${resultText}</result>\n</tool_use_result>` });
 			continue;
 		}
 
-		if (message.role === 'assistant' && message.tool_calls && Array.isArray(message.tool_calls)) {
-			let assistantContent = message.content || '';
-			for (const toolCall of message.tool_calls) {
-				const toolName = toolCall.function.name;
-				const args = toolCall.function.arguments;
-				assistantContent += `\n<tool_use_result>\n  <name>${toolName}</name>\n  <arguments>${args}</arguments>\n`;
+		let nextMessage = message;
 
-				// Look for tool result in both formats
-				let toolResultMessage = contextMessages.find((m: any) => m.role === 'tool' && m.tool_call_id === toolCall.id);
-
-				// If not found in chat completions format, look for responses format
-				if (!toolResultMessage) {
-					toolResultMessage = contextMessages.find((m: any) => m.type === 'function_call_output' && m.call_id === toolCall.id);
-				}
-
-				if (toolResultMessage) {
-					// Handle both content (chat completions) and output (responses) fields
-					let resultText = toolResultMessage.content || toolResultMessage.output;
-					if (typeof resultText === 'string') {
-						try {
-							const parsed = JSON.parse(resultText);
-							if (Array.isArray(parsed) && parsed[0] && parsed[0].text) {
-								resultText = parsed[0].text;
-							}
-						} catch { }
+		if (message.role === 'assistant') {
+			if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+				nextMessage.content = await appendToolCallsToContent(message.content, message.tool_calls);
+			}
+			if (options?.extractMarkdownImages) {
+				if (typeof nextMessage.content === 'string') {
+					const { cleaned, files } = await extractFromText(nextMessage.content);
+					if (files.length > 0) {
+						const parts: any[] = [];
+						if (cleaned) parts.push({ type: 'text', text: cleaned });
+						parts.push(...files);
+						nextMessage.content = parts;
 					}
-					assistantContent += `\n  <result>${resultText}</result>\n</tool_use_result>`;
+				} else if (Array.isArray(nextMessage.content)) {
+					const updatedParts: any[] = [];
+					const appendedFiles: any[] = [];
+					for (const part of nextMessage.content) {
+						if (part && part.type === 'text' && typeof part.text === 'string') {
+							const { cleaned, files } = await extractFromText(part.text);
+							updatedParts.push({ ...part, text: cleaned });
+							if (files.length > 0) appendedFiles.push(...files);
+						} else {
+							updatedParts.push(part);
+						}
+					}
+					if (appendedFiles.length > 0) {
+						nextMessage.content = [...updatedParts, ...appendedFiles];
+					} else {
+						nextMessage.content = updatedParts;
+					}
+				} else if (typeof nextMessage.content === 'object' && nextMessage.content && typeof nextMessage.content.text === 'string') {
+					const { cleaned, files } = await extractFromText(nextMessage.content.text);
+					if (files.length > 0) {
+						const parts: any[] = [];
+						if (cleaned) parts.push({ type: 'text', text: cleaned });
+						parts.push(...files);
+						nextMessage.content = parts;
+					}
 				}
 			}
-		} else {
-			processedMessages.push(message);
-		}
-	}
-
-	// Second pass: process content arrays asynchronously
-	await Promise.all(
-		processedMessages.map(async (message) => {
-			if (message.role === 'user' && Array.isArray(message.content)) {
-				message.content = await Promise.all(
-					message.content.map(async (part: any) => {
-						if (part.type === 'image_url') {
-							return { type: 'image', image: part.image_url.url };
-						} else if (part.type === 'input_file') {
-							const base64Data = part.file_data;
-							let mediaType = 'application/pdf';
-							if (base64Data.startsWith('data:')) {
-								const match = base64Data.match(/^data:([^;]+)/);
-								if (match) mediaType = match[1];
-							}
-							return { type: 'file', data: base64Data, mediaType };
+		} else if (message.role === 'user' && Array.isArray(message.content)) {
+			message.content = await Promise.all(
+				message.content.map(async (part: any) => {
+					if (part.type === 'image_url') {
+						return { type: 'image', image: part.image_url.url };
+					} else if (part.type === 'input_file') {
+						const base64Data = part.file_data;
+						let mediaType = 'application/pdf';
+						if (base64Data.startsWith('data:')) {
+							const match = base64Data.match(/^data:([^;]+)/);
+							if (match) mediaType = match[1];
 						}
-						return part;
-					}),
-				);
-			}
-		})
-	);
+						return { type: 'file', data: base64Data, mediaType };
+					}
+					return part;
+				}),
+			);
+		}
+
+		if (typeof nextMessage.content === 'object' && !Array.isArray(nextMessage.content) && nextMessage.content?.text) {
+			nextMessage.content = [nextMessage.content];
+		}
+
+		processedMessages.push(nextMessage);
+	}
 	return processedMessages;
 }
 
@@ -453,10 +547,14 @@ function buildDefaultProviderOptions(args: {
 			promptCacheKey: 'ai-gateway',
 		},
 		google: {
-			thinkingConfig: {
-				thinkingBudget: extra_body?.google?.thinking_config?.thinking_budget || -1,
-				includeThoughts: true,
-			},
+			...(!model.includes('image') ? {
+				thinkingConfig: {
+					thinkingBudget: extra_body?.google?.thinking_config?.thinking_budget || -1,
+					includeThoughts: true,
+				}
+			} : {
+				responseModalities: ["IMAGE", "TEXT"]
+			}),
 		},
 		custom: {
 			reasoning_effort: reasoning_effort || "medium",
@@ -603,8 +701,18 @@ function responsesInputToAiSdkMessages(input: any): any[] {
 				if (!part) continue;
 				if (part.type.includes('text') && typeof part.text === 'string') {
 					parts.push({ type: 'text', text: part.text });
+				} else if (part.type === 'input_image' && role === 'assistant') {
+					const imageSrc: string | undefined = typeof part?.image_url === 'string' ? part.image_url : (part?.image_url?.url || part?.url);
+					if (imageSrc) {
+						let mediaType = part?.media_type || part?.mediaType;
+						if (!mediaType && typeof imageSrc === 'string' && imageSrc.startsWith('data:')) {
+							const m = imageSrc.match(/^data:([^;]+);/);
+							if (m) mediaType = m[1];
+						}
+						parts.push(mediaType ? { type: 'file', data: imageSrc, mediaType } : { type: 'file', data: imageSrc, mediaType: 'image/png' });
+					}
 				} else if (part.type.includes('image')) {
-					const imageSrc = part?.image_url?.url || part?.url || part?.image || part?.data;
+					const imageSrc = part?.image_url?.url || part?.url || part?.image || part?.data || (typeof part?.image_url === 'string' ? part.image_url : undefined);
 					if (imageSrc) {
 						const mediaType = part?.media_type || part?.mediaType;
 						parts.push(mediaType ? { type: 'image', image: imageSrc, mediaType } : { type: 'image', image: imageSrc });
@@ -809,6 +917,7 @@ const buildCommonOptions = (
 		abortSignal: params.abortSignal,
 		providerOptions: params.providerOptions,
 		stopWhen: [stepCountIs(20)],
+		maxRetries: 0,
 		onError: () => { }
 	} as any;
 };
@@ -1506,6 +1615,9 @@ app.post('/v1/responses', async (c: Context) => {
 			history = [{ role: 'system', content: String(instructions) }, ...history];
 		}
 		const combined = [...history, ...mapped];
+		if (typeof model === 'string' && model.includes('image')) {
+			return processMessages(combined);
+		}
 		const contextMessages = addContextMessages(combined, c);
 		return processMessages(contextMessages);
 	};
@@ -1564,6 +1676,9 @@ app.post('/v1/responses', async (c: Context) => {
 				let sequenceNumber = 0;
 				let outputIndex = 0;
 				const outputItems: any[] = [];
+
+				let storedImageMarkdown = '';
+				let savedTextContent = '';
 
 				const baseResponseObj = {
 					id: responseId,
@@ -2119,18 +2234,104 @@ app.post('/v1/responses', async (c: Context) => {
 											output_index: outputIndex,
 											item: completedTextItem
 										});
-										if (store) {
-											try {
-												const blobStore = getStoreWithConfig('responses', headers);
-												await blobStore.setJSON(responseId, {
-													id: responseId,
-													messages: [...messages, { role: 'assistant', content: collectedText }]
-												});
-											} catch { }
-										}
+										savedTextContent = collectedText;
 										collectedText = '';
 										accumulatedSources = [];
 										textItemId = null;
+									}
+									break;
+								}
+								case 'file': {
+									// Stream image file as image_generation_call output item/events
+									try {
+										const imageItemId = randomId('img');
+										const imageOutputIndex = outputIndex + 1;
+										const base64Data: string | null = (part as any)?.file?.base64Data || null;
+										const mediaType: string = (part as any)?.file?.mediaType || 'image/png';
+
+										const imageItem = {
+											id: imageItemId,
+											type: 'image_generation_call',
+											status: 'in_progress',
+											result: null,
+										};
+										outputItems.push(imageItem);
+
+										// Announce the new output item
+										emit({
+											type: 'response.output_item.added',
+											sequence_number: sequenceNumber++,
+											output_index: imageOutputIndex,
+											item: imageItem,
+										});
+
+										// Emit in_progress and generating signals
+										emit({
+											type: 'response.image_generation_call.in_progress',
+											output_index: imageOutputIndex,
+											item_id: imageItemId,
+											sequence_number: sequenceNumber++,
+										});
+										emit({
+											type: 'response.image_generation_call.generating',
+											output_index: imageOutputIndex,
+											item_id: imageItemId,
+											sequence_number: sequenceNumber++,
+										});
+
+										// If we have any image bytes now, surface as a partial image
+										if (base64Data) {
+											emit({
+												type: 'response.image_generation_call.partial_image',
+												output_index: imageOutputIndex,
+												item_id: imageItemId,
+												sequence_number: sequenceNumber++,
+												partial_image_index: 0,
+												partial_image_b64: base64Data,
+											});
+										}
+
+										// Complete the image generation call
+										emit({
+											type: 'response.image_generation_call.completed',
+											output_index: imageOutputIndex,
+											item_id: imageItemId,
+											sequence_number: sequenceNumber++,
+										});
+
+										const completedImageItem = {
+											id: imageItemId,
+											type: 'image_generation_call',
+											status: 'completed',
+											result: base64Data || null,
+										};
+										const imgItemIdx = outputItems.findIndex((it) => it.id === imageItemId);
+										if (imgItemIdx >= 0) outputItems[imgItemIdx] = completedImageItem; else outputItems.push(completedImageItem);
+
+										emit({
+											type: 'response.output_item.done',
+											sequence_number: sequenceNumber++,
+											output_index: imageOutputIndex,
+											item: completedImageItem,
+										});
+
+										// Advance output index past the image item
+										outputIndex = imageOutputIndex;
+
+										// If storing, upload to bucket and accumulate markdown to store (not to response)
+										if (store && base64Data) {
+											try {
+												const bin = atob(base64Data);
+												const bytes = new Uint8Array(bin.length);
+												for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+												const blob = new Blob([bytes], { type: mediaType });
+												const url = await uploadBlobToStorage(blob);
+												const md = `![Generated Image](${url})`;
+												storedImageMarkdown += '\n\n' + md;
+											} catch { }
+										}
+									} catch (e) {
+										// ignore malformed file parts
 									}
 									break;
 								}
@@ -2290,16 +2491,6 @@ app.post('/v1/responses', async (c: Context) => {
 											output_index: outputIndex,
 											item: completedTextItem
 										});
-										// Save conversation
-										if (store) {
-											try {
-												const blobStore = getStoreWithConfig('responses', headers);
-												await blobStore.setJSON(responseId, {
-													id: responseId,
-													messages: [...messages, { role: 'assistant', content: collectedText }]
-												});
-											} catch { }
-										}
 										collectedText = '';
 										accumulatedSources = [];
 										textItemId = null;
@@ -2317,6 +2508,23 @@ app.post('/v1/responses', async (c: Context) => {
 											total_tokens: part.totalUsage.totalTokens
 										} : null
 									};
+									if (store) {
+										try {
+											const blobStore = getStoreWithConfig('responses', headers);
+											const finalText = savedTextContent || '';
+											if (storedImageMarkdown) {
+												await blobStore.setJSON(responseId + '_image', {
+													id: responseId,
+													messages: [{ role: 'assistant', content: finalText + storedImageMarkdown }]
+												});
+											} else {
+												await blobStore.setJSON(responseId, {
+													id: responseId,
+													messages: [...messages, { role: 'assistant', content: finalText }]
+												});
+											}
+										} catch { }
+									}
 									emit({
 										type: 'response.completed',
 										sequence_number: sequenceNumber++,
@@ -2326,7 +2534,24 @@ app.post('/v1/responses', async (c: Context) => {
 									return;
 								}
 								case 'error': {
-									if ([429, 401, 402].includes((part as any)?.error?.statusCode)) throw new Error((part as any)?.error || 'Streaming provider error');
+									{
+										const errInfo = (part as any)?.error || {};
+										const code = errInfo?.statusCode;
+										if ([429, 401, 402].includes(code)) {
+											let message = errInfo?.message || 'Streaming provider error';
+											const rb = errInfo?.responseBody;
+											if (rb) {
+												try {
+													const obj = typeof rb === 'string' ? JSON.parse(rb) : rb;
+													message = obj?.error?.metadata?.raw || obj?.error?.message || message;
+												} catch { /* ignore JSON parse errors */ }
+											}
+											const e = new Error(message);
+											(e as any).statusCode = code;
+											(e as any).type = errInfo?.type || 'provider_error';
+											throw e;
+										}
+									}
 									emit({
 										type: 'error',
 										sequence_number: sequenceNumber++,
@@ -2353,6 +2578,7 @@ app.post('/v1/responses', async (c: Context) => {
 							controller.close();
 							return;
 						}
+						console.error(`Error with provider: ${attempt.name} (${i + 1}/${maxAttempts}): ${err.message}`);
 						lastStreamError = err;
 						continue;
 					}
@@ -2360,6 +2586,12 @@ app.post('/v1/responses', async (c: Context) => {
 
 				// All attempts failed
 				const msg = lastStreamError?.message || 'An unknown error occurred';
+				emit({
+					type: 'error',
+					sequence_number: sequenceNumber++,
+					code: lastStreamError?.statusCode || 'ERR',
+					message: msg
+				});
 				emit({
 					type: 'response.failed',
 					sequence_number: sequenceNumber++,
@@ -2435,6 +2667,18 @@ app.post('/v1/responses', async (c: Context) => {
 					content: [{ type: 'output_text', text: content, annotations: accumulatedSources }]
 				});
 			}
+
+			// Add image_generation_call items for any generated files
+			if (Array.isArray((result as any).files) && (result as any).files.length > 0) {
+				for (const f of (result as any).files) {
+					try {
+						const fileObj = (f as any)?.file;
+						const base64 = fileObj?.base64Data as string | undefined;
+						// We only need to return base64 result per your spec
+						output.push({ id: randomId('img'), type: 'image_generation_call', status: 'completed', result: base64 || null });
+					} catch { }
+				}
+			}
 			const responsePayload = {
 				id: responseId,
 				object: 'response',
@@ -2464,7 +2708,26 @@ app.post('/v1/responses', async (c: Context) => {
 			if (store) {
 				try {
 					const blobStore = getStoreWithConfig('responses', headers);
-					await blobStore.setJSON(responseId, { id: responseId, messages: [...messages, { role: 'assistant', content: content }] });
+					let extraMd = '';
+					if (Array.isArray((result as any).files) && (result as any).files.length > 0) {
+						for (const f of (result as any).files) {
+							try {
+								const fileObj = (f as any)?.file;
+								const b64 = fileObj?.base64Data as string | undefined;
+								const mt = fileObj?.mediaType as string | undefined;
+								if (b64 && mt) {
+									const bin = atob(b64);
+									const bytes = new Uint8Array(bin.length);
+									for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+									const blob = new Blob([bytes], { type: mt });
+									const url = await uploadBlobToStorage(blob);
+									extraMd += (extraMd ? '\n\n' : '') + `![Generated Image](${url})`;
+								}
+							} catch { }
+						}
+					}
+					const storedContent = extraMd ? (content ? content + '\n\n' + extraMd : extraMd) : content;
+					await blobStore.setJSON(extraMd ? responseId + '_image' : responseId, { id: responseId, messages: [...messages, { role: 'assistant', content: storedContent }] });
 				} catch { }
 			}
 
@@ -2472,13 +2735,26 @@ app.post('/v1/responses', async (c: Context) => {
 		} catch (error: any) {
 			lastError = error;
 			if (error.name === 'AbortError' || abortController.signal.aborted) return c.json({ error: { message: 'Request was aborted by the user', type: 'request_aborted', statusCode: 499 } }, 499 as any);
-			if (i < maxAttempts - 1) continue;
-			break;
+
+			// Only retry for specific status codes
+			const statusCode = error.statusCode;
+			if (![429, 401, 402].includes(statusCode) || i >= maxAttempts - 1) {
+				break;
+			}
+			continue;
 		}
 	}
 
 	const statusCode = lastError?.statusCode || 500;
-	const errorPayload = { error: { message: lastError?.message || 'All attempts failed', type: lastError?.type, statusCode } };
+	let message = lastError?.message || 'All attempts failed';
+	const rb = lastError?.responseBody;
+	if (rb) {
+		try {
+			const obj = typeof rb === 'string' ? JSON.parse(rb) : rb;
+			message = obj?.error?.metadata?.raw || obj?.error?.message || message;
+		} catch { /* ignore JSON parse errors */ }
+	}
+	const errorPayload = { error: { message, type: lastError?.type, statusCode } };
 	return c.json(errorPayload, statusCode);
 });
 
@@ -2514,8 +2790,8 @@ app.post('/v1/chat/completions', async (c: Context) => {
 
 	const body = await c.req.json();
 	const { model, messages = [], tools, stream, temperature, top_p, top_k, max_tokens, stop_sequences, seed, presence_penalty, frequency_penalty, tool_choice, reasoning_effort, thinking, extra_body, text_verbosity, service_tier, store = true } = body;
-	const contextMessages = addContextMessages(messages, c);
-	const processedMessages = await processMessages(contextMessages);
+	const contextMessages = (typeof model === 'string' && model.includes('image')) ? messages : addContextMessages(messages, c);
+	const processedMessages = await processMessages(contextMessages, { extractMarkdownImages: true });
 
 	if (typeof model === 'string' && model.startsWith('image/')) {
 		const { handleImageForChat } = await import('./modules/images.mts');
@@ -2611,8 +2887,21 @@ app.post('/v1/chat/completions', async (c: Context) => {
 							let chunk: any;
 							switch (part.type) {
 								case 'error':
-									if ([429, 401, 402].includes((part as any)?.error?.statusCode)) {
-										throw new Error((part as any)?.error || 'Streaming provider error');
+									const errInfo = (part as any)?.error || {};
+									const code = errInfo?.statusCode;
+									if ([429, 401, 402].includes(code)) {
+										let message = errInfo?.message || 'Streaming provider error';
+										const rb = errInfo?.responseBody;
+										if (rb) {
+											try {
+												const obj = typeof rb === 'string' ? JSON.parse(rb) : rb;
+												message = obj?.error?.metadata?.raw || obj?.error?.message || message;
+											} catch { /* ignore JSON parse errors */ }
+										}
+										const e = new Error(message);
+										(e as any).statusCode = code;
+										(e as any).type = errInfo?.type || 'provider_error';
+										throw e;
 									} else {
 										chunk = { ...baseChunk, choices: [{ index: 0, delta: { error: part.error }, finish_reason: null }] };
 										controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
@@ -2740,6 +3029,43 @@ app.post('/v1/chat/completions', async (c: Context) => {
 										title: part.title || ''
 									});
 									break;
+								case 'file': {
+									try {
+										const b64 = (part as any)?.file?.base64Data as string | undefined;
+										const mt = (part as any)?.file?.mediaType as string | undefined;
+										if (b64 && mt) {
+											const url = `data:${mt};base64,${b64}`;
+											const chunk = {
+												...baseChunk,
+												choices: [{
+													index: 0,
+													delta: {
+														images: [
+															{ type: 'image_url', image_url: { url } }
+														]
+													},
+													finish_reason: null
+												}]
+											};
+											controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+											// Also upload and stream markdown if storing
+											if (store) {
+												try {
+													const bin = atob(b64);
+													const bytes = new Uint8Array(bin.length);
+													for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+													const blob = new Blob([bytes], { type: mt });
+													const publicUrl = await uploadBlobToStorage(blob);
+													const md = `![Generated Image](${publicUrl})`;
+													const mdChunk = { ...baseChunk, choices: [{ index: 0, delta: { content: (accumulatedText ? '\n\n' : '') + md }, finish_reason: null }] };
+													controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(mdChunk)}\n\n`));
+													accumulatedText += (accumulatedText ? '\n\n' : '') + md;
+												} catch { }
+											}
+										}
+									} catch { }
+									break;
+								}
 								case 'tool-call':
 									if (!EXCLUDED_TOOLS.has(part.toolName)) {
 										chunk = { ...baseChunk, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: part.toolCallId, type: 'function', function: { name: part.toolName, arguments: JSON.stringify(part.input) } }] }, finish_reason: null }] };
@@ -2793,7 +3119,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 							return;
 						}
 						lastStreamError = error;
-						console.error(`Streaming error with provider ${i + 1}/${providersToTry.length} (${attempt.type}${attempt.name ? ':' + attempt.name : ''}):`, error);
+						console.error(`Error with provider: ${attempt.name} (${i + 1}/${maxAttempts}): ${error.message}`);
 						// Otherwise, try next key/provider in the next loop iteration
 						continue;
 					}
@@ -2850,6 +3176,41 @@ app.post('/v1/chat/completions', async (c: Context) => {
 				reasoningContent = extracted.reasoning;
 			}
 
+			// Collect any generated files into images array per client convention
+			let imagesExt: any[] | undefined = undefined;
+			if (Array.isArray((result as any).files) && (result as any).files.length > 0) {
+				imagesExt = [];
+				for (const f of (result as any).files) {
+					try {
+						const fileObj = (f as any)?.file;
+						const b64 = fileObj?.base64Data as string | undefined;
+						const mt = fileObj?.mediaType as string | undefined;
+						if (b64 && mt) {
+							imagesExt.push({ type: 'image_url', image_url: { url: `data:${mt};base64,${b64}` } });
+						}
+					} catch { }
+				}
+			}
+
+			// If storing, upload images and append markdown to response content (chat requirement)
+			if (store && Array.isArray((result as any).files) && (result as any).files.length > 0) {
+				for (const f of (result as any).files) {
+					try {
+						const fileObj = (f as any)?.file;
+						const b64 = fileObj?.base64Data as string | undefined;
+						const mt = fileObj?.mediaType as string | undefined;
+						if (b64 && mt) {
+							const bin = atob(b64);
+							const bytes = new Uint8Array(bin.length);
+							for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+							const blob = new Blob([bytes], { type: mt });
+							const url = await uploadBlobToStorage(blob);
+							content += (content ? '\n\n' : '') + `![Generated Image](${url})`;
+						}
+					} catch { }
+				}
+			}
+
 			const choices = content
 				? [
 					{
@@ -2859,7 +3220,8 @@ app.post('/v1/chat/completions', async (c: Context) => {
 							content: content,
 							reasoning_content: reasoningContent || undefined,
 							tool_calls: result.toolCalls,
-							...(accumulatedCitations.length > 0 ? { annotations: accumulatedCitations } : {})
+							...(accumulatedCitations.length > 0 ? { annotations: accumulatedCitations } : {}),
+							...(imagesExt && imagesExt.length > 0 ? { images: imagesExt } : {})
 						},
 						finish_reason: result.finishReason,
 					},
@@ -2887,15 +3249,20 @@ app.post('/v1/chat/completions', async (c: Context) => {
 			});
 
 		} catch (error: any) {
-			console.error(`Error with provider ${i + 1}/${providersToTry.length} (${provider.type}${provider.name ? ':' + provider.name : ''}):`, error.message || error);
+			console.error(`Error with provider: ${provider.name} (${i + 1}/${maxAttempts}): ${error.message}`);
 			lastError = error;
 
 			if (error.name === 'AbortError' || abortController.signal.aborted) {
 				const abortPayload = { error: { message: 'Request was aborted by the user', type: 'request_aborted', statusCode: 499 } };
 				return c.json(abortPayload, 499 as any);
 			}
-			if (i < maxAttempts - 1) continue;
-			break;
+
+			// Only retry for specific status codes
+			const statusCode = error.statusCode;
+			if (![429, 401, 402].includes(statusCode) || i >= maxAttempts - 1) {
+				break;
+			}
+			continue;
 		}
 	}
 
@@ -2903,15 +3270,15 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	let errorType = lastError.type;
 	const statusCode = lastError.statusCode || 500;
 
-	if (lastError.cause && lastError.cause.responseBody) {
+	// Extract error message from metadata.raw if available
+	const rb = lastError.responseBody || lastError.cause?.responseBody;
+	if (rb) {
 		try {
-			const body = JSON.parse(lastError.cause.responseBody);
-			if (body.error) {
-				errorMessage = body.error.message || errorMessage;
-				errorType = body.error.type || errorType;
-			}
-		} catch (e) {
-			// ignore parsing error
+			const obj = typeof rb === 'string' ? JSON.parse(rb) : rb;
+			errorMessage = obj?.error?.metadata?.raw || obj?.error?.message || errorMessage;
+			errorType = obj?.error?.type || errorType;
+		} catch {
+			// ignore JSON parse errors
 		}
 	}
 

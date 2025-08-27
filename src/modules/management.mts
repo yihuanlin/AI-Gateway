@@ -20,8 +20,7 @@ function toConversationMarkdown(stored: any, key?: string): string {
     }
   }
 
-  // Check if this is a conversation response (key starts with resp_)
-  if (key && key.startsWith('resp_')) {
+  if (key && (key.startsWith('resp_') || key.startsWith('chatcmpl-'))) {
     if (!Array.isArray(stored.messages)) return 'No conversation found.';
     const lines: string[] = [];
     for (const m of stored.messages) {
