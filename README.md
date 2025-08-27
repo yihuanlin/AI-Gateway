@@ -1,6 +1,6 @@
 # AI Gateway
 
-A high-performance AI Gateway built with [Hono](https://hono.dev/) for edge computing environments. This gateway provides unified access to multiple AI providers with intelligent fallback, streaming support, advanced tools integration, and multimedia generation capabilities.
+A high-performance AI Gateway built with [Hono](https://github.com/honojs/hono) and [AI SDK](https://github.com/vercel/ai) for edge computing environments. This gateway provides unified access to multiple AI providers with intelligent fallback, streaming support, advanced tools integration, and multimedia generation capabilities.
 
 ## ✨ Features
 
@@ -50,6 +50,86 @@ DELETE /v1/responses/all           # Delete all responses
 GET /v1/models
 POST /v1/models
 ```
+
+## 🔌 Supported Providers
+
+### Text Generation
+- **Gateway**: Vercel AI Gateway
+- **Direct Providers**: Vercel AI Gateway (Gateway), OpenAI (ChatGPT), Google Generative AI (Gemini), Groq, Cerebras, OpenRouter, Poe, Volcengine (Doubao), ModelScope, Infini, Nvidia, Mistral, Poixe, Cohere, Morph, GitHub Models (GitHub), GitHub Copilot (Copilot), etc.
+
+### Multimedia Generation  
+- **Doubao (ByteDance)**: i2i, t2i, i2v, and t2v
+- **ModelScope**: Community models for t2i
+- **Hugging Face**: Community models for i2i, t2v, and i2v
+
+### Tools & Extensions
+- **Python Execution**: Code interpreter
+- **Web Search**: Tavily API integration  
+- **Content Extraction**: Web page reading
+- **Research APIs**: Ensembl, Scholar APIs
+
+## 🔧 Environment Variables
+
+```bash
+# Required
+PASSWORD=your-gateway-password
+GATEWAY_API_KEY=your-vercel-ai-gateway-key
+
+# Optional AI Services
+TAVILY_API_KEY=tvly-dev-...
+PYTHON_API_KEY=your-python-key
+PYTHON_URL=https://your-python-executor.com
+
+# Optional S3 bucket to upload images for Doubao i2i and i2v inputs (triggered by /upload in prompt) and Hugging Face i2i and i2v outputs (always enabled if set)
+S3_ACCESS_KEY=your-s3-access-key
+S3_SECRET_KEY=your-s3-secret-key
+S3_PUBLIC_URL=https://your-s3-public-url.com
+S3_API=https://your-s3-provider-api.com/your-bucket-name
+
+# Use Netlify Blobs in non-Netlify platforms (Responses endpoint datastore)
+NETLIFY_SITE_ID=your-netlify-site-id
+NETLIFY_TOKEN=nfp_...
+
+# Provider-specific keys
+CHATGPT_API_KEY=sk-proj-...,sk-proj-...,sk-proj-...
+GROQ_API_KEY=gsk_...
+CEREBRAS_API_KEY=csk-...
+GEMINI_API_KEY=AIzaSy...
+CHATGPT_API_KEY=sk-proj-...
+DOUBAO_API_KEY=your-volcengine-key
+MODELSCOPE_API_KEY=ms-...
+GITHUB_API_KEY=github_pat_...
+OPENROUTER_API_KEY=sk-or-v1-...
+NVIDIA_API_KEY=nvapi-...
+MISTRAL_API_KEY=your-mistral-key
+COHERE_API_KEY=your-cohere-api-key
+MORPH_API_KEY=sk-...
+INFINI_API_KEY=sk-...
+POIXE_API_KEY=sk-...
+COPILOT_API_KEY=ghu_...
+POE_API_KEY=your-poe-api-key
+HUGGINGFACE_API_KEY=hf_...
+```
+
+## 🎨 Model Categories
+
+### Text Models
+- **LLM Providers**: `provider`/`model` for custom providers, `model` for Vercel AI Gateway, e.g.:
+- *For Gemini native image generation:* `openrouter/google/gemini-2.5-flash-image-preview` (OpenRouter), `google/gemini-2.5-flash-image-preview` (Vercel AI Gateway), `gemini/gemini-2.5-flash-image-preview` (Google Generative AI)
+
+### Image Models  
+- **Doubao (ByteDance)**: `image/doubao` - i2i and t2i.
+- **Hugging Face**: `image/Qwen/Qwen-Image-Edit-vision`, `image/black-forest-labs/FLUX.1-Kontext-dev-vision` etc. (Add a `-vision` suffix to any Hugging Face Inference model, i2i only)
+- **ModelScope**: `image/black-forest-labs/FLUX.1-dev`, `image/Qwen/Qwen-Image` etc. (Any ModelScope model, t2i only)
+- **Flags**: `--size WxH`, `--ratio A:B`, `--guidance N`, `--steps N`, `--seed N` etc. (Send `/help` for help)
+
+### Video Models
+- **Doubao Seedance**: `video/doubao-seedance`, `video/doubao-seedance-pro` (t2v and i2v)
+- **Hugging Face**: `video/Wan-AI/Qwen-Wan2.2-I2V-A14B-vision` etc. (Any Hugging Face Inference model, t2v and i2v)
+- **Flags**: `--ratio 16:9`, `--duration 3-12`, `--resolution 720p` etc. (Send `/help` for help)
+
+### Admin Models
+- **System Management**: `admin/magic` (Send `/help` for help)
 
 ## 💡 API Usage Examples
 
@@ -205,26 +285,6 @@ curl -X POST "$HOSTNAME/v1/models" \
   -H "Authorization: Bearer $PASSWORD"
 ```
 
-## 🎨 Model Categories
-
-### Text Models
-- **LLM Providers**: `provider`/`model` for custom providers, `model` for Vercel AI Gateway, e.g.:
-- *For Gemini native image generation:* `openrouter/google/gemini-2.5-flash-image-preview` (OpenRouter), `google/gemini-2.5-flash-image-preview` (Vercel AI Gateway), `gemini/gemini-2.5-flash-image-preview` (Google Generative AI)
-
-### Image Models  
-- **Doubao (ByteDance)**: `image/doubao` - i2i and t2i.
-- **Hugging Face**: `image/Qwen/Qwen-Image-Edit-vision`, `image/black-forest-labs/FLUX.1-Kontext-dev-vision` etc. (Add a `-vision` suffix to any Hugging Face Inference model, i2i only)
-- **ModelScope**: `image/black-forest-labs/FLUX.1-dev`, `image/Qwen/Qwen-Image` etc. (Any ModelScope model, t2i only)
-- **Flags**: `--size WxH`, `--ratio A:B`, `--guidance N`, `--steps N`, `--seed N` etc. (Send `/help` for help)
-
-### Video Models
-- **Doubao Seedance**: `video/doubao-seedance`, `video/doubao-seedance-pro` (t2v and i2v)
-- **Hugging Face**: `video/Wan-AI/Qwen-Wan2.2-I2V-A14B-vision` etc. (Any Hugging Face Inference model, t2v and i2v)
-- **Flags**: `--ratio 16:9`, `--duration 3-12`, `--resolution 720p` etc. (Send `/help` for help)
-
-### Admin Models
-- **System Management**: `admin/magic` (Send `/help` for help)
-
 ## 📝 Response Management Examples
 
 ### Get a Specific Response
@@ -266,66 +326,6 @@ curl -X DELETE "$HOSTNAME/v1/responses/resp_abc123" \
 curl -X DELETE "$HOSTNAME/v1/responses/all" \
   -H "Authorization: Bearer $PASSWORD"
 ```
-
-## 🔧 Environment Variables
-
-```bash
-# Required
-PASSWORD=your-gateway-password
-GATEWAY_API_KEY=your-vercel-ai-gateway-key
-
-# Optional AI Services
-TAVILY_API_KEY=tvly-dev-...
-PYTHON_API_KEY=your-python-key
-PYTHON_URL=https://your-python-executor.com
-
-# Optional S3 bucket to upload images for Doubao i2i and i2v inputs (triggered by /upload in prompt) and Hugging Face i2i and i2v outputs (always enabled if set)
-S3_ACCESS_KEY=your-s3-access-key
-S3_SECRET_KEY=your-s3-secret-key
-S3_PUBLIC_URL=https://your-s3-public-url.com
-S3_API=https://your-s3-provider-api.com/your-bucket-name
-
-# Use Netlify Blobs in non-Netlify platforms (Responses endpoint datastore)
-NETLIFY_SITE_ID=your-netlify-site-id
-NETLIFY_TOKEN=nfp_...
-
-# Provider-specific keys
-CHATGPT_API_KEY=sk-proj-...,sk-proj-...,sk-proj-...
-GROQ_API_KEY=gsk_...
-CEREBRAS_API_KEY=csk-...
-GEMINI_API_KEY=AIzaSy...
-CHATGPT_API_KEY=sk-proj-...
-DOUBAO_API_KEY=your-volcengine-key
-MODELSCOPE_API_KEY=ms-...
-GITHUB_API_KEY=github_pat_...
-OPENROUTER_API_KEY=sk-or-v1-...
-NVIDIA_API_KEY=nvapi-...
-MISTRAL_API_KEY=your-mistral-key
-COHERE_API_KEY=your-cohere-api-key
-MORPH_API_KEY=sk-...
-INFINI_API_KEY=sk-...
-POIXE_API_KEY=sk-...
-COPILOT_API_KEY=ghu_...
-POE_API_KEY=your-poe-api-key
-HUGGINGFACE_API_KEY=hf_...
-```
-
-## 🔌 Supported Providers
-
-### Text Generation
-- **Gateway**: Vercel AI Gateway
-- **Direct Providers**: Vercel AI Gateway (Gateway), OpenAI (ChatGPT), Google Generative AI (Gemini), Groq, Cerebras, OpenRouter, Poe, Volcengine (Doubao), ModelScope, Infini, Nvidia, Mistral, Poixe, Cohere, Morph, GitHub Models (GitHub), GitHub Copilot (Copilot), etc.
-
-### Multimedia Generation  
-- **Doubao (ByteDance)**: i2i, t2i, i2v, and t2v
-- **ModelScope**: Community models for t2i
-- **Hugging Face**: Community models for i2i, t2v, and i2v
-
-### Tools & Extensions
-- **Python Execution**: Code interpreter
-- **Web Search**: Tavily API integration  
-- **Content Extraction**: Web page reading
-- **Research APIs**: Ensembl, Scholar APIs
 
 ## 📊 Architecture
 

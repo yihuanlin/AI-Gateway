@@ -12,8 +12,6 @@ import { getStoreWithConfig } from './shared/store.mts'
 import { string, number, boolean, array, object, optional, int, enum as zenum } from 'zod/mini'
 
 const app = new Hono()
-
-// Pre-compiled constants for /v1/chat/completions
 const TEXT_ENCODER = new TextEncoder();
 const EXCLUDED_TOOLS = new Set(['code_execution', 'python_executor', 'web_search', 'fetch', 'google_search', 'web_search_preview', 'url_context', 'browser_search', 'scholar_search', 'paper_recommendations', 'ensembl_api']);
 const RESEARCH_KEYWORDS = ['scientific', 'biolog', 'research', 'paper'];
@@ -495,7 +493,7 @@ function buildDefaultProviderOptions(args: {
 			}
 		};
 	}
-	if (model.startsWith('xai/')) {
+	if (model.startsWith('xai/') && !model.includes('code')) {
 		return {
 			xai: {
 				searchParameters: {
@@ -542,11 +540,11 @@ function buildDefaultProviderOptions(args: {
 			reasoningSummary: reasoning_summary || "auto",
 			textVerbosity: text_verbosity || "medium",
 			serviceTier: service_tier || "auto",
-			store: store || false,
+			store: model.startsWith('chatgpt/') ? store : false,
 			promptCacheKey: 'ai-gateway',
 		},
 		google: {
-			...(!model.includes('image') ? {
+			...(!model.toLowerCase().includes('image') ? {
 				thinkingConfig: {
 					thinkingBudget: extra_body?.google?.thinking_config?.thinking_budget || -1,
 					includeThoughts: true,
@@ -1614,7 +1612,7 @@ app.post('/v1/responses', async (c: Context) => {
 			history = [{ role: 'system', content: String(instructions) }, ...history];
 		}
 		const combined = [...history, ...mapped];
-		if (typeof model === 'string' && model.includes('image')) {
+		if (typeof model === 'string' && model.toLowerCase().includes('image')) {
 			return processMessages(combined);
 		}
 		const contextMessages = addContextMessages(combined, c);
@@ -2534,29 +2532,21 @@ app.post('/v1/responses', async (c: Context) => {
 									return;
 								}
 								case 'error': {
-									{
-										const errInfo = (part as any)?.error || {};
-										const code = errInfo?.statusCode;
-										if ([429, 401, 402].includes(code)) {
-											let message = errInfo?.message || 'Streaming provider error';
-											const rb = errInfo?.responseBody;
-											if (rb) {
-												try {
-													const obj = typeof rb === 'string' ? JSON.parse(rb) : rb;
-													message = obj?.error?.metadata?.raw || obj?.error?.message || message;
-												} catch { /* ignore JSON parse errors */ }
-											}
-											const e = new Error(message);
-											(e as any).statusCode = code;
-											(e as any).type = errInfo?.type || 'provider_error';
-											throw e;
-										}
+									const errInfo = (part as any)?.error || {};
+									const code = errInfo?.statusCode || 'ERR';
+									const message = JSON.parse(errInfo.responseBody || '{}').error?.metadata?.raw || errInfo.message || errInfo;
+									if ([429, 401, 402].includes(code)) {
+										const e = new Error(message);
+										(e as any).statusCode = code;
+										(e as any).type = errInfo?.type || 'provider_error';
+										throw e;
 									}
+									i = maxAttempts;
 									emit({
 										type: 'error',
 										sequence_number: sequenceNumber++,
-										code: (part as any)?.error?.statusCode || 'ERR',
-										message: part.error,
+										code,
+										message,
 										param: null
 									});
 									break;
@@ -2794,7 +2784,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 
 	const body = await c.req.json();
 	const { model, messages = [], tools, stream, temperature, top_p, top_k, max_tokens, stop_sequences, seed, presence_penalty, frequency_penalty, tool_choice, reasoning_effort, thinking, extra_body, text_verbosity, service_tier, store = true } = body;
-	const contextMessages = (typeof model === 'string' && model.includes('image')) ? messages : addContextMessages(messages, c);
+	const contextMessages = (typeof model === 'string' && model.toLowerCase().includes('image')) ? messages : addContextMessages(messages, c);
 	const processedMessages = await processMessages(contextMessages, { extractMarkdownImages: true });
 
 	if (typeof model === 'string' && model.startsWith('image/')) {
@@ -2885,31 +2875,24 @@ app.post('/v1/chat/completions', async (c: Context) => {
 
 						const result = streamText(commonOptions);
 						// Forward chunks; on error, try next key/provider
-						for await (const rawPart of (result as any).fullStream) {
-							const part: any = rawPart;
+						for await (const part of (result as any).fullStream) {
+
 							if (abortController.signal.aborted) throw new Error('aborted');
 							let chunk: any;
 							switch (part.type) {
 								case 'error':
 									const errInfo = (part as any)?.error || {};
-									const code = errInfo?.statusCode;
+									const code = errInfo?.statusCode || 'ERR';
+									const message = JSON.parse(errInfo.responseBody || '{}').error?.metadata?.raw || errInfo.message || errInfo;
 									if ([429, 401, 402].includes(code)) {
-										let message = errInfo?.message || 'Streaming provider error';
-										const rb = errInfo?.responseBody;
-										if (rb) {
-											try {
-												const obj = typeof rb === 'string' ? JSON.parse(rb) : rb;
-												message = obj?.error?.metadata?.raw || obj?.error?.message || message;
-											} catch { /* ignore JSON parse errors */ }
-										}
 										const e = new Error(message);
 										(e as any).statusCode = code;
 										(e as any).type = errInfo?.type || 'provider_error';
 										throw e;
-									} else {
-										chunk = { ...baseChunk, choices: [{ index: 0, delta: { error: part.error }, finish_reason: null }] };
-										controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
 									}
+									i = maxAttempts;
+									chunk = { ...baseChunk, choices: [{ index: 0, delta: { refusal: message, content: '**Error**: ' + message }, finish_reason: 'stop' }] };
+									controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
 									break;
 								case 'reasoning-delta':
 									chunk = { ...baseChunk, choices: [{ index: 0, delta: { reasoning_content: part.text }, finish_reason: null }] };
@@ -3116,8 +3099,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 					} catch (error: any) {
 						if (abortController.signal.aborted || error?.message === 'aborted' || error?.name === 'AbortError') {
 							// Aborted by client
-							const abortPayload = { error: { message: 'Request was aborted by the user', type: 'request_aborted', statusCode: 499 } };
-							const abortChunk = { ...baseChunk, choices: [{ index: 0, delta: { content: JSON.stringify(abortPayload) }, finish_reason: 'stop' }] };
+							const abortChunk = { ...baseChunk, choices: [{ index: 0, delta: { refusal: 'Request was aborted by the user', content: '**Aborted**' }, finish_reason: 'stop' }] };
 							controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(abortChunk)}\n\n`));
 							controller.enqueue(TEXT_ENCODER.encode('data: [DONE]\n\n'));
 							controller.close();
@@ -3133,7 +3115,8 @@ app.post('/v1/chat/completions', async (c: Context) => {
 				// If all attempts failed
 				const statusCode = lastStreamError?.statusCode || 500;
 				const errMsg = lastStreamError?.message || 'An unknown error occurred';
-				const errorChunk = { ...baseChunk, choices: [{ index: 0, delta: { refusal: `${statusCode} All ${attemptsTried} attempt(s) failed. Last error: ${errMsg}` }, finish_reason: 'stop' }] };
+				const refusal = `${statusCode} All ${attemptsTried} attempt(s) failed. Last error: ${errMsg}`;
+				const errorChunk = { ...baseChunk, choices: [{ index: 0, delta: { refusal, content: '**Error**: ' + refusal }, finish_reason: 'stop' }] };
 				controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(errorChunk)}\n\n`));
 				controller.enqueue(TEXT_ENCODER.encode('data: [DONE]\n\n'));
 				controller.close();
