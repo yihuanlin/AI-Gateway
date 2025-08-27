@@ -82,7 +82,7 @@ async function getSignatureKey(key: string, dateStamp: string, regionName: strin
     return crypto.subtle.importKey('raw', kSigning, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
 }
 
-export async function uploadBase64ToBlob(base64Data: string, timestamp?: string): Promise<string> {
+export async function uploadBase64ToStorage(base64Data: string, timestamp?: string): Promise<string> {
     if (!process.env.S3_API || !process.env.S3_PUBLIC_URL || !process.env.S3_ACCESS_KEY || !process.env.S3_SECRET_KEY) {
         throw new Error('S3_API, S3_PUBLIC_URL, S3_ACCESS_KEY, and S3_SECRET_KEY environment variables are required');
     }

@@ -192,9 +192,9 @@ async function buildVideoGenerationWaiter(params: {
 
         if (first.startsWith('data:') && hasUploadFlag && process.env.S3_API && process.env.S3_PUBLIC_URL && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
             try {
-                const { uploadBase64ToBlob } = await import('../shared/bucket.mts');
+                const { uploadBase64ToStorage } = await import('../shared/bucket.mts');
                 const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
-                first = await uploadBase64ToBlob(first, `${timestamp}_first`);
+                first = await uploadBase64ToStorage(first, `${timestamp}_first`);
             } catch (blobError) {
                 console.warn('Failed to upload first frame to bucket, using base64:', blobError);
             }
@@ -217,9 +217,9 @@ async function buildVideoGenerationWaiter(params: {
 
                 if (lastUrl.startsWith('data:') && hasUploadFlag && process.env.S3_API && process.env.S3_PUBLIC_URL && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
                     try {
-                        const { uploadBase64ToBlob } = await import('../shared/bucket.mts');
+                        const { uploadBase64ToStorage } = await import('../shared/bucket.mts');
                         const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
-                        lastUrl = await uploadBase64ToBlob(lastUrl, `${timestamp}_last`);
+                        lastUrl = await uploadBase64ToStorage(lastUrl, `${timestamp}_last`);
                     } catch (blobError) {
                         console.warn('Failed to upload last frame to bucket, using base64:', blobError);
                     }

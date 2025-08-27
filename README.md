@@ -208,22 +208,22 @@ curl -X POST "$HOSTNAME/v1/models" \
 ## 🎨 Model Categories
 
 ### Text Models
-- **LLM Providers**: OpenAI, Gemini, Groq, Cerebras, etc.
-- **Specialised**: Claude, Mistral, Cohere, GitHub Copilot
+- **LLM Providers**: `provider`/`model` for custom providers, `model` for Vercel AI Gateway, e.g.:
+- *For Gemini native image generation:* `openrouter/google/gemini-2.5-flash-image-preview` (OpenRouter), `google/gemini-2.5-flash-image-preview` (Vercel AI Gateway), `gemini/gemini-2.5-flash-image-preview` (Google Generative AI)
 
 ### Image Models  
 - **Doubao (ByteDance)**: `image/doubao` - i2i and t2i.
 - **Hugging Face**: `image/Qwen/Qwen-Image-Edit-vision`, `image/black-forest-labs/FLUX.1-Kontext-dev-vision` etc. (Add a `-vision` suffix to any Hugging Face Inference model, i2i only)
 - **ModelScope**: `image/black-forest-labs/FLUX.1-dev`, `image/Qwen/Qwen-Image` etc. (Any ModelScope model, t2i only)
-- **Flags**: `--size WxH`, `--ratio A:B`, `--guidance N`, `--steps N`, `--seed N` etc. (Prompt /help for help)
+- **Flags**: `--size WxH`, `--ratio A:B`, `--guidance N`, `--steps N`, `--seed N` etc. (Send `/help` for help)
 
 ### Video Models
 - **Doubao Seedance**: `video/doubao-seedance`, `video/doubao-seedance-pro` (t2v and i2v)
 - **Hugging Face**: `video/Wan-AI/Qwen-Wan2.2-I2V-A14B-vision` etc. (Any Hugging Face Inference model, t2v and i2v)
-- **Flags**: `--ratio 16:9`, `--duration 3-12`, `--resolution 720p` etc. (Prompt /help for help)
+- **Flags**: `--ratio 16:9`, `--duration 3-12`, `--resolution 720p` etc. (Send `/help` for help)
 
 ### Admin Models
-- **System Management**: `admin/magic` (Prompt /help for help)
+- **System Management**: `admin/magic` (Send `/help` for help)
 
 ## 📝 Response Management Examples
 
@@ -314,7 +314,7 @@ HUGGINGFACE_API_KEY=hf_...
 
 ### Text Generation
 - **Gateway**: Vercel AI Gateway
-- **Direct Providers**: Google, OpenAI, Groq, Cerebras, etc.
+- **Direct Providers**: Vercel AI Gateway (Gateway), OpenAI (ChatGPT), Google Generative AI (Gemini), Groq, Cerebras, OpenRouter, Poe, Volcengine (Doubao), ModelScope, Infini, Nvidia, Mistral, Poixe, Cohere, Morph, GitHub Models (GitHub), GitHub Copilot (Copilot), etc.
 
 ### Multimedia Generation  
 - **Doubao (ByteDance)**: i2i, t2i, i2v, and t2v

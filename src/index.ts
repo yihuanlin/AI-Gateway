@@ -8,7 +8,6 @@ import { openai, createOpenAI } from '@ai-sdk/openai'
 import { google, createGoogleGenerativeAI } from '@ai-sdk/google'
 import { groq, createGroq } from '@ai-sdk/groq';
 import { SUPPORTED_PROVIDERS, getProviderKeys, fetchCopilotToken } from './shared/providers.mts'
-import { uploadBlobToStorage } from './shared/bucket.mts'
 import { getStoreWithConfig } from './shared/store.mts'
 import { string, number, boolean, array, object, optional, int, enum as zenum } from 'zod/mini'
 
@@ -1666,6 +1665,7 @@ app.post('/v1/responses', async (c: Context) => {
 		providerOptions,
 		reasoning_effort: reasoning?.effort || undefined,
 	};
+	const maxAttempts = Math.min(providersToTry.length, MAX_ATTEMPTS);
 	// Storage preparation already computed above
 
 	if (stream) {
@@ -1724,7 +1724,6 @@ app.post('/v1/responses', async (c: Context) => {
 					response: { ...baseResponseObj, status: 'in_progress' }
 				});
 
-				const maxAttempts = Math.min(providersToTry.length, MAX_ATTEMPTS);
 				let attemptsTried = 0;
 				let lastStreamError: any = null;
 				let textItemId: string | null = null;
@@ -2319,8 +2318,9 @@ app.post('/v1/responses', async (c: Context) => {
 										outputIndex = imageOutputIndex;
 
 										// If storing, upload to bucket and accumulate markdown to store (not to response)
-										if (store && base64Data) {
+										if (store && base64Data && process.env.S3_API && process.env.S3_PUBLIC_URL && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
 											try {
+												const { uploadBlobToStorage } = await import('./shared/bucket.mts');
 												const bin = atob(base64Data);
 												const bytes = new Uint8Array(bin.length);
 												for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
@@ -2586,11 +2586,13 @@ app.post('/v1/responses', async (c: Context) => {
 
 				// All attempts failed
 				const msg = lastStreamError?.message || 'An unknown error occurred';
+				const statusCode = lastStreamError?.statusCode || 500;
+				const message = `${statusCode} All ${attemptsTried} attempt(s) failed. Last error: ${msg}`
 				emit({
 					type: 'error',
 					sequence_number: sequenceNumber++,
-					code: lastStreamError?.statusCode || 'ERR',
-					message: msg
+					code: statusCode,
+					message
 				});
 				emit({
 					type: 'response.failed',
@@ -2599,7 +2601,7 @@ app.post('/v1/responses', async (c: Context) => {
 						id: responseId,
 						object: 'response',
 						status: 'failed',
-						error: { code: 'server_error', message: msg }
+						error: { code: 'server_error', message }
 					}
 				});
 				controller.close();
@@ -2609,9 +2611,10 @@ app.post('/v1/responses', async (c: Context) => {
 	}
 
 	// Non-streaming path
-	const maxAttempts = Math.min(providersToTry.length, MAX_ATTEMPTS);
+	let attemptsTried = 0;
 	let lastError: any;
 	for (let i = 0; i < maxAttempts; i++) {
+		attemptsTried++;
 		const attempt = providersToTry[i];
 		if (!attempt) continue;
 		try {
@@ -2709,7 +2712,8 @@ app.post('/v1/responses', async (c: Context) => {
 				try {
 					const blobStore = getStoreWithConfig('responses', headers);
 					let extraMd = '';
-					if (Array.isArray((result as any).files) && (result as any).files.length > 0) {
+					if (Array.isArray((result as any).files) && (result as any).files.length > 0 && process.env.S3_API && process.env.S3_PUBLIC_URL && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
+						const { uploadBlobToStorage } = await import('./shared/bucket.mts');
 						for (const f of (result as any).files) {
 							try {
 								const fileObj = (f as any)?.file;
@@ -2735,7 +2739,7 @@ app.post('/v1/responses', async (c: Context) => {
 		} catch (error: any) {
 			lastError = error;
 			if (error.name === 'AbortError' || abortController.signal.aborted) return c.json({ error: { message: 'Request was aborted by the user', type: 'request_aborted', statusCode: 499 } }, 499 as any);
-
+			console.error(`Error with provider: ${attempt.name} (${i + 1}/${maxAttempts}): ${JSON.parse(error.responseBody || '{}').error?.metadata?.raw || error.message || error}`);
 			// Only retry for specific status codes
 			const statusCode = error.statusCode;
 			if (![429, 401, 402].includes(statusCode) || i >= maxAttempts - 1) {
@@ -2754,7 +2758,7 @@ app.post('/v1/responses', async (c: Context) => {
 			message = obj?.error?.metadata?.raw || obj?.error?.message || message;
 		} catch { /* ignore JSON parse errors */ }
 	}
-	const errorPayload = { error: { message, type: lastError?.type, statusCode } };
+	const errorPayload = { error: { message: `${statusCode} All ${attemptsTried} attempt(s) failed. Last error: ${message}`, type: lastError?.type, statusCode } };
 	return c.json(errorPayload, statusCode);
 });
 
@@ -2850,12 +2854,12 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	};
 	const now = Math.floor(Date.now() / 1000);
 	const chunkId = `chatcmpl-${now}`;
+	const maxAttempts = Math.min(providersToTry.length, MAX_ATTEMPTS);
 	// If streaming, handle retries within a single ReadableStream so we can switch keys on error mid-stream
 	if (stream) {
 		const streamResponse = new ReadableStream({
 			async start(controller) {
 				const baseChunk = { id: chunkId, object: 'chat.completion.chunk', created: now, model: modelId } as any;
-				const maxAttempts = Math.min(providersToTry.length, MAX_ATTEMPTS);
 				let attemptsTried = 0;
 				let lastStreamError: any = null;
 				let accumulatedText = '';
@@ -3049,8 +3053,9 @@ app.post('/v1/chat/completions', async (c: Context) => {
 											};
 											controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
 											// Also upload and stream markdown if storing
-											if (store) {
+											if (store && process.env.S3_API && process.env.S3_PUBLIC_URL && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
 												try {
+													const { uploadBlobToStorage } = await import('./shared/bucket.mts');
 													const bin = atob(b64);
 													const bytes = new Uint8Array(bin.length);
 													for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
@@ -3128,8 +3133,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 				// If all attempts failed
 				const statusCode = lastStreamError?.statusCode || 500;
 				const errMsg = lastStreamError?.message || 'An unknown error occurred';
-				const errorPayload = { error: { message: `All ${attemptsTried} attempt(s) failed. Last error: ${errMsg}`, type: lastStreamError?.type, statusCode } };
-				const errorChunk = { ...baseChunk, choices: [{ index: 0, delta: { content: JSON.stringify(errorPayload) }, finish_reason: 'stop' }] };
+				const errorChunk = { ...baseChunk, choices: [{ index: 0, delta: { refusal: `${statusCode} All ${attemptsTried} attempt(s) failed. Last error: ${errMsg}` }, finish_reason: 'stop' }] };
 				controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(errorChunk)}\n\n`));
 				controller.enqueue(TEXT_ENCODER.encode('data: [DONE]\n\n'));
 				controller.close();
@@ -3140,7 +3144,6 @@ app.post('/v1/chat/completions', async (c: Context) => {
 
 	// Non-streaming: try providers sequentially and return first success
 	let lastError: any;
-	const maxAttempts = Math.min(providersToTry.length, MAX_ATTEMPTS);
 	let attemptsTried = 0;
 	for (let i = 0; i < maxAttempts; i++) {
 		const provider = providersToTry[i];
@@ -3193,9 +3196,10 @@ app.post('/v1/chat/completions', async (c: Context) => {
 			}
 
 			// If storing, upload images and append markdown to response content (chat requirement)
-			if (store && Array.isArray((result as any).files) && (result as any).files.length > 0) {
+			if (store && Array.isArray((result as any).files) && (result as any).files.length > 0 && process.env.S3_API && process.env.S3_PUBLIC_URL && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
 				for (const f of (result as any).files) {
 					try {
+						const { uploadBlobToStorage } = await import('./shared/bucket.mts');
 						const fileObj = (f as any)?.file;
 						const b64 = fileObj?.base64Data as string | undefined;
 						const mt = fileObj?.mediaType as string | undefined;
@@ -3249,14 +3253,13 @@ app.post('/v1/chat/completions', async (c: Context) => {
 			});
 
 		} catch (error: any) {
-			console.error(`Error with provider: ${provider.name} (${i + 1}/${maxAttempts}): ${error.message}`);
 			lastError = error;
 
 			if (error.name === 'AbortError' || abortController.signal.aborted) {
 				const abortPayload = { error: { message: 'Request was aborted by the user', type: 'request_aborted', statusCode: 499 } };
 				return c.json(abortPayload, 499 as any);
 			}
-
+			console.error(`Error with provider: ${provider.name} (${i + 1}/${maxAttempts}): ${JSON.parse(error.responseBody || '{}').error?.metadata?.raw || error.message || error}`);
 			// Only retry for specific status codes
 			const statusCode = error.statusCode;
 			if (![429, 401, 402].includes(statusCode) || i >= maxAttempts - 1) {

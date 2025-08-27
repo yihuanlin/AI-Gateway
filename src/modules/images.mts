@@ -292,9 +292,9 @@ async function buildImageGenerationWaiter(params: {
 
         if (data?.b64_json && hasUploadFlag && process.env.S3_API && process.env.S3_PUBLIC_URL && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
           try {
-            const { uploadBase64ToBlob } = await import('../shared/bucket.mts');
+            const { uploadBase64ToStorage } = await import('../shared/bucket.mts');
             const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
-            const blobUrl = await uploadBase64ToBlob(`data:image/png;base64,${data.b64_json}`, timestamp);
+            const blobUrl = await uploadBase64ToStorage(`data:image/png;base64,${data.b64_json}`, timestamp);
             urlOrB64 = blobUrl;
           } catch (blobError) {
             console.warn('Failed to upload to bucket, using base64:', blobError);
