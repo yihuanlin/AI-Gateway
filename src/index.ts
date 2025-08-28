@@ -2463,6 +2463,16 @@ app.post('/v1/responses', async (c: Context) => {
 									break;
 								}
 								case 'finish': {
+									const reason = part.finishReason || 'stop';
+									if (reason !== 'stop') {
+										emit({
+											type: 'error',
+											sequence_number: sequenceNumber++,
+											code: reason,
+											message: reason,
+											param: null
+										});
+									}
 									// Finalize text item if exists
 									if (textItemId) {
 										// Emit content_part.done with accumulated annotations
@@ -2514,19 +2524,18 @@ app.post('/v1/responses', async (c: Context) => {
 											total_tokens: part.totalUsage.totalTokens
 										} : null
 									};
-									if (store) {
+									if (store && (savedTextContent || storedImageMarkdown)) {
 										try {
 											const blobStore = getStoreWithConfig('responses', headers);
-											const finalText = savedTextContent || '';
 											if (storedImageMarkdown) {
 												await blobStore.setJSON(responseId + '_image', {
 													id: responseId,
-													messages: [{ role: 'assistant', content: finalText + storedImageMarkdown }]
+													messages: [{ role: 'assistant', content: savedTextContent + storedImageMarkdown }]
 												});
 											} else {
 												await blobStore.setJSON(responseId, {
 													id: responseId,
-													messages: [...messages, { role: 'assistant', content: finalText }]
+													messages: [...messages, { role: 'assistant', content: savedTextContent }]
 												});
 											}
 										} catch { }
@@ -2710,7 +2719,6 @@ app.post('/v1/responses', async (c: Context) => {
 
 			if (store) {
 				try {
-					const blobStore = getStoreWithConfig('responses', headers);
 					let extraMd = '';
 					if (Array.isArray((result as any).files) && (result as any).files.length > 0 && process.env.S3_API && process.env.S3_PUBLIC_URL && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
 						const { uploadBlobToStorage } = await import('./shared/bucket.mts');
@@ -2731,7 +2739,10 @@ app.post('/v1/responses', async (c: Context) => {
 						}
 					}
 					const storedContent = extraMd ? (content ? content + '\n\n' + extraMd : extraMd) : content;
-					await blobStore.setJSON(extraMd ? responseId + '_image' : responseId, { id: responseId, messages: [...messages, { role: 'assistant', content: storedContent }] });
+					if (storedContent) {
+						const blobStore = getStoreWithConfig('responses', headers);
+						await blobStore.setJSON(extraMd ? responseId + '_image' : responseId, { id: responseId, messages: [...messages, { role: 'assistant', content: storedContent }] });
+					}
 				} catch { }
 			}
 
@@ -3091,6 +3102,11 @@ app.post('/v1/chat/completions', async (c: Context) => {
 									}
 									break;
 								case 'finish':
+									const reason = part.finishReason || 'stop';
+									if (reason !== 'stop') {
+										chunk = { ...baseChunk, choices: [{ index: 0, delta: { refusal: reason, content: '**Unexpected Finish**: ' + reason }, finish_reason: reason }] };
+										controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+									}
 									if (accumulatedSources.length > 0) {
 										const accumulatedCitations = accumulatedSources.map(source => ({
 											type: source.type === 'url_citation' ? 'url_citation' : `${source.type}_citation`,
@@ -3102,14 +3118,14 @@ app.post('/v1/chat/completions', async (c: Context) => {
 										const citationsChunk = { ...baseChunk, choices: [{ index: 0, delta: { annotations: accumulatedCitations }, finish_reason: null }] };
 										controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(citationsChunk)}\n\n`));
 									}
-									chunk = { ...baseChunk, choices: [{ index: 0, delta: {}, finish_reason: part.finishReason }], usage: { prompt_tokens: part.totalUsage.inputTokens, completion_tokens: part.totalUsage.outputTokens, total_tokens: part.totalUsage.totalTokens } };
+									chunk = { ...baseChunk, choices: [{ index: 0, delta: {}, finish_reason: reason }], usage: { prompt_tokens: part.totalUsage.inputTokens, completion_tokens: part.totalUsage.outputTokens, total_tokens: part.totalUsage.totalTokens } };
 									controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
 									break;
 							}
 						}
 						// If finished streaming without throwing, end the SSE and return
 						controller.enqueue(TEXT_ENCODER.encode('data: [DONE]\n\n'));
-						if (store) {
+						if (store && accumulatedText) {
 							try {
 								const blobStore = getStoreWithConfig('responses', headers);
 								await blobStore.setJSON(chunkId, {
@@ -3230,7 +3246,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 						index: 0,
 						message: {
 							role: 'assistant',
-							content: content,
+							content,
 							reasoning_content: reasoningContent || undefined,
 							tool_calls: result.toolCalls,
 							...(accumulatedCitations.length > 0 ? { annotations: accumulatedCitations } : {}),
@@ -3241,10 +3257,10 @@ app.post('/v1/chat/completions', async (c: Context) => {
 				]
 				: [];
 
-			if (store) {
+			if (store && content) {
 				try {
 					const blobStore = getStoreWithConfig('responses', headers);
-					await blobStore.setJSON(chunkId, { id: chunkId, messages: [...messages, { role: 'assistant', content: content }] });
+					await blobStore.setJSON(chunkId, { id: chunkId, messages: [...messages, { role: 'assistant', content }] });
 				} catch { }
 			}
 

@@ -111,7 +111,7 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
           await Promise.all(blobs.map((b: any) => (store as any).delete(b.key)));
           deleted = blobs.length;
         } catch { }
-        return streamChatSingleText(model, `Deleted ${deleted} responses.`);
+        return streamChatSingleText(model, `Deleted ${deleted} item(s).`);
       }
       // Non-stream path
       const listResult: any = await (store as any).list();
@@ -120,7 +120,7 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
         for await (const item of listResult) { if (item.blobs) blobs.push(...item.blobs); }
       }
       await Promise.all(blobs.map((b: any) => (store as any).delete(b.key)));
-      const msg = `Deleted ${blobs.length} responses.`;
+      const msg = `Deleted ${blobs.length} item(s).`;
       const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: msg } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
       return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
     } catch (e: any) {
@@ -235,7 +235,7 @@ export async function handleAdminForResponses(args: { input: any; headers: Heade
         for await (const item of listResult) { if (item.blobs) blobs.push(...item.blobs); }
       }
       await Promise.all(blobs.map((b: any) => (responseStore as any).delete(b.key)));
-      const msg = `Deleted ${blobs.length} responses.`;
+      const msg = `Deleted ${blobs.length} item(s).`;
       if (!stream) return new Response(JSON.stringify(buildCompleted(msg)), { headers: { 'Content-Type': 'application/json' } });
       return streamTextOnce(msg);
     } catch (e: any) {
@@ -353,7 +353,7 @@ export async function deleteAllResponsesHttp(c: any) {
         for await (const item of listResult as any) { if (item.blobs) blobs.push(...item.blobs); }
       }
       await Promise.all(blobs.map((b: any) => (store as any).delete(b.key)));
-      return c.json({ message: `Successfully deleted ${blobs.length} responses`, deleted_count: blobs.length });
+      return c.json({ message: `Deleted ${blobs.length} item(s)`, deleted_count: blobs.length });
     } catch (e: any) {
       return c.json({ error: { message: 'Failed to list responses for deletion', type: 'server_error' } }, 500);
     }
