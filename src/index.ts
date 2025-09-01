@@ -3340,6 +3340,7 @@ const CUSTOM_MODEL_LISTS = {
 		{ id: 'command-a-03-2025', name: 'Command A' },
 		{ id: 'command-a-vision-07-2025', name: 'Cohere A Vision' },
 		{ id: 'command-a-reasoning-08-2025', name: 'Command A Reasoning' },
+		{ id: 'command-a-translate-08-2025', name: 'Command A Translation' },
 	],
 };
 
