@@ -1866,6 +1866,7 @@ app.post('/v1/responses', async (c: Context) => {
 											output_index: outputIndex,
 											item: reasoningItem
 										});
+										reasoningItemId = null;
 
 										outputIndex++;
 									}
