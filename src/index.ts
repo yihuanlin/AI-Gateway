@@ -1649,6 +1649,7 @@ app.post('/v1/responses', async (c: Context) => {
 	const messages = await toAiSdkMessages();
 	let modelId: string = model;
 	let thinking: Record<string, any> | undefined = undefined;
+	let extraBody: Record<string, any> = extra_body || {};
 	let search: boolean = false;
 	if (modelId.startsWith('doubao/')) {
 		if (Array.isArray(messages) && messages.length > 0) {
@@ -1674,6 +1675,8 @@ app.post('/v1/responses', async (c: Context) => {
 			thinking = {
 				type: 'enabled',
 			};
+		} else if (modelId.startsWith('modelscope/deepseek-ai/DeepSeek-V3.1')) {
+			extraBody = { "enable_thinking": true };
 		}
 	} else {
 		search = true;
@@ -1685,7 +1688,7 @@ app.post('/v1/responses', async (c: Context) => {
 		providerOptionsHeader: providerOptionsHeader ?? null,
 		thinking,
 		reasoning_effort: reasoning?.effort || undefined,
-		extra_body,
+		extra_body: extraBody,
 		text_verbosity: text?.verbosity || undefined,
 		service_tier,
 		reasoning_summary: reasoning?.summary || undefined,
@@ -2862,6 +2865,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
 	let modelId: string = model;
 	let thinkingConfig = thinking;
+	let extraBody = extra_body || {};
 	let search: boolean = false;
 	if (modelId.startsWith('doubao/')) {
 		if (Array.isArray(processedMessages) && processedMessages.length > 0) {
@@ -2887,13 +2891,25 @@ app.post('/v1/chat/completions', async (c: Context) => {
 			thinkingConfig = {
 				type: 'enabled',
 			};
+		} else if (modelId.startsWith('modelscope/deepseek-ai/DeepSeek-V3.1')) {
+			extraBody = { "enable_thinking": true };
 		}
 	} else {
 		search = true;
 	}
 	const { providersToTry } = prepareProvidersToTry({ model: modelId, providerKeys, isPasswordAuth, authApiKey: apiKey });
 	const providerOptionsHeader = c.req.header('x-provider-options');
-	const providerOptions = buildDefaultProviderOptions({ providerOptionsHeader: providerOptionsHeader ?? null, thinking: thinkingConfig, reasoning_effort, extra_body, text_verbosity, service_tier, store, model: modelId });
+	const providerOptions = buildDefaultProviderOptions({
+		providerOptionsHeader: providerOptionsHeader ?? null,
+		thinking: thinkingConfig,
+		reasoning_effort,
+		extra_body: extraBody,
+		text_verbosity,
+		service_tier,
+		store,
+		model: modelId,
+		search,
+	});
 	const commonParams = {
 		messages: processedMessages,
 		aiSdkTools,
@@ -2909,7 +2925,6 @@ app.post('/v1/chat/completions', async (c: Context) => {
 		abortSignal: abortController.signal,
 		providerOptions,
 		reasoning_effort,
-		search,
 	};
 	const now = Math.floor(Date.now() / 1000);
 	const chunkId = `chatcmpl-${now}`;
