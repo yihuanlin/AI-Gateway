@@ -216,7 +216,7 @@ export function streamResponsesGenerationElapsed(params: {
         if (taskId && result.downloadLink && headers) {
           try {
             const { getStoreWithConfig } = await import('../shared/store.mts');
-            const store = getStoreWithConfig('responses', headers);
+            const store = getStoreWithConfig('responses');
             const timestamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
             const mediaKey = `media_${timestamp}`;
             const mediaData = {

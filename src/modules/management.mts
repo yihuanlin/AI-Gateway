@@ -1,6 +1,45 @@
 import { getStoreWithConfig } from '../shared/store.mts';
 import { responsesBase, streamChatSingleText, streamResponsesSingleText } from './utils.mts';
 
+async function forceRefreshCopilotToken(headers: Headers, isPasswordAuth: boolean = false): Promise<{ ok: true; message: string } | { ok: false; message: string }> {
+  const { SUPPORTED_PROVIDERS, getProviderKeys } = await import('../shared/providers.mts');
+  try {
+    // Resolve Copilot API key from headers or environment (when password auth is enabled)
+    const providerKeys = await getProviderKeys(headers as any, null, isPasswordAuth);
+    const copilotKeys = providerKeys?.copilot || [];
+    const apiKey = copilotKeys[0] || (isPasswordAuth ? (process as any).env?.COPILOT_API_KEY : null);
+    if (!apiKey) {
+      return { ok: false, message: 'Missing Copilot API key. Provide x-copilot-api-key header or set COPILOT_API_KEY in env.' };
+    }
+
+    const tokenURL = SUPPORTED_PROVIDERS.copilot.tokenURL;
+    const resp = await fetch(tokenURL, {
+      method: 'GET',
+      headers: { 'Authorization': `Token ${apiKey}`, 'Accept': 'application/json' },
+    });
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      return { ok: false, message: `Failed to fetch Copilot token: ${resp.status} ${resp.statusText}${errText ? ` - ${errText}` : ''}` };
+    }
+    const data = await resp.json() as any;
+    const token = data?.token;
+    if (!token) {
+      return { ok: false, message: 'Token response missing token field.' };
+    }
+
+    const now = Date.now();
+    const expires = now + data.refresh_in * 1000;
+
+    const store = getStoreWithConfig('copilot-tokens');
+    await (store as any).set('token', token, { metadata: { expiration: expires } });
+
+    const expiresStr = new Date(expires).toISOString();
+    return { ok: true, message: `Refreshed Copilot token. Expires at ${expiresStr}.` };
+  } catch (e: any) {
+    return { ok: false, message: e?.message || 'Unexpected error while refreshing Copilot token.' };
+  }
+}
+
 function toConversationMarkdown(stored: any, key?: string): string {
   if (!stored) return 'No content found.';
 
@@ -86,14 +125,22 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
   const now = Math.floor(Date.now() / 1000);
   let text = lastUserTextFromMessages(messages).trim();
 
-  const store = getStoreWithConfig('responses', headers);
+  const store = getStoreWithConfig('responses');
 
   if (/^\/help$/.test(text)) {
-    const help = 'Commands: `list` (responses) | `list [prefix]` | `ls` (== `list all`) | `delete all` | `delete [id]` | `[id]` to view.';
+    const help = 'Commands: `refresh` (Copilot token) | `list` (responses) | `list [prefix]` | `ls` (== `list all`) | `delete all` | `delete [id]` | `[id]` to view.';
     if (stream) {
       return streamChatSingleText(model, help);
     }
     const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: help } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
+    return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
+  }
+
+  if (/^refresh$/i.test(text)) {
+    const result = await forceRefreshCopilotToken(headers, !!isPasswordAuth);
+    const out = result.message;
+    if (stream) return streamChatSingleText(model, out);
+    const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: out } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } } as any;
     return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
   }
 
@@ -208,7 +255,7 @@ export async function handleAdminForResponses(args: { input: any; headers: Heade
     return new Response(JSON.stringify({ error: { message: 'Unauthorized' } }), { status: 401, headers: { 'Content-Type': 'application/json' } });
   }
   let text = lastUserTextFromResponses(input).trim();
-  const responseStore = getStoreWithConfig('responses', headers);
+  const responseStore = getStoreWithConfig('responses');
 
   const now = Date.now();
   const baseObj = responsesBase(now, request_id, model, input, null, store, undefined, undefined, undefined, undefined);
@@ -222,7 +269,14 @@ export async function handleAdminForResponses(args: { input: any; headers: Heade
   const streamTextOnce = (messageText: string) => streamResponsesSingleText(baseObj, messageText, textItemId, true);
 
   if (/^\/help$/.test(text)) {
-    const msg = 'Commands: `list` (responses) | `list [prefix]` | `ls` (== `list all`) | `delete all` | `delete [id]` | `[id]` to view.';
+    const msg = 'Commands: `refresh` (Copilot token) | `list` (responses) | `list [prefix]` | `ls` (== `list all`) | `delete all` | `delete [id]` | `[id]` to view.';
+    if (!stream) return new Response(JSON.stringify(buildCompleted(msg)), { headers: { 'Content-Type': 'application/json' } });
+    return streamTextOnce(msg);
+  }
+
+  if (/^refresh$/i.test(text)) {
+    const result = await forceRefreshCopilotToken(headers, !!isPasswordAuth);
+    const msg = result.message;
     if (!stream) return new Response(JSON.stringify(buildCompleted(msg)), { headers: { 'Content-Type': 'application/json' } });
     return streamTextOnce(msg);
   }
@@ -315,7 +369,7 @@ export async function listResponsesHttp(c: any) {
   try {
     const headers: Record<string, string> = {};
     c.req.raw.headers.forEach((value: string, key: string) => { headers[key.toLowerCase().replace(/-/g, '_')] = value; });
-    const store = getStoreWithConfig('responses', new Headers(headers as any));
+    const store = getStoreWithConfig('responses');
     const listOptions: any = { ...(prefix && { prefix }) };
     try {
       const listResult: any = await (store as any).list(listOptions);
@@ -345,7 +399,7 @@ export async function deleteAllResponsesHttp(c: any) {
   try {
     const headers: Record<string, string> = {};
     c.req.raw.headers.forEach((value: string, key: string) => { headers[key.toLowerCase().replace(/-/g, '_')] = value; });
-    const store = getStoreWithConfig('responses', new Headers(headers as any));
+    const store = getStoreWithConfig('responses');
     try {
       const listResult: any = await (store as any).list();
       let blobs: any[] = [];
@@ -373,7 +427,7 @@ export async function deleteResponseHttp(c: any) {
   try {
     const headers: Record<string, string> = {};
     c.req.raw.headers.forEach((value: string, key: string) => { headers[key.toLowerCase().replace(/-/g, '_')] = value; });
-    const store = getStoreWithConfig('responses', new Headers(headers as any));
+    const store = getStoreWithConfig('responses');
     const existing: any = await (store as any).get(responseId, { type: 'json' });
     if (!existing) return c.json({ error: { message: `Response with ID '${responseId}' not found.`, type: 'invalid_request_error', code: 'response_not_found' } }, 404);
     await (store as any).delete(responseId);
@@ -396,7 +450,7 @@ export async function getResponseHttp(c: any) {
   try {
     const headers: Record<string, string> = {};
     c.req.raw.headers.forEach((value: string, key: string) => { headers[key.toLowerCase().replace(/-/g, '_')] = value; });
-    const store = getStoreWithConfig('responses', new Headers(headers as any));
+    const store = getStoreWithConfig('responses');
     const storedResponse: any = await (store as any).get(responseId, { type: 'json' });
     if (!storedResponse) return c.json({ error: { message: `Response with ID '${responseId}' not found.`, type: 'invalid_request_error', code: 'response_not_found' } }, 404);
 

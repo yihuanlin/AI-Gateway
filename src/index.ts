@@ -55,7 +55,7 @@ async function fetchCopilotToken(apiKey: string): Promise<string> {
 
 	const data = await response.json() as any;
 	const key = data.token;
-	const expires = (data.expires_in - 60) * 1000 || (now + 86400000);
+	const expires = now + data.refresh_in * 1000; // (data.expires_in - 60) * 1000 || (now + 86400000);
 	console.log('Fetched new Copilot token, expires at', expires);
 	await store.set('token', key, {
 		metadata: {
