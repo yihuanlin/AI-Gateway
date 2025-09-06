@@ -57,21 +57,3 @@ export async function getProviderKeys(headers: any, authHeader: string | null, i
   }
   return providerKeys;
 }
-
-export async function fetchCopilotToken(apiKey: string): Promise<string> {
-  const config = SUPPORTED_PROVIDERS.copilot;
-  const response = await fetch(config.tokenURL, {
-    method: 'GET',
-    headers: {
-      'Authorization': `Token ${apiKey}`,
-      'Accept': 'application/json',
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch Copilot token: ${response.status} ${response.statusText}`);
-  }
-
-  const data = await response.json() as any;
-  return data.token;
-}

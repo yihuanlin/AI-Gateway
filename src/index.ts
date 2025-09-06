@@ -7,7 +7,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { openai, createOpenAI } from '@ai-sdk/openai'
 import { google, createGoogleGenerativeAI } from '@ai-sdk/google'
 import { groq, createGroq } from '@ai-sdk/groq';
-import { SUPPORTED_PROVIDERS, getProviderKeys, fetchCopilotToken } from './shared/providers.mts'
+import { SUPPORTED_PROVIDERS, getProviderKeys } from './shared/providers.mts'
 import { getStoreWithConfig } from './shared/store.mts'
 import { string, number, boolean, array, object, optional, int, enum as zenum } from 'zod/mini'
 
@@ -31,6 +31,39 @@ let geo: {
 let isResearchMode: boolean = false;
 
 // Helper functions
+async function fetchCopilotToken(apiKey: string): Promise<string> {
+	const store = await getStoreWithConfig('copilot-tokens');
+	const res = await store.getWithMetadata('token', { type: 'text' }) as { data?: string | null, metadata?: { expiration?: number } | null } | null;
+	const token = res?.data ?? null;
+	const expiration = res?.metadata?.expiration ?? null;
+	const now = Date.now();
+	if (token && expiration && now < expiration) {
+		return token;
+	}
+	const config = SUPPORTED_PROVIDERS.copilot;
+	const response = await fetch(config.tokenURL, {
+		method: 'GET',
+		headers: {
+			'Authorization': `Token ${apiKey}`,
+			'Accept': 'application/json',
+		},
+	});
+
+	if (!response.ok) {
+		throw new Error(`Failed to fetch Copilot token: ${response.status} ${response.statusText}`);
+	}
+
+	const data = await response.json() as any;
+	const key = data.token;
+	const expires = (data.expires_in - 60) * 1000 || (now + 86400000);
+	console.log('Fetched new Copilot token, expires at', expires);
+	await store.set('token', key, {
+		metadata: {
+			expiration: expires
+		}
+	});
+	return key;
+}
 
 function randomId(prefix: string) {
 	try {
@@ -1593,7 +1626,7 @@ app.post('/v1/responses', async (c: Context) => {
 		let history: any[] = [];
 		if (previous_response_id) {
 			try {
-				const blobStore = getStoreWithConfig('responses', headers);
+				const blobStore = getStoreWithConfig('responses');
 				const existing: any = await blobStore.get(previous_response_id, { type: 'json' as any });
 				if (existing && existing.messages && Array.isArray(existing.messages)) {
 					history = existing.messages.filter((m: any) => m?.role !== 'system');
@@ -2527,7 +2560,7 @@ app.post('/v1/responses', async (c: Context) => {
 									};
 									if (store && (savedTextContent || storedImageMarkdown)) {
 										try {
-											const blobStore = getStoreWithConfig('responses', headers);
+											const blobStore = getStoreWithConfig('responses');
 											if (storedImageMarkdown) {
 												await blobStore.setJSON(responseId + '_image', {
 													id: responseId,
@@ -2741,7 +2774,7 @@ app.post('/v1/responses', async (c: Context) => {
 					}
 					const storedContent = extraMd ? (content ? content + '\n\n' + extraMd : extraMd) : content;
 					if (storedContent) {
-						const blobStore = getStoreWithConfig('responses', headers);
+						const blobStore = getStoreWithConfig('responses');
 						await blobStore.setJSON(extraMd ? responseId + '_image' : responseId, { id: responseId, messages: [...messages, { role: 'assistant', content: storedContent }] });
 					}
 				} catch { }
@@ -3128,7 +3161,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 						controller.enqueue(TEXT_ENCODER.encode('data: [DONE]\n\n'));
 						if (store && accumulatedText) {
 							try {
-								const blobStore = getStoreWithConfig('responses', headers);
+								const blobStore = getStoreWithConfig('responses');
 								await blobStore.setJSON(chunkId, {
 									id: chunkId,
 									messages: [...messages, { role: 'assistant', content: accumulatedText }]
@@ -3260,7 +3293,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 
 			if (store && content) {
 				try {
-					const blobStore = getStoreWithConfig('responses', headers);
+					const blobStore = getStoreWithConfig('responses');
 					await blobStore.setJSON(chunkId, { id: chunkId, messages: [...messages, { role: 'assistant', content }] });
 				} catch { }
 			}
