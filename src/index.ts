@@ -1676,7 +1676,9 @@ app.post('/v1/responses', async (c: Context) => {
 				type: 'enabled',
 			};
 		} else if (modelId.startsWith('modelscope/deepseek-ai/DeepSeek-V3.1')) {
-			extraBody = { "enable_thinking": true };
+			extraBody = {
+				enable_thinking: true,
+			};
 		}
 	} else {
 		search = true;
@@ -2892,7 +2894,9 @@ app.post('/v1/chat/completions', async (c: Context) => {
 				type: 'enabled',
 			};
 		} else if (modelId.startsWith('modelscope/deepseek-ai/DeepSeek-V3.1')) {
-			extraBody = { "enable_thinking": true };
+			extraBody = {
+				enable_thinking: true,
+			};
 		}
 	} else {
 		search = true;
