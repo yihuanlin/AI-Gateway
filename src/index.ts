@@ -3448,6 +3448,20 @@ async function getModelsResponse(apiKey: string, providerKeys: Record<string, st
 		gatewayApiKeys = apiKey.split(',').map((k) => k.trim());
 	}
 
+	// Helper to enforce 5s timeout, returning [] on timeout or error
+	const withTimeout = <T>(p: Promise<T>): Promise<T> =>
+		new Promise((resolve) => {
+			const fallback = [] as T;
+			const id = setTimeout(() => resolve(fallback), 5000);
+			p.then((v) => {
+				clearTimeout(id);
+				resolve(v);
+			}).catch(() => {
+				clearTimeout(id);
+				resolve(fallback);
+			});
+		});
+
 	const fetchPromises: Promise<any[]>[] = [];
 
 	if (gatewayApiKeys.length > 0) {
@@ -3473,7 +3487,7 @@ async function getModelsResponse(apiKey: string, providerKeys: Record<string, st
 				return [] as any[];
 			}
 		})();
-		fetchPromises.push(gatewayPromise);
+		fetchPromises.push(withTimeout(gatewayPromise));
 	}
 
 	for (const [providerName, keys] of Object.entries(providerKeys)) {
@@ -3518,11 +3532,11 @@ async function getModelsResponse(apiKey: string, providerKeys: Record<string, st
 				}
 				return formattedModels;
 			} catch (error: any) {
-				console.error(`Error with ${providerName} API key:`, error);
+				console.error(`Error getting models for ${providerName}:`, error);
 				return [];
 			}
 		})();
-		fetchPromises.push(providerPromise);
+		fetchPromises.push(withTimeout(providerPromise));
 	}
 
 	const results = await Promise.allSettled(fetchPromises);
