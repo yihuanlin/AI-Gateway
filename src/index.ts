@@ -749,26 +749,34 @@ function responsesInputToAiSdkMessages(input: any): any[] {
 				if (!part) continue;
 				if (part.type.includes('text') && typeof part.text === 'string') {
 					parts.push({ type: 'text', text: part.text });
-				} else if (part.type === 'input_image' && role === 'assistant') {
-					const imageSrc: string | undefined = typeof part?.image_url === 'string' ? part.image_url : (part?.image_url?.url || part?.url);
-					if (imageSrc) {
-						let mediaType = part?.media_type || part?.mediaType;
-						if (!mediaType && typeof imageSrc === 'string' && imageSrc.startsWith('data:')) {
-							const m = imageSrc.match(/^data:([^;]+);/);
-							if (m) mediaType = m[1];
-						}
-						parts.push(mediaType ? { type: 'file', data: imageSrc, mediaType } : { type: 'file', data: imageSrc, mediaType: 'image/png' });
-					}
 				} else if (part.type.includes('image')) {
-					const imageSrc = part?.image_url?.url || part?.url || part?.image || part?.data || (typeof part?.image_url === 'string' ? part.image_url : undefined);
-					if (imageSrc) {
-						const mediaType = part?.media_type || part?.mediaType;
-						parts.push(mediaType ? { type: 'image', image: imageSrc, mediaType } : { type: 'image', image: imageSrc });
+					const data = part?.image_url?.url || part?.url || part?.image || part?.data || (typeof part?.image_url === 'string' ? part.image_url : undefined);
+					if (data) {
+						let mediaType = part?.media_type || part?.mediaType;
+						if (!mediaType) {
+							if (typeof data === 'string' && data.startsWith('data:')) {
+								const m = data.match(/^data:([^;]+);/);
+								if (m) mediaType = m[1];
+							} else {
+								mediaType = 'image/png';
+							}
+						}
+						parts.push({ type: 'file', data, mediaType });
 					}
 				} else if (part.type.includes('file')) {
 					const data = part?.data || part?.file_data || part?.url;
-					const mediaType = part?.media_type || part?.mediaType || 'application/octet-stream';
-					if (data) parts.push({ type: 'file', data, mediaType });
+					if (data) {
+						let mediaType = part?.media_type || part?.mediaType;
+						if (!mediaType) {
+							if (typeof data === 'string' && data.startsWith('data:')) {
+								const m = data.match(/^data:([^;]+);/);
+								if (m) mediaType = m[1];
+							} else {
+								mediaType = 'application/pdf';
+							}
+						}
+						parts.push({ type: 'file', data, mediaType });
+					}
 				} else if (typeof part === 'string') {
 					parts.push({ type: 'text', text: part });
 				}
@@ -1623,17 +1631,22 @@ app.post('/v1/responses', async (c: Context) => {
 	} = body || {};
 	const now = Date.now();
 	const responseId = request_id || 'resp_' + new Date(now).toISOString().slice(0, 16).replace(/[-:T]/g, '');
-	if (typeof model === 'string' && model.startsWith('image/')) {
-		const { handleImageForResponses } = await import('./modules/images.mts');
-		return await handleImageForResponses({ model, input, headers: c.req.raw.headers as any, stream: !!stream, temperature, top_p, request_id: responseId, authHeader: authHeader || null, isPasswordAuth });
-	}
-	if (typeof model === 'string' && model.startsWith('video/')) {
-		const { handleVideoForResponses } = await import('./modules/videos.mts');
-		return await handleVideoForResponses({ model, input, headers: c.req.raw.headers as any, stream: !!stream, request_id: responseId, authHeader: authHeader || null, isPasswordAuth });
-	}
-	if (model === 'admin/magic') {
-		const { handleAdminForResponses } = await import('./modules/management.mts');
-		return await handleAdminForResponses({ input, headers: c.req.raw.headers as any, model, request_id: responseId, stream: !!stream, isPasswordAuth });
+	if (typeof model === 'string' && (model.startsWith('image/') || model.startsWith('video/') || model.startsWith('admin/'))) {
+		// Build AI SDK-style messages from Responses input (streamlined for modules)
+		const mapped = responsesInputToAiSdkMessages(input);
+		const messagesForModules = await processMessages(mapped);
+		if (model.startsWith('image/')) {
+			const { handleImageForResponses } = await import('./modules/images.mts');
+			return await handleImageForResponses({ model, messages: messagesForModules, headers: c.req.raw.headers as any, stream: !!stream, temperature, top_p, request_id: responseId, authHeader: authHeader || null, isPasswordAuth });
+		}
+		if (model.startsWith('video/')) {
+			const { handleVideoForResponses } = await import('./modules/videos.mts');
+			return await handleVideoForResponses({ model, messages: messagesForModules, headers: c.req.raw.headers as any, stream: !!stream, request_id: responseId, authHeader: authHeader || null, isPasswordAuth });
+		}
+		if (model.startsWith('admin/')) {
+			const { handleAdminForResponses } = await import('./modules/management.mts');
+			return await handleAdminForResponses({ messages: messagesForModules, headers: c.req.raw.headers as any, model, request_id: responseId, stream: !!stream, isPasswordAuth });
+		}
 	}
 	// Headers and aux keys
 	tavilyApiKey = c.req.header('x-tavily-api-key') || (isPasswordAuth ? process.env.TAVILY_API_KEY || null : null);
@@ -2408,8 +2421,8 @@ app.post('/v1/responses', async (c: Context) => {
 										// Advance output index past the image item
 										outputIndex = imageOutputIndex;
 
-										// If storing, upload to bucket and accumulate markdown to store (not to response)
-										if (store && base64Data && process.env.S3_API && process.env.S3_PUBLIC_URL && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
+										// If storing, upload to blob store and accumulate markdown to store (not to response)
+										if (store && base64Data && process.env.URL) {
 											try {
 												const { uploadBlobToStorage } = await import('./shared/bucket.mts');
 												const bin = atob(base64Data);
@@ -2940,7 +2953,7 @@ app.post('/v1/responses', async (c: Context) => {
 			if (store) {
 				try {
 					let extraMd = '';
-					if (Array.isArray((result as any).files) && (result as any).files.length > 0 && process.env.S3_API && process.env.S3_PUBLIC_URL && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
+					if (process.env.URL && Array.isArray((result as any).files) && (result as any).files.length > 0) {
 						const { uploadBlobToStorage } = await import('./shared/bucket.mts');
 						for (const f of (result as any).files) {
 							try {
@@ -3054,7 +3067,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 		const { handleVideoForChat } = await import('./modules/videos.mts');
 		return await handleVideoForChat({ model, messages: processedMessages, headers: c.req.raw.headers as any, stream: !!stream, authHeader: authHeader || null, isPasswordAuth });
 	}
-	if (model === 'admin/magic') {
+	if (typeof model === 'string' && model.startsWith('admin/')) {
 		const { handleAdminForChat } = await import('./modules/management.mts');
 		return await handleAdminForChat({ messages: processedMessages, headers: c.req.raw.headers as any, model, stream: !!stream, isPasswordAuth });
 	}
@@ -3325,7 +3338,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 											};
 											controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
 											// Also upload and stream markdown if storing
-											if (store && process.env.S3_API && process.env.S3_PUBLIC_URL && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
+											if (store && process.env.URL) {
 												try {
 													const { uploadBlobToStorage } = await import('./shared/bucket.mts');
 													const bin = atob(b64);
@@ -3495,7 +3508,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 			}
 
 			// If storing, upload images and append markdown to response content (chat requirement)
-			if (store && Array.isArray((result as any).files) && (result as any).files.length > 0 && process.env.S3_API && process.env.S3_PUBLIC_URL && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
+			if (process.env.URL && store && Array.isArray((result as any).files) && (result as any).files.length > 0) {
 				for (const f of (result as any).files) {
 					try {
 						const { uploadBlobToStorage } = await import('./shared/bucket.mts');
@@ -3793,7 +3806,7 @@ async function getModelsResponse(apiKey: string, providerKeys: Record<string, st
 	results.forEach((r) => { if (r.status === 'fulfilled' && r.value.length > 0) allModels.push(...r.value); });
 
 	const curated = [
-		{ id: 'admin/magic', name: 'Responses Management', object: 'model', created: 0, owned_by: 'admin' },
+		{ id: 'admin/magic-vision', name: 'Responses Management', object: 'model', created: 0, owned_by: 'admin' },
 		{ id: 'image/doubao-vision', name: 'Seed Image', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'image/MusePublic/14_ckpt_SD_XL', name: 'Anything XL', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/MusePublic/489_ckpt_FLUX_1', name: 'FLUX.1 [dev]', object: 'model', created: 0, owned_by: 'modelscope' },
@@ -3875,6 +3888,24 @@ app.get('/v1/models', async (c: Context) => {
 });
 app.post('/v1/models', async (c: Context) => {
 	return handleModelsRequest(c);
+});
+
+// Files: serve blobs stored in Netlify store
+app.get('/v1/files/:key', async (c: Context) => {
+	try {
+		const key = c.req.param('key');
+		const { getFileWithMetadata } = await import('./shared/bucket.mts');
+		const res = await getFileWithMetadata(key, 'blob' as any);
+		if (!res || !res.data) return c.text('Not found', 404);
+		const blob: Blob = res.data as Blob;
+		const headers: Record<string, string> = {
+			'Content-Type': res.metadata?.contentType || blob.type || 'image/png',
+			'Cache-Control': 'public, max-age=31536000, immutable'
+		};
+		return new Response(blob, { headers });
+	} catch {
+		return c.text('Not found', 404);
+	}
 });
 
 // Get a model response

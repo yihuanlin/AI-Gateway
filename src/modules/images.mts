@@ -1,4 +1,4 @@
-import { type WaitResult, lastUserPromptFromMessages, lastUserPromptFromResponsesInput, responsesBase, streamChatSingleText, streamResponsesSingleText, streamChatGenerationElapsed, streamResponsesGenerationElapsed, findLinks, hasImageInMessages, sleep } from './utils.mts';
+import { type WaitResult, lastUserPromptFromMessages, responsesBase, streamChatSingleText, streamResponsesSingleText, streamChatGenerationElapsed, streamResponsesGenerationElapsed, findLinks, hasImageInMessages, sleep } from './utils.mts';
 import { SUPPORTED_PROVIDERS, getProviderKeys } from '../shared/providers.mts';
 
 export type ImageResult = {
@@ -15,7 +15,7 @@ function getHelpForModel(model: string) {
     return 'Use **Doubao** t2i model *doubao-seedream-3-0-t2i-250415* or i2i *doubao-seededit-3-0-i2i-250628* (if has an input image).\nFlags: `--format url|b64_json`, `--size {WxH}|--ratio {e.g., 16:9}`, `--seed N`, `--guidance F`.\n`/upload` upload input images to storage .';
   }
   if (model.endsWith('-vision') && !model.includes('doubao')) {
-    return '**Hugging Face** Image-to-Image models (requires input image).\nFlags: `--guidance F`, `--negative_prompt "text"`, `--steps N (1-100)"`, `--size WxH` or `--ratio A:B`.\n`/upload` upload input images to storage (output images are always uploaded if S3 bucket is configured).\nSpecial prompt trigger for Kontext models:\n`Make a shot in the same scene of...`\n`Remove ...`\n`redepthkontext ...`\n`Place it`\n`Fuse this image into background`\n`Convert this image into pencil drawing art style`\n`Turn this image into the Clay_Toy style.`';
+    return '**Hugging Face** Image-to-Image models (requires input image).\nFlags: `--guidance F`, `--negative_prompt "text"`, `--steps N (1-100)"`, `--size WxH` or `--ratio A:B`.\n`/upload` upload input images to storage (output images are uploaded to storage).\nSpecial prompt trigger for Kontext models:\n`Make a shot in the same scene of...`\n`Remove ...`\n`redepthkontext ...`\n`Place it`\n`Fuse this image into background`\n`Convert this image into pencil drawing art style`\n`Turn this image into the Clay_Toy style.`';
   }
   if (model.startsWith('image/')) {
     return '**ModelScope** Text-to-Image models.\nFlags: `--negative_prompt "text"`, `--steps N (1-100)`, `--guidance F` (or derived from `top_p`/`temperature`), `--size WxH` or `--ratio A:B`, `--seed N`.\nFLUX.1 uses support any ratio. For Qwen models, supported ratios: 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3.\n`/upload` upload input images to storage.\nIf prompt contains `miratsu style` or `chibi` with Qwen/Qwen-Image, switches to **MTWLDFC/miratsu_style**.';
@@ -83,7 +83,7 @@ export async function handleImageForChat(args: {
 
 export async function handleImageForResponses(args: {
   model: string;
-  input: any;
+  messages: any[];
   headers: Headers;
   stream?: boolean;
   temperature?: number;
@@ -92,22 +92,22 @@ export async function handleImageForResponses(args: {
   authHeader: string | null;
   isPasswordAuth: boolean;
 }): Promise<Response> {
-  const { model, input, headers, stream = false, temperature, top_p, request_id, authHeader, isPasswordAuth } = args;
+  const { model, messages, headers, stream = false, temperature, top_p, request_id, authHeader, isPasswordAuth } = args;
   const now = Date.now();
-  const last = lastUserPromptFromResponsesInput(input);
+  const last = lastUserPromptFromMessages(messages);
   let prompt = last.text || '';
   const { cleaned, flags } = extractFlags(prompt);
   prompt = cleaned;
 
   if (prompt.trim() === '/help') {
     const help = getHelpForModel(model);
-    const baseObj = responsesBase(now, request_id, model, input, null, false, undefined, undefined, undefined, undefined);
+    const baseObj = responsesBase(now, request_id, model, null, null, false, undefined, undefined, undefined, undefined);
     if (stream) return streamResponsesSingleText(baseObj, help, `msg_${now}`, true);
     const responsePayload = { ...baseObj, status: 'completed', output: [{ type: 'message', id: `msg_${now}`, status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: help }] }], usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } } as any;
     return new Response(JSON.stringify(responsePayload), { headers: { 'Content-Type': 'application/json' } });
   }
 
-  const baseObj = responsesBase(now, request_id, model, input, null, false, undefined, undefined, undefined, undefined);
+  const baseObj = responsesBase(now, request_id, model, null, null, false, undefined, undefined, undefined, undefined);
 
   try {
     const waiter = await buildImageGenerationWaiter({
@@ -290,14 +290,14 @@ async function buildImageGenerationWaiter(params: {
         const data = json?.data?.[0];
         let urlOrB64 = data?.url || (data?.b64_json ? `data:image/png;base64,${data.b64_json}` : '');
 
-        if (data?.b64_json && hasUploadFlag && process.env.S3_API && process.env.S3_PUBLIC_URL && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
+        if (data?.b64_json && hasUploadFlag && process.env.URL) {
           try {
             const { uploadBase64ToStorage } = await import('../shared/bucket.mts');
             const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
             const blobUrl = await uploadBase64ToStorage(`data:image/png;base64,${data.b64_json}`, timestamp);
             urlOrB64 = blobUrl;
           } catch (blobError) {
-            console.warn('Failed to upload to bucket, using base64:', blobError);
+            console.warn('Failed to upload to blob store, using base64:', blobError);
           }
         }
 
@@ -414,24 +414,16 @@ async function buildImageGenerationWaiter(params: {
           parameters
         });
 
-        // Upload to blob storage if configured
+        // Upload to blob storage; fallback to base64 URL on error
         let finalUrl: string;
-        if (process.env.S3_API && process.env.S3_PUBLIC_URL && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
-          try {
-            const { uploadBlobToStorage } = await import('../shared/bucket.mts');
-            const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
-            finalUrl = await uploadBlobToStorage(result, timestamp);
-          } catch (blobError) {
-            console.warn('Failed to upload to bucket, using base64:', blobError);
-            // Fallback to base64 conversion
-            const arrayBuffer = await result.arrayBuffer();
-            const buffer = Buffer.from(arrayBuffer);
-            const base64 = buffer.toString('base64');
-            const outputImageType = result.type || inputImageType || 'image/jpeg';
-            finalUrl = `data:${outputImageType};base64,${base64}`;
-          }
-        } else {
-          // Convert to base64 URL when not uploading to storage
+        try {
+          if (!process.env.URL) throw new Error('No process.env.URL configured');
+          const { uploadBlobToStorage } = await import('../shared/bucket.mts');
+          const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
+          finalUrl = await uploadBlobToStorage(result, timestamp);
+        } catch (blobError) {
+          console.warn('Failed to upload to storage, using base64:', blobError);
+          // Fallback to base64 conversion
           const arrayBuffer = await result.arrayBuffer();
           const buffer = Buffer.from(arrayBuffer);
           const base64 = buffer.toString('base64');

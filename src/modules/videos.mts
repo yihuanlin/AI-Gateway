@@ -1,4 +1,4 @@
-import { type WaitResult, lastUserPromptFromMessages, lastUserPromptFromResponsesInput, responsesBase, streamChatSingleText, streamResponsesSingleText, streamResponsesGenerationElapsed, streamChatGenerationElapsed, findLinks, hasImageInMessages, sleep } from './utils.mts';
+import { type WaitResult, lastUserPromptFromMessages, responsesBase, streamChatSingleText, streamResponsesSingleText, streamResponsesGenerationElapsed, streamChatGenerationElapsed, findLinks, hasImageInMessages, sleep } from './utils.mts';
 import { SUPPORTED_PROVIDERS, getProviderKeys } from '../shared/providers.mts';
 
 export function toMarkdownVideo(url: string): string {
@@ -14,7 +14,7 @@ function helpForVideo(model: string) {
     if (model.includes('doubao')) {
         return '**Doubao** Video models (supports both t2v and i2v. To use i2v, include an image in your message).\nFlags: `--rs/--resolution 480p|720p|1080p`, `--dur/--duration 3-12`, `--seed -1|[0,2^32-1]`, `--cf/--camerafixed true|false`, `--rt/--ratio 16:9` (default of t2v), 4:3, 1:1, 3:4, 9:16, 21:9, adaptive (default of i2v). Special: `/repeat` (use same image as first and last frame), `/upload` upload input images to storage.';
     } else {
-        return '**Hugging Face** Video models (supports both t2v and i2v. To use i2v, include an image in your message).\nFlags: `--frames N` (number of frames), `--guidance F` (guidance scale), `--steps N` (inference steps), `--seed N` (random seed).\nOutput video always uploaded if S3 bucket is configured.';
+        return '**Hugging Face** Video models (supports both t2v and i2v. To use i2v, include an image in your message).\nFlags: `--frames N` (number of frames), `--guidance F` (guidance scale), `--steps N` (inference steps), `--seed N` (random seed).\nOutput videos are uploaded to storage.';
     }
 }
 
@@ -134,23 +134,16 @@ async function buildVideoGenerationWaiter(params: {
                     });
                 }
 
-                // Upload to S3 bucket if configured (videos are too large for base64 responses)
+                // Upload to storage; fallback to base64 URL on error
                 let finalUrl: string;
-                if (process.env.S3_API && process.env.S3_PUBLIC_URL && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
-                    try {
-                        const { uploadBlobToStorage } = await import('../shared/bucket.mts');
-                        const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
-                        finalUrl = await uploadBlobToStorage(result, `vid_${timestamp}`);
-                    } catch (blobError) {
-                        console.warn('Failed to upload video to bucket, using base64:', blobError);
-                        // Fallback to base64 conversion
-                        const arrayBuffer = await result.arrayBuffer();
-                        const buffer = Buffer.from(arrayBuffer);
-                        const base64 = buffer.toString('base64');
-                        finalUrl = `data:video/mp4;base64,${base64}`;
-                    }
-                } else {
-                    // Convert to base64 URL when not uploading to storage
+                try {
+                    if (!process.env.URL) throw new Error('No process.env.URL configured');
+                    const { uploadBlobToStorage } = await import('../shared/bucket.mts');
+                    const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
+                    finalUrl = await uploadBlobToStorage(result, `vid_${timestamp}`);
+                } catch (blobError) {
+                    console.warn('Failed to upload video to storage, using base64:', blobError);
+                    // Fallback to base64 conversion
                     const arrayBuffer = await result.arrayBuffer();
                     const buffer = Buffer.from(arrayBuffer);
                     const base64 = buffer.toString('base64');
@@ -190,13 +183,13 @@ async function buildVideoGenerationWaiter(params: {
 
         const hasUploadFlag = prompt.toLowerCase().includes('/upload');
 
-        if (first.startsWith('data:') && hasUploadFlag && process.env.S3_API && process.env.S3_PUBLIC_URL && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
+        if (first.startsWith('data:') && hasUploadFlag && process.env.URL) {
             try {
                 const { uploadBase64ToStorage } = await import('../shared/bucket.mts');
                 const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
                 first = await uploadBase64ToStorage(first, `${timestamp}_first`);
             } catch (blobError) {
-                console.warn('Failed to upload first frame to bucket, using base64:', blobError);
+                console.warn('Failed to upload first frame to blob store, using base64:', blobError);
             }
         }
 
@@ -215,13 +208,13 @@ async function buildVideoGenerationWaiter(params: {
                     lastUrl = first; // Use the same image as first frame
                 }
 
-                if (lastUrl.startsWith('data:') && hasUploadFlag && process.env.S3_API && process.env.S3_PUBLIC_URL && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY) {
+                if (lastUrl.startsWith('data:') && hasUploadFlag && process.env.URL) {
                     try {
                         const { uploadBase64ToStorage } = await import('../shared/bucket.mts');
                         const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
                         lastUrl = await uploadBase64ToStorage(lastUrl, `${timestamp}_last`);
                     } catch (blobError) {
-                        console.warn('Failed to upload last frame to bucket, using base64:', blobError);
+                        console.warn('Failed to upload last frame to blob store, using base64:', blobError);
                     }
                 }
 
@@ -317,15 +310,15 @@ export async function handleVideoForChat(args: { model: string; messages: any[];
     return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
 }
 
-export async function handleVideoForResponses(args: { model: string; input: any; headers: Headers; stream?: boolean; request_id: string; authHeader: string | null; isPasswordAuth: boolean; }): Promise<Response> {
-    const { model, input, headers, stream = false, request_id, authHeader, isPasswordAuth } = args;
+export async function handleVideoForResponses(args: { model: string; messages: any[]; headers: Headers; stream?: boolean; request_id: string; authHeader: string | null; isPasswordAuth: boolean; }): Promise<Response> {
+    const { model, messages, headers, stream = false, request_id, authHeader, isPasswordAuth } = args;
     const now = Date.now();
-    const last = lastUserPromptFromResponsesInput(input);
+    const last = lastUserPromptFromMessages(messages);
     let prompt = last.text || '';
 
     if (prompt.trim() === '/help') {
         const help = helpForVideo(model);
-        const base = responsesBase(now, request_id, model, input, null, true, undefined, undefined, undefined, undefined);
+        const base = responsesBase(now, request_id, model, null, null, true, undefined, undefined, undefined, undefined);
         if (stream) return streamResponsesSingleText(base, help, `msg_${now}`, true);
         const response = { ...base, status: 'completed', output: [{ type: 'message', id: `msg_${now}`, status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: help }] }], usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } };
         return new Response(JSON.stringify(response), { headers: { 'Content-Type': 'application/json' } });
@@ -336,13 +329,13 @@ export async function handleVideoForResponses(args: { model: string; input: any;
         return new Response(JSON.stringify({ error: waiter.error }), { status: waiter.status || 400, headers: { 'Content-Type': 'application/json' } });
     }
     if (stream) {
-        const baseObj = responsesBase(now, request_id, model, input, null, true, undefined, undefined, undefined, undefined);
+        const baseObj = responsesBase(now, request_id, model, null, null, true, undefined, undefined, undefined, undefined);
         return streamResponsesGenerationElapsed({ baseObj, requestId: request_id, waitForResult: waiter.wait, taskId: waiter.taskId, headers });
     }
     // Non-stream: wait for completion
     const res = await waiter.wait(new AbortController().signal);
     if (!res.ok) return new Response(JSON.stringify({ error: res.error }), { status: 500, headers: { 'Content-Type': 'application/json' } });
-    const baseObj = responsesBase(now, request_id, model, input, null, true, undefined, undefined, undefined, undefined);
+    const baseObj = responsesBase(now, request_id, model, null, null, true, undefined, undefined, undefined, undefined);
     // For Responses endpoint, usage format is already correct: { input_tokens, output_tokens, total_tokens }
     const response = { ...baseObj, status: 'completed', output: [{ type: 'message', id: 'msg_' + Date.now(), status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: res.text }] }], usage: res.usage ?? { input_tokens: 0, output_tokens: 0, total_tokens: 0 } };
     return new Response(JSON.stringify(response), { headers: { 'Content-Type': 'application/json' } });

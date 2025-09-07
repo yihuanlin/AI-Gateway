@@ -128,7 +128,7 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
   const store = getStoreWithConfig('responses');
 
   if (/^\/help$/.test(text)) {
-    const help = 'Commands: `refresh` (Copilot token) | `list` (responses) | `list [prefix]` | `ls` (== `list all`) | `delete all` | `delete [id]` | `[id]` to view.';
+    const help = 'Commands: `refresh` (Copilot token) | `list` (responses) | `list [prefix]` | `ls` (== `list all`) | `delete all` | `delete [id]` | `rm -f [fileKey]` (delete file in storage) | `[id]` to view.';
     if (stream) {
       return streamChatSingleText(model, help);
     }
@@ -172,6 +172,31 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
       return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
     } catch (e: any) {
       return new Response(JSON.stringify({ error: { message: e?.message || 'Delete all failed' } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    }
+  }
+
+  // Delete a file item: rm -f <key> or delete file <key>
+  if (/^(?:delete|rm)\s+(?:-f|file)\s+\S+$/i.test(text)) {
+    const parts = text.split(/\s+/);
+    const key = parts[2];
+    try {
+      const filesStore = getStoreWithConfig('files');
+      const existing = await (filesStore as any).getWithMetadata(key, { type: 'blob' });
+      if (!existing) {
+        const msg = `File not found: ${key}`;
+        if (stream) return streamChatSingleText(model, msg);
+        const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: msg } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } } as any;
+        return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
+      }
+      await (filesStore as any).delete(key);
+      const msg = `Deleted file: ${key}.`;
+      if (stream) return streamChatSingleText(model, msg);
+      const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: msg } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } } as any;
+      return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
+    } catch (e: any) {
+      const msg = `Failed to delete file: ${e?.message || 'Unknown error'}`;
+      if (stream) return streamChatSingleText(model, msg);
+      return new Response(JSON.stringify({ error: { message: msg } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
     }
   }
 
@@ -230,6 +255,44 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
     }
   }
 
+  // Upload command: user message with parts containing files
+  if (/^upload$|^\/upload$/i.test(text) && process.env.URL) {
+    const { uploadBase64ToStorage, uploadBlobToStorage } = await import('../shared/bucket.mts');
+    // Find last user message with file parts
+    const lastUser = (() => {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (m?.role === 'user' && Array.isArray(m.content)) return m;
+      }
+      return null;
+    })();
+    if (!lastUser) {
+      const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: 'No file found in your message.' } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } } as any;
+      return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
+    }
+    const uploads: string[] = [];
+    for (const part of lastUser.content) {
+      if (part?.type === 'file') {
+        try {
+          const mediaType = part.mediaType || 'application/octet-stream';
+          if (typeof part.data === 'string') {
+            const url = await uploadBase64ToStorage(part.data);
+            uploads.push(url);
+          } else if (part.data && typeof Blob !== 'undefined') {
+            const data = part.data as ArrayBuffer | Uint8Array;
+            const blob = new Blob([data as any], { type: mediaType });
+            const url = await uploadBlobToStorage(blob);
+            uploads.push(url);
+          }
+        } catch { }
+      }
+    }
+    const message = uploads.length > 0 ? uploads.map(u => `Uploaded: ${u}`).join('\n') : 'No valid file parts to upload.';
+    if (stream) return streamChatSingleText(model, message);
+    const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: message } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } } as any;
+    return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
+  }
+
   // Treat as ID
   const id = text;
   try {
@@ -249,16 +312,16 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
   }
 }
 
-export async function handleAdminForResponses(args: { input: any; headers: Headers; model: string; request_id: string; store?: boolean; stream?: boolean, isPasswordAuth?: boolean }): Promise<Response> {
-  const { input, headers, model, request_id, store = false, stream = false, isPasswordAuth = false } = args;
+export async function handleAdminForResponses(args: { messages: any[]; headers: Headers; model: string; request_id: string; store?: boolean; stream?: boolean, isPasswordAuth?: boolean }): Promise<Response> {
+  const { messages, headers, model, request_id, store = false, stream = false, isPasswordAuth = false } = args;
   if (!isPasswordAuth) {
     return new Response(JSON.stringify({ error: { message: 'Unauthorized' } }), { status: 401, headers: { 'Content-Type': 'application/json' } });
   }
-  let text = lastUserTextFromResponses(input).trim();
+  let text = lastUserTextFromMessages(messages).trim();
   const responseStore = getStoreWithConfig('responses');
 
   const now = Date.now();
-  const baseObj = responsesBase(now, request_id, model, input, null, store, undefined, undefined, undefined, undefined);
+  const baseObj = responsesBase(now, request_id, model, null, null, store, undefined, undefined, undefined, undefined);
 
   const buildCompleted = (messageText: string) => {
     const finalItem = { id: textItemId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: messageText }] };
@@ -269,7 +332,7 @@ export async function handleAdminForResponses(args: { input: any; headers: Heade
   const streamTextOnce = (messageText: string) => streamResponsesSingleText(baseObj, messageText, textItemId, true);
 
   if (/^\/help$/.test(text)) {
-    const msg = 'Commands: `refresh` (Copilot token) | `list` (responses) | `list [prefix]` | `ls` (== `list all`) | `delete all` | `delete [id]` | `[id]` to view.';
+    const msg = 'Commands: `refresh` (Copilot token) | `list` (responses) | `list [prefix]` | `ls` (== `list all`) | `delete all` | `delete [id]` | `rm -f [fileKey]` (delete file in storage) | `[id]` to view.';
     if (!stream) return new Response(JSON.stringify(buildCompleted(msg)), { headers: { 'Content-Type': 'application/json' } });
     return streamTextOnce(msg);
   }
@@ -294,6 +357,28 @@ export async function handleAdminForResponses(args: { input: any; headers: Heade
       return streamTextOnce(msg);
     } catch (e: any) {
       return new Response(JSON.stringify({ error: { message: e?.message || 'Delete all failed' } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    }
+  }
+
+  // Delete a file item: rm -f <key> or delete file <key>
+  if (/^(?:delete|rm)\s+(?:-f|file)\s+\S+$/i.test(text)) {
+    const parts = text.split(/\s+/);
+    const key = parts[2];
+    try {
+      const filesStore = getStoreWithConfig('files');
+      const existing = await (filesStore as any).getWithMetadata(key, { type: 'blob' });
+      if (!existing) {
+        const msg = `File not found: ${key}`;
+        if (!stream) return new Response(JSON.stringify(buildCompleted(msg)), { headers: { 'Content-Type': 'application/json' } });
+        return streamTextOnce(msg);
+      }
+      await (filesStore as any).delete(key);
+      const msg = `Deleted file: ${key}.`;
+      if (!stream) return new Response(JSON.stringify(buildCompleted(msg)), { headers: { 'Content-Type': 'application/json' } });
+      return streamTextOnce(msg);
+    } catch (e: any) {
+      const msg = `Failed to delete file: ${e?.message || 'Unknown error'}`;
+      return new Response(JSON.stringify({ error: { message: msg } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
     }
   }
 
@@ -341,6 +426,43 @@ export async function handleAdminForResponses(args: { input: any; headers: Heade
     } catch (e: any) {
       return new Response(JSON.stringify({ error: { message: e?.message || 'List failed' } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
     }
+  }
+
+  // Upload command
+  if (/^upload$|^\/upload$/i.test(text) && process.env.URL) {
+    const { uploadBase64ToStorage, uploadBlobToStorage } = await import('../shared/bucket.mts');
+    // Find last user message with file parts
+    const lastUser = (() => {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (m?.role === 'user' && Array.isArray(m.content)) return m;
+      }
+      return null;
+    })();
+    const textItemId = `msg_${now}`;
+    if (!lastUser) {
+      return stream ? streamResponsesSingleText(baseObj, 'No file found in your message.', textItemId, true) : new Response(JSON.stringify(buildCompleted('No file found in your message.')), { headers: { 'Content-Type': 'application/json' } });
+    }
+    const uploads: string[] = [];
+    for (const part of lastUser.content) {
+      if (part?.type === 'file') {
+        try {
+          const mediaType = part.mediaType || 'application/octet-stream';
+          if (typeof part.data === 'string') {
+            const url = await uploadBase64ToStorage(part.data);
+            uploads.push(url);
+          } else if (part.data && typeof Blob !== 'undefined') {
+            const data = part.data as ArrayBuffer | Uint8Array;
+            const blob = new Blob([data as any], { type: mediaType });
+            const url = await uploadBlobToStorage(blob);
+            uploads.push(url);
+          }
+        } catch { }
+      }
+    }
+    const messageText = uploads.length > 0 ? uploads.map(u => `Uploaded: ${u}`).join('\n') : 'No valid file parts to upload.';
+    if (!stream) return new Response(JSON.stringify(buildCompleted(messageText)), { headers: { 'Content-Type': 'application/json' } });
+    return streamResponsesSingleText(baseObj, messageText, textItemId, true);
   }
 
   // Treat as ID

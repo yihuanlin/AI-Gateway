@@ -5,7 +5,7 @@ A high-performance AI Gateway built with [Hono](https://github.com/honojs/hono) 
 ## ✨ Features
 
 - **Unified Text API**: Images and videos models accessible through standard chat/responses endpoints  
-- **Admin Models**: Special administrative models for system management (admin/magic)
+- **Admin Models**: Special administrative models for system management (admin/magic-vision)
 - **Multi-Provider Support**: OpenAI, Google, Groq, Cerebras, Doubao, ModelScope, and more
 - **Streaming Support**: Real-time responses with progress indicators
 - **Tool Integration**: Python execution, web search, content extraction
@@ -43,8 +43,8 @@ GET /v1/responses/:response_id     # Get a specific response
 GET /v1/responses                  # List all responses
 DELETE /v1/responses/:response_id  # Delete a specific response
 DELETE /v1/responses/all           # Delete all responses
-POST /v1/chat/completions (model: admin/magic)
-POST /v1/responses (model: admin/magic)
+POST /v1/chat/completions (model: admin/magic-vision)
+POST /v1/responses (model: admin/magic-vision)
 ```
 
 ### Models List
@@ -82,15 +82,10 @@ TAVILY_API_KEY=tvly-dev-...
 PYTHON_API_KEY=your-python-key
 PYTHON_URL=https://your-python-executor.com
 
-# Optional S3 bucket to upload images for Doubao i2i and i2v inputs (triggered by /upload in prompt) and Hugging Face i2i and i2v outputs (always enabled if set)
-S3_ACCESS_KEY=your-s3-access-key
-S3_SECRET_KEY=your-s3-secret-key
-S3_PUBLIC_URL=https://your-s3-public-url.com
-S3_API=https://your-s3-provider-api.com/your-bucket-name
-
 # Use Netlify Blobs in non-Netlify platforms (Responses endpoint datastore)
 NETLIFY_SITE_ID=your-netlify-site-id
 NETLIFY_TOKEN=nfp_...
+URL=http://http://localhost:8888 # Optional site URL to upload files
 
 # Provider-specific keys
 CHATGPT_API_KEY=sk-proj-...,sk-proj-...,sk-proj-...
@@ -131,7 +126,7 @@ HUGGINGFACE_API_KEY=hf_...
 - **Flags**: `--ratio 16:9`, `--duration 3-12`, `--resolution 720p` etc. (Send `/help` for help)
 
 ### Admin Models
-- **System Management**: `admin/magic` (Send `/help` for help)
+- **System Management**: `admin/magic-vision` (Send `/help` for help)
 
 ## 💡 API Usage Examples
 
@@ -252,7 +247,7 @@ curl -X POST "$HOSTNAME/v1/responses" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $PASSWORD" \
   -d '{
-    "model": "admin/magic",
+    "model": "admin/magic-vision",
     "input": "deleteall" # Delete all stored responses
   }'
 ```
