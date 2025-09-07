@@ -21,11 +21,8 @@ export function hasImageInMessages(content: any): { has: boolean; first?: string
   const urls: string[] = [];
   for (const part of content) {
     if (!part) continue;
-    if (part.type === 'input_image') {
-      const u = (typeof part.image_url === 'string') ? part.image_url : (part.image_url?.url || part.url);
-      if (u) urls.push(u);
-    } else if (part.type === 'image') {
-      const u = (typeof part.image === 'string') ? part.image : (part.image);
+    if (part.type?.includes('image') || part.type?.includes('file')) {
+      const u = (typeof part.image === 'string') ? part.image : part.data;
       if (u) urls.push(u);
     }
   }

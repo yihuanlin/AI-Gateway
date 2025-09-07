@@ -274,7 +274,7 @@ function addContextMessages(messages: any[], c: Context): any[] {
 	return messages;
 }
 
-async function processMessages(contextMessages: any[], options?: { extractMarkdownImages?: boolean }): Promise<any[]> {
+async function processChatMessages(contextMessages: any[]): Promise<any[]> {
 	const processedMessages: any[] = [];
 
 	const extractFromText = async (text: string): Promise<{ cleaned: string; files: any[] }> => {
@@ -286,7 +286,7 @@ async function processMessages(contextMessages: any[], options?: { extractMarkdo
 			const urlStr = String(match[1] || '').trim();
 			if (!urlStr) continue;
 			let mediaType: string = 'image/png';
-			let data: Uint8Array | null = null;
+			let image: Uint8Array | null = null;
 			if (urlStr.startsWith('data:')) {
 				const dm = urlStr.match(/^data:([^;]+);base64,(.+)$/);
 				if (dm && dm[1] && dm[2]) {
@@ -295,7 +295,7 @@ async function processMessages(contextMessages: any[], options?: { extractMarkdo
 					const bin = atob(b64);
 					const bytes = new Uint8Array(bin.length);
 					for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-					data = bytes;
+					image = bytes;
 				}
 			} else if (urlStr.startsWith('http://') || urlStr.startsWith('https://')) {
 				try {
@@ -303,11 +303,11 @@ async function processMessages(contextMessages: any[], options?: { extractMarkdo
 					const ct = resp.headers.get('content-type');
 					if (ct) mediaType = ct.split(';')[0] as string;
 					const ab = await resp.arrayBuffer();
-					data = new Uint8Array(ab);
+					image = new Uint8Array(ab);
 				} catch { }
 			}
-			if (data) {
-				files.push({ type: 'file', data, mediaType });
+			if (image) {
+				files.push({ type: 'image', image, mediaType });
 				cleaned = cleaned.replace(match[0], '').trim();
 			}
 		}
@@ -372,33 +372,6 @@ async function processMessages(contextMessages: any[], options?: { extractMarkdo
 		const message = contextMessages[mi];
 		if (!message) continue;
 		if (message.role === 'tool') continue;
-		if (message.type === 'function_call') continue;
-		if (message.type === 'function_call_output') {
-			let resultText = message.output;
-			if (typeof resultText === 'string') {
-				try {
-					const parsed = JSON.parse(resultText);
-					if (Array.isArray(parsed) && parsed[0] && parsed[0].text) {
-						resultText = parsed[0].text;
-					}
-				} catch { }
-			}
-			const id = message.call_id;
-			let toolName = 'unknown_tool';
-			let args = 'NA';
-			for (const msg of contextMessages) {
-				if (msg.type === 'function_call' && msg.call_id === id) {
-					toolName = msg.name || 'unknown_tool';
-					args = msg.arguments || 'NA';
-					break;
-				}
-			}
-			processedMessages.push({
-				role: 'assistant',
-				content: `<tool_use_result>\n  <name>${toolName}</name>\n  <<arguments>>${args}</<arguments>>\n  <result>${resultText}</result>\n</tool_use_result>`
-			});
-			continue;
-		}
 
 		let nextMessage = message;
 
@@ -406,40 +379,39 @@ async function processMessages(contextMessages: any[], options?: { extractMarkdo
 			if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
 				nextMessage.content = await appendToolCallsToContent(message.content, message.tool_calls);
 			}
-			if (options?.extractMarkdownImages) {
-				if (typeof nextMessage.content === 'string') {
-					const { cleaned, files } = await extractFromText(nextMessage.content);
-					if (files.length > 0) {
-						const parts: any[] = [];
-						if (cleaned) parts.push({ type: 'text', text: cleaned });
-						parts.push(...files);
-						nextMessage.content = parts;
-					}
-				} else if (Array.isArray(nextMessage.content)) {
-					const updatedParts: any[] = [];
-					const appendedFiles: any[] = [];
-					for (const part of nextMessage.content) {
-						if (part && part.type === 'text' && typeof part.text === 'string') {
-							const { cleaned, files } = await extractFromText(part.text);
-							updatedParts.push({ ...part, text: cleaned });
-							if (files.length > 0) appendedFiles.push(...files);
-						} else {
-							updatedParts.push(part);
-						}
-					}
-					if (appendedFiles.length > 0) {
-						nextMessage.content = [...updatedParts, ...appendedFiles];
+			// Extract images from text markdown
+			if (typeof nextMessage.content === 'string') {
+				const { cleaned, files } = await extractFromText(nextMessage.content);
+				if (files.length > 0) {
+					const parts: any[] = [];
+					if (cleaned) parts.push({ type: 'text', text: cleaned });
+					parts.push(...files);
+					nextMessage.content = parts;
+				}
+			} else if (Array.isArray(nextMessage.content)) {
+				const updatedParts: any[] = [];
+				const appendedFiles: any[] = [];
+				for (const part of nextMessage.content) {
+					if (part && part.type === 'text' && typeof part.text === 'string') {
+						const { cleaned, files } = await extractFromText(part.text);
+						updatedParts.push({ ...part, text: cleaned });
+						if (files.length > 0) appendedFiles.push(...files);
 					} else {
-						nextMessage.content = updatedParts;
+						updatedParts.push(part);
 					}
-				} else if (typeof nextMessage.content === 'object' && nextMessage.content && typeof nextMessage.content.text === 'string') {
-					const { cleaned, files } = await extractFromText(nextMessage.content.text);
-					if (files.length > 0) {
-						const parts: any[] = [];
-						if (cleaned) parts.push({ type: 'text', text: cleaned });
-						parts.push(...files);
-						nextMessage.content = parts;
-					}
+				}
+				if (appendedFiles.length > 0) {
+					nextMessage.content = [...updatedParts, ...appendedFiles];
+				} else {
+					nextMessage.content = updatedParts;
+				}
+			} else if (typeof nextMessage.content === 'object' && nextMessage.content && typeof nextMessage.content.text === 'string') {
+				const { cleaned, files } = await extractFromText(nextMessage.content.text);
+				if (files.length > 0) {
+					const parts: any[] = [];
+					if (cleaned) parts.push({ type: 'text', text: cleaned });
+					parts.push(...files);
+					nextMessage.content = parts;
 				}
 			}
 		} else if (message.role === 'user' && Array.isArray(message.content)) {
@@ -701,12 +673,34 @@ function responsesInputToAiSdkMessages(input: any): any[] {
 		const messages: any[] = [];
 		for (const item of input) {
 			// Handle function_call_output messages (responses format)
-			if (item?.type?.includes('function')) {
-				messages.push(item); // Handled by processMessages()
+			const role = item?.role;
+			if (item.type === 'function_call') continue;
+			if (item.type === 'function_call_output') {
+				let resultText = item.output;
+				if (typeof resultText === 'string') {
+					try {
+						const parsed = JSON.parse(resultText);
+						if (Array.isArray(parsed) && parsed[0] && parsed[0].text) {
+							resultText = parsed[0].text;
+						}
+					} catch { }
+				}
+				const id = item.call_id;
+				let toolName = 'unknown_tool';
+				let args = 'NA';
+				for (const msg of input) {
+					if (msg.type === 'function_call' && msg.call_id === id) {
+						toolName = msg.name || 'unknown_tool';
+						args = msg.arguments || 'NA';
+						break;
+					}
+				}
+				messages.push({
+					role: 'assistant',
+					content: `<tool_use_result>\n  <name>${toolName}</name>\n  <arguments>${args}</arguments>\n  <result>${resultText}</result>\n</tool_use_result>`
+				});
 				continue;
 			}
-
-			const role = item?.role;
 			if (typeof item?.content === 'string') {
 				if (role === 'assistant' || role === 'user') {
 					messages.push({ role, content: { type: 'text', text: item.content } });
@@ -744,18 +738,18 @@ function responsesInputToAiSdkMessages(input: any): any[] {
 				if (part.type.includes('text') && typeof part.text === 'string') {
 					parts.push({ type: 'text', text: part.text });
 				} else if (part.type.includes('image')) {
-					const data = part?.image_url?.url || part?.url || part?.image || part?.data || (typeof part?.image_url === 'string' ? part.image_url : undefined);
-					if (data) {
+					const image = part?.image_url?.url || part?.url || part?.image || part?.data || (typeof part?.image_url === 'string' ? part.image_url : undefined);
+					if (image) {
 						let mediaType = part?.media_type || part?.mediaType;
 						if (!mediaType) {
-							if (typeof data === 'string' && data.startsWith('data:')) {
-								const m = data.match(/^data:([^;]+);/);
+							if (typeof image === 'string' && image.startsWith('data:')) {
+								const m = image.match(/^data:([^;]+);/);
 								if (m) mediaType = m[1];
 							} else {
 								mediaType = 'image/png';
 							}
 						}
-						parts.push({ type: 'file', data, mediaType });
+						parts.push({ type: 'image', image, mediaType });
 					}
 				} else if (part.type.includes('file')) {
 					const data = part?.data || part?.file_data || part?.url;
@@ -1626,18 +1620,17 @@ app.post('/v1/responses', async (c: Context) => {
 	if (typeof model === 'string' && (model.startsWith('image/') || model.startsWith('video/') || model.startsWith('admin/'))) {
 		// Build AI SDK-style messages from Responses input (streamlined for modules)
 		const mapped = responsesInputToAiSdkMessages(input);
-		const messagesForModules = await processMessages(mapped);
 		if (model.startsWith('image/')) {
 			const { handleImageForResponses } = await import('./modules/images.mts');
-			return await handleImageForResponses({ model, messages: messagesForModules, headers: c.req.raw.headers as any, stream: !!stream, temperature, top_p, request_id: responseId, authHeader: authHeader || null, isPasswordAuth });
+			return await handleImageForResponses({ model, messages: mapped, headers: c.req.raw.headers as any, stream: !!stream, temperature, top_p, request_id: responseId, authHeader: authHeader || null, isPasswordAuth });
 		}
 		if (model.startsWith('video/')) {
 			const { handleVideoForResponses } = await import('./modules/videos.mts');
-			return await handleVideoForResponses({ model, messages: messagesForModules, headers: c.req.raw.headers as any, stream: !!stream, request_id: responseId, authHeader: authHeader || null, isPasswordAuth });
+			return await handleVideoForResponses({ model, messages: mapped, headers: c.req.raw.headers as any, stream: !!stream, request_id: responseId, authHeader: authHeader || null, isPasswordAuth });
 		}
 		if (model.startsWith('admin/')) {
 			const { handleAdminForResponses } = await import('./modules/management.mts');
-			return await handleAdminForResponses({ messages: messagesForModules, headers: c.req.raw.headers as any, model, request_id: responseId, stream: !!stream, isPasswordAuth });
+			return await handleAdminForResponses({ messages: mapped, headers: c.req.raw.headers as any, model, request_id: responseId, stream: !!stream, isPasswordAuth });
 		}
 	}
 	// Headers and aux keys
@@ -1651,12 +1644,11 @@ app.post('/v1/responses', async (c: Context) => {
 		headers[key.toLowerCase().replace(/-/g, '_')] = value;
 	});
 	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
-	const toAiSdkMessages = async (): Promise<any[]> => {
+	const getResponsesMessages = async (): Promise<any[]> => {
 		// Seed from previous stored conversation if provided
 		let history: any[] = [];
 
-		const mapped = responsesInputToAiSdkMessages(input);
-		const messages = await processMessages(mapped);
+		const messages = responsesInputToAiSdkMessages(input);
 
 		if (previous_response_id) {
 			try {
@@ -1676,7 +1668,7 @@ app.post('/v1/responses', async (c: Context) => {
 		return [...history, ...messages];
 	};
 
-	const messages = await toAiSdkMessages();
+	const messages = await getResponsesMessages();
 	let modelId: string = model;
 	let thinking: Record<string, any> | undefined = undefined;
 	let extraBody: Record<string, any> = extra_body;
@@ -1685,7 +1677,7 @@ app.post('/v1/responses', async (c: Context) => {
 		if (Array.isArray(messages) && messages.length > 0) {
 			const lastMsg = messages[messages.length - 1];
 			const parts = Array.isArray(lastMsg?.content) ? lastMsg.content : [];
-			const hasImage = parts.some((p: any) => p?.type === 'image');
+			const hasImage = parts.some((p: any) => p?.type === 'image' || p?.type === 'file');
 			if (hasImage) {
 				modelId = 'doubao/doubao-seed-1-6-vision-250815';
 			}
@@ -2645,6 +2637,7 @@ app.post('/v1/responses', async (c: Context) => {
 											message: `**Unexpected finish**: ${reason}`,
 											param: null
 										});
+										console.warn(`Warning: finish reason was ${reason}`);
 									}
 									// Finalize text item if exists
 									if (textItemId) {
@@ -2730,7 +2723,8 @@ app.post('/v1/responses', async (c: Context) => {
 								case 'error': {
 									const errInfo = (part as any)?.error || {};
 									const code = errInfo?.statusCode || 'ERR';
-									const message = JSON.parse(errInfo.responseBody || '{}').error?.metadata?.raw || errInfo.message || errInfo;
+									const responseBody = JSON.parse(errInfo.responseBody || '{}');
+									const message = responseBody.errors?.[0]?.message || responseBody.error?.metadata?.raw || errInfo.message || errInfo;
 									if ([429, 401, 402].includes(code)) {
 										const e = new Error(message);
 										(e as any).statusCode = code;
@@ -2745,6 +2739,7 @@ app.post('/v1/responses', async (c: Context) => {
 										message,
 										param: null
 									});
+									console.error(`Error with provider ${attempt.name}: ${message}`);
 									break;
 								}
 							}
@@ -3049,7 +3044,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 		store = true
 	} = body;
 	const contextMessages = (typeof model === 'string' && model.toLowerCase().includes('image')) ? messages : addContextMessages(messages, c);
-	const processedMessages = await processMessages(contextMessages, { extractMarkdownImages: true });
+	const processedMessages = await processChatMessages(contextMessages);
 
 	if (typeof model === 'string' && model.startsWith('image/')) {
 		const { handleImageForChat } = await import('./modules/images.mts');
@@ -3077,7 +3072,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 		if (Array.isArray(processedMessages) && processedMessages.length > 0) {
 			const lastMsg = processedMessages[processedMessages.length - 1];
 			const parts = Array.isArray(lastMsg?.content) ? lastMsg.content : [];
-			const hasImage = parts.some((p: any) => p?.type === 'image');
+			const hasImage = parts.some((p: any) => p?.type === 'image' || p?.type === 'file');
 			if (hasImage) {
 				modelId = 'doubao/doubao-seed-1-6-vision-250815';
 			}
@@ -3175,7 +3170,8 @@ app.post('/v1/chat/completions', async (c: Context) => {
 								case 'error':
 									const errInfo = (part as any)?.error || {};
 									const code = errInfo?.statusCode || 'ERR';
-									const message = JSON.parse(errInfo.responseBody || '{}').error?.metadata?.raw || errInfo.message || errInfo;
+									const responseBody = JSON.parse(errInfo.responseBody || '{}');
+									const message = responseBody.errors?.[0]?.message || responseBody.error?.metadata?.raw || errInfo.message || errInfo;
 									if ([429, 401, 402].includes(code)) {
 										const e = new Error(message);
 										(e as any).statusCode = code;
@@ -3185,6 +3181,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 									i = maxAttempts;
 									chunk = { ...baseChunk, choices: [{ index: 0, delta: { refusal: message, content: '**Error**: ' + message }, finish_reason: 'stop' }] };
 									controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+									console.error(`Error with provider ${attempt.name}: ${message}`);
 									break;
 								case 'reasoning-delta':
 									chunk = { ...baseChunk, choices: [{ index: 0, delta: { reasoning_content: part.text }, finish_reason: null }] };
@@ -3365,6 +3362,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 									if (reason !== 'stop' && reason !== 'tool_calls') {
 										chunk = { ...baseChunk, choices: [{ index: 0, delta: { refusal: reason, content: `**Unexpected Finish**: ${reason}` }, finish_reason: reason }] };
 										controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+										console.warn(`Unexpected finish reason: ${reason}`);
 									}
 									if (accumulatedSources.length > 0) {
 										const accumulatedCitations = accumulatedSources.map(source => ({
@@ -3626,6 +3624,10 @@ const CUSTOM_MODEL_LISTS = {
 		{ id: 'command-a-vision-07-2025', name: 'Cohere A Vision' },
 		{ id: 'command-a-reasoning-08-2025', name: 'Command A Reasoning' },
 		{ id: 'command-a-translate-08-2025', name: 'Command A Translation' },
+	],
+	cloudflare: [
+		// { id: '@cf/openai/gpt-oss-120b', name: 'GPT-OSS-120B' },
+		{ id: '@cf/meta/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout' },
 	],
 };
 
