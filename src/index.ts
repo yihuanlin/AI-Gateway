@@ -6,14 +6,13 @@ import { createGateway } from '@ai-sdk/gateway'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { openai, createOpenAI } from '@ai-sdk/openai'
 import { google, createGoogleGenerativeAI } from '@ai-sdk/google'
-import { groq, createGroq } from '@ai-sdk/groq';
 import { SUPPORTED_PROVIDERS, getProviderKeys } from './shared/providers.mts'
 import { getStoreWithConfig } from './shared/store.mts'
 import { string, number, boolean, array, object, optional, int, enum as zenum } from 'zod/mini'
 
 const app = new Hono()
 const TEXT_ENCODER = new TextEncoder();
-const SEARCH_TOOLS = new Set(['web_search', 'fetch', 'google_search', 'web_search_preview', 'url_context', 'browser_search', 'scholar_search', 'paper_recommendations', 'ensembl_api']);
+const SEARCH_TOOLS = new Set(['web_search', 'fetch', 'google_search', 'web_search_preview', 'url_context', 'scholar_search', 'paper_recommendations', 'ensembl_api']);
 const CODE_TOOLS = new Set(['code_execution', 'python_executor']);
 const EXCLUDED_TOOLS = new Set([...SEARCH_TOOLS, ...CODE_TOOLS]);
 const RESEARCH_KEYWORDS = ['research', 'paper'];
@@ -489,11 +488,6 @@ async function createCustomProvider(providerName: string, apiKey: string) {
 				apiKey: apiKey,
 				baseURL: config.baseURL,
 			});
-		case 'groq':
-			return createGroq({
-				apiKey: apiKey,
-				baseURL: config.baseURL,
-			});
 		case 'copilot':
 			const copilotToken = await fetchCopilotToken(apiKey);
 			return createOpenAICompatible({
@@ -545,7 +539,7 @@ function buildDefaultProviderOptions(args: {
 			xai: {
 				...(search && {
 					searchParameters: {
-						mode: 'auto',
+						mode: 'on',
 						returnCitations: true,
 						maxSearchResults: isResearchMode ? 30 : 15,
 						sources: [
@@ -863,8 +857,6 @@ function buildAiSdkTools(model: string, userTools: any[] | undefined): Record<st
 				} : {})
 			});
 			aiSdkTools.code_interpreter = openai.tools.codeInterpreter({});
-		} else if (model.startsWith('groq/openai')) {
-			aiSdkTools.browser_search = groq.tools.browserSearch({});
 		} else if (googleIncompatible && !model.startsWith('xai')) {
 			if (tavilyApiKey) aiSdkTools.web_search = tavilySearchTool;
 		}
@@ -3645,12 +3637,12 @@ function shouldIncludeModel(model: any, providerName?: string) {
 	const modelId = String(model.id || '').toLowerCase();
 	const commonExclusions = [
 		'gemma', 'rerank', 'distill', 'parse', 'embed', 'bge-', 'tts', 'phi', 'live', 'audio', 'lite',
-		'qwen2', 'qwen-2', 'qwen1', 'qwq', 'qvq', 'gemini-1', 'learnlm', 'gemini-exp', 'gpt-4', 'gpt-3',
+		'qwen2', 'qwen-2', 'qwen1', 'qwq', 'qvq', 'gemini-1', 'gemini-2.0', 'learnlm', 'gemini-exp', 'gpt-4', 'gpt-3',
 		'turbo', 'claude-3', 'voxtral', 'pixtral', 'mixtral', 'ministral', '-24', 'moderation', 'saba', '-ocr-',
 		'transcribe', 'dall', 'davinci', 'babbage', 'hailuo', 'kling', 'wan', 'ideogram', 'background'
 	];
 	if (commonExclusions.some((e) => modelId.includes(e))) return false;
-	if (!modelId.includes('super') && ((['nemotron', 'llama'].some((e) => modelId.includes(e))) || modelId.includes('nvidia'))) return false;
+	if (!(['super', 'oss', 'kimi', 'deepseek', 'qwen3', 'phi', 'maverick'].some((e) => modelId.includes(e))) && ((['nemotron', 'llama'].some((e) => modelId.includes(e))) || modelId.includes('nvidia'))) return false;
 	if (providerName === 'openrouter' && !modelId.includes(':free')) return false;
 	if (providerName !== 'mistral' && modelId.includes('mistral')) return false;
 	if (providerName === 'chatgpt' && modelId.split('-').length > 4) return false;

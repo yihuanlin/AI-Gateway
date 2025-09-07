@@ -32,12 +32,18 @@ bun build
 POST /v1/chat/completions
 ```
 
-### Responses (Stored in Netlify Blobs)
+### Responses
 ```
 POST /v1/responses
 ```
 
-### Response Management
+### Models List
+```
+GET /v1/models
+POST /v1/models
+```
+
+### Response Management (Stored in Netlify Blobs)
 ```
 GET /v1/responses/:response_id     # Get a specific response
 GET /v1/responses                  # List all responses
@@ -47,10 +53,9 @@ POST /v1/chat/completions (model: admin/magic-vision)
 POST /v1/responses (model: admin/magic-vision)
 ```
 
-### Models List
+### Files (Stored in Netlify Blobs)
 ```
-GET /v1/models
-POST /v1/models
+GET /v1/files/:file                # Serve a file from Netlify Blobs
 ```
 
 ## 🔌 Supported Providers
@@ -65,10 +70,13 @@ POST /v1/models
 - **Hugging Face**: Community models for i2i, t2v, and i2v
 
 ### Tools & Extensions
-- **Python Execution**: Code interpreter
-- **Web Search**: Tavily API integration  
-- **Content Extraction**: Web page reading
-- **Research APIs**: Ensembl, Scholar APIs
+**If required environment variables are set, the following tools are enabled by adding tools in request body, even an empty array (in [Cherry Studio](https://www.cherry-ai.com), this is triggered by enabling model build-in search):**
+- **Code Execution**: [Python Executor API](https://github.com/yihuanlin/python-executor-api) `python_executor` or model build-in (Gateway and Custom `code_execution`)
+- **Web Search**: [Tavily Search API](https://docs.tavily.com/documentation/api-reference/endpoint/search) `web_search` or model build-in (Gateway and Custom Gemini `google_search`, Gateway OpenAI `web_search_preview`, Gateway Grok `mode = 'on'`, Gateway Perplexity `always on regardless of tools`)
+- **Content Extraction**: [Jina Reader API](https://jina.ai/reader/) `fetch` or model build-in (Gateway and Custom `url_context`)
+
+**Research mode is triggered by detecting keywards `research` and `paper` in conversation. Default search depth and reasoning effort will increase, all tools above and research APIs will be enabled:**
+- **Research APIs**: [Ensembl API](https://rest.ensembl.org) `ensembl_api`, [Semantic Scholar APIs](https://www.semanticscholar.org/product/api) `scholar_search` and `paper_recommendations`
 
 ## 🔧 Environment Variables
 
@@ -77,17 +85,17 @@ POST /v1/models
 PASSWORD=your-gateway-password
 GATEWAY_API_KEY=your-vercel-ai-gateway-key
 
-# Optional AI Services
+# Optional tools
 TAVILY_API_KEY=tvly-dev-...
 PYTHON_API_KEY=your-python-key
 PYTHON_URL=https://your-python-executor.com
 
-# Use Netlify Blobs in non-Netlify platforms (Responses endpoint datastore)
+# Use Netlify Blobs in non-Netlify platforms
 NETLIFY_SITE_ID=your-netlify-site-id
 NETLIFY_TOKEN=nfp_...
-URL=http://http://localhost:8888 # Optional site URL to upload files
+URL=http://localhost:8888 # Optional site URL to upload files
 
-# Provider-specific keys
+# Optional provider-specific keys
 CHATGPT_API_KEY=sk-proj-...,sk-proj-...,sk-proj-...
 GROQ_API_KEY=gsk_...
 CEREBRAS_API_KEY=csk-...
@@ -112,7 +120,7 @@ HUGGINGFACE_API_KEY=hf_...
 
 ### Text Models
 - **LLM Providers**: `provider`/`model` for custom providers, `model` for Vercel AI Gateway, e.g.:
-- *For Gemini native image generation:* `openrouter/google/gemini-2.5-flash-image-preview` (OpenRouter), `google/gemini-2.5-flash-image-preview` (Vercel AI Gateway), `gemini/gemini-2.5-flash-image-preview` (Google Generative AI)
+- For **Gemini native image generation**: `openrouter/google/gemini-2.5-flash-image-preview` (OpenRouter), `google/gemini-2.5-flash-image-preview` (Vercel AI Gateway), `gemini/gemini-2.5-flash-image-preview` (Google Generative AI)
 
 ### Image Models  
 - **Doubao (ByteDance)**: `image/doubao` - i2i and t2i.
