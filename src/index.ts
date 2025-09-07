@@ -3654,7 +3654,8 @@ function shouldIncludeModel(model: any, providerName?: string) {
 	if (providerName === 'openrouter' && !modelId.includes(':free')) return false;
 	if (providerName !== 'mistral' && modelId.includes('mistral')) return false;
 	if (providerName === 'chatgpt' && modelId.split('-').length > 4) return false;
-	if (!providerName && ['mistral', 'alibaba', 'cohere', 'deepseek', 'moonshotai', 'morph', 'zai'].some((e) => modelId.includes(e))) return false;
+	if (providerName === 'modelscope' && modelId.includes('image')) return false;
+	if (!providerName && ['mistral', 'cohere'].some((e) => modelId.includes(e))) return false;
 	return true;
 }
 
@@ -3844,6 +3845,7 @@ async function handleModelsRequest(c: any) {
 
 	try {
 		const modelsResponse = await getModelsResponse(apiKey, providerKeys, isPasswordAuth);
+		c.header('Cache-Control', 'private, max-age=7200');
 		return c.json(modelsResponse);
 	} catch (error: any) {
 		return c.json({ error: error?.message || 'All provider(s) failed to return models' }, 500);
@@ -3899,7 +3901,7 @@ app.get('/v1/files/:key', async (c: Context) => {
 		if (!res || !res.data) return c.text('Not found', 404);
 		const blob: Blob = res.data as Blob;
 		const headers: Record<string, string> = {
-			'Content-Type': res.metadata?.contentType || blob.type || 'image/png',
+			'Content-Type': blob.type || res.metadata?.contentType || 'image/png',
 			'Cache-Control': 'public, max-age=31536000, immutable'
 		};
 		return new Response(blob, { headers });

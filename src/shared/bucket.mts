@@ -13,20 +13,18 @@ function nowKey(ext: string, timestamp?: string): string {
 }
 
 export function buildPublicUrlForKey(key: string): string {
-    const base = (process.env.URL || '').replace(/^http:\/\//, 'https://');
-    const prefix = base || '';
-    return `${prefix}/v1/files/${encodeURIComponent(key)}`;
+    return `${process.env.URL}/v1/files/${encodeURIComponent(key)}`;
 }
 
 export async function uploadBase64ToStorage(base64Data: string, timestamp?: string): Promise<string> {
     // Parse base64 data and determine content type
-    let contentType = 'application/octet-stream';
+    let contentType = 'application/pdf';
     let bytes: Uint8Array | null = null;
 
     if (base64Data.startsWith('data:')) {
         const matches = base64Data.match(/^data:([^;]+);base64,(.+)$/);
         if (matches && matches[2]) {
-            contentType = matches[1] || 'application/octet-stream';
+            contentType = matches[1] || 'application/pdf';
             const binaryString = atob(matches[2]);
             bytes = new Uint8Array(binaryString.length);
             for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
@@ -38,7 +36,7 @@ export async function uploadBase64ToStorage(base64Data: string, timestamp?: stri
         const binaryString = atob(base64Data);
         bytes = new Uint8Array(binaryString.length);
         for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-        contentType = 'application/octet-stream';
+        contentType = 'application/pdf';
     }
 
     const ext = extFromContentType(contentType);
@@ -50,7 +48,7 @@ export async function uploadBase64ToStorage(base64Data: string, timestamp?: stri
 }
 
 export async function uploadBlobToStorage(blob: Blob, timestamp?: string): Promise<string> {
-    const contentType = blob.type || 'application/octet-stream';
+    const contentType = blob.type || 'application/pdf';
     const ext = extFromContentType(contentType);
     const key = nowKey(ext, timestamp);
     const store = await getStoreWithConfig('files');

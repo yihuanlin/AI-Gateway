@@ -111,7 +111,7 @@ async function handleAdminRequest(args: {
       for (const part of lastUser.content) {
         if (part?.type === 'file') {
           try {
-            const mediaType = part.mediaType || 'application/octet-stream';
+            const mediaType = part.mediaType || 'application/pdf';
             if (typeof part.data === 'string') {
               const url = await uploadBase64ToStorage(part.data);
               uploads.push(url);
