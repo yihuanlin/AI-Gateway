@@ -43,6 +43,8 @@ GET /v1/responses/:response_id     # Get a specific response
 GET /v1/responses                  # List all responses
 DELETE /v1/responses/:response_id  # Delete a specific response
 DELETE /v1/responses/all           # Delete all responses
+POST /v1/chat/completions (model: admin/magic)
+POST /v1/responses (model: admin/magic)
 ```
 
 ### Models List

@@ -13,11 +13,13 @@ import { string, number, boolean, array, object, optional, int, enum as zenum } 
 
 const app = new Hono()
 const TEXT_ENCODER = new TextEncoder();
-const EXCLUDED_TOOLS = new Set(['code_execution', 'python_executor', 'web_search', 'fetch', 'google_search', 'web_search_preview', 'url_context', 'browser_search', 'scholar_search', 'paper_recommendations', 'ensembl_api']);
+const SEARCH_TOOLS = new Set(['web_search', 'fetch', 'google_search', 'web_search_preview', 'url_context', 'browser_search', 'scholar_search', 'paper_recommendations', 'ensembl_api']);
+const CODE_TOOLS = new Set(['code_execution', 'python_executor']);
+const EXCLUDED_TOOLS = new Set([...SEARCH_TOOLS, ...CODE_TOOLS]);
 const RESEARCH_KEYWORDS = ['research', 'paper'];
 const MAX_ATTEMPTS = 3;
 
-let accumulatedSources: Array<{ title: string, url: string, type: string }> = [];
+let accumulatedSources: Array<{ title: string, url: string, type: string, start_index: number, end_index: number }> = [];
 let tavilyApiKey: string | null = null;
 let pythonApiKey: string | null = null;
 let pythonUrl: string | null = null;
@@ -321,10 +323,7 @@ async function processMessages(contextMessages: any[], options?: { extractMarkdo
 			const args = toolCall?.function?.arguments;
 			let block = `\n<tool_use_result>\n  <name>${toolName}</name>\n  <arguments>${args}</arguments>`;
 			// Find matching tool result in chat or responses format
-			let toolResultMessage = contextMessages.find((m: any) => m.role === 'tool' && m.tool_call_id === toolCall.id);
-			if (!toolResultMessage) {
-				toolResultMessage = contextMessages.find((m: any) => m.type === 'function_call_output' && m.call_id === toolCall.id);
-			}
+			const toolResultMessage = contextMessages.find((m: any) => m.role === 'tool' && m.tool_call_id === toolCall.id);
 			if (toolResultMessage) {
 				let resultText = toolResultMessage.content || toolResultMessage.output;
 				if (typeof resultText === 'string') {
@@ -374,6 +373,7 @@ async function processMessages(contextMessages: any[], options?: { extractMarkdo
 		const message = contextMessages[mi];
 		if (!message) continue;
 		if (message.role === 'tool') continue;
+		if (message.type === 'function_call') continue;
 		if (message.type === 'function_call_output') {
 			let resultText = message.output;
 			if (typeof resultText === 'string') {
@@ -384,7 +384,20 @@ async function processMessages(contextMessages: any[], options?: { extractMarkdo
 					}
 				} catch { }
 			}
-			processedMessages.push({ role: 'assistant', content: `<tool_use_result>\n  <result>${resultText}</result>\n</tool_use_result>` });
+			const id = message.call_id;
+			let toolName = 'unknown_tool';
+			let args = 'NA';
+			for (const msg of contextMessages) {
+				if (msg.type === 'function_call' && msg.call_id === id) {
+					toolName = msg.name || 'unknown_tool';
+					args = msg.arguments || 'NA';
+					break;
+				}
+			}
+			processedMessages.push({
+				role: 'assistant',
+				content: `<tool_use_result>\n  <name>${toolName}</name>\n  <<arguments>>${args}</<arguments>>\n  <result>${resultText}</result>\n</tool_use_result>`
+			});
 			continue;
 		}
 
@@ -522,7 +535,7 @@ function buildDefaultProviderOptions(args: {
 		return {
 			anthropic:
 			{
-				thinking: thinking || { type: "enabled", budgetTokens: isResearchMode ? 8000 : 4000 },
+				thinking: thinking || { type: "enabled", budgetTokens: isResearchMode ? 32000 : 4000 },
 				cacheControl: { type: "ephemeral" },
 			}
 		};
@@ -694,7 +707,7 @@ function responsesInputToAiSdkMessages(input: any): any[] {
 		const messages: any[] = [];
 		for (const item of input) {
 			// Handle function_call_output messages (responses format)
-			if (item?.type === 'function_call_output') {
+			if (item?.type?.includes('function')) {
 				messages.push(item); // Handled by processMessages()
 				continue;
 			}
@@ -1097,16 +1110,19 @@ const tavilySearchTool = tool({
 						throw new Error(`Tavily API error (${response.status}): ${errorText}`);
 					}
 					const data = await response.json() as any;
-					const rawContent = data.results?.[0]?.raw_content;
+					const results = data.results || [];
+					const images = data.images || [];
 
 					// Add search results to accumulatedSources
-					if (data.results && Array.isArray(data.results)) {
-						data.results.forEach((result: any) => {
+					if (results && Array.isArray(results)) {
+						results.forEach((result: any) => {
 							if (result.url) {
 								accumulatedSources.push({
 									title: result.title || '',
 									url: result.url,
-									type: 'url_citation'
+									type: 'url_citation',
+									start_index: 0,
+									end_index: 0
 								});
 							}
 						});
@@ -1114,14 +1130,8 @@ const tavilySearchTool = tool({
 
 					return {
 						query,
-						results: data.results?.map((result: any) => ({
-							title: result.title,
-							url: result.url,
-							relevance: result.score,
-							content: result.content,
-							...(rawContent && { raw_content: rawContent })
-						})) || [],
-						images: data.images || [],
+						results: results || [],
+						...(images.length > 0 && { images })
 					};
 				} catch (error: any) {
 					console.error(`Error with Tavily API key ${i + 1}/${apiKeys.length}:`, error.message);
@@ -1212,7 +1222,9 @@ const jinaReaderTool = tool({
 			accumulatedSources.push({
 				title,
 				url,
-				type: 'url_citation'
+				type: 'url_citation',
+				start_index: 0,
+				end_index: 0
 			});
 
 			return text;
@@ -1282,7 +1294,9 @@ const ensemblApiTool = tool({
 			accumulatedSources.push({
 				title: 'Ensembl API for ' + path,
 				url: fullUrl,
-				type: 'url_citation'
+				type: 'url_citation',
+				start_index: 0,
+				end_index: 0
 			});
 
 			return await response.json();
@@ -1393,7 +1407,9 @@ const semanticScholarSearchTool = tool({
 							accumulatedSources.push({
 								title: item.title || '',
 								url: paperUrl,
-								type: 'url_citation'
+								type: 'url_citation',
+								start_index: 0,
+								end_index: 0
 							});
 						}
 					} else if (type === 'author') {
@@ -1401,14 +1417,18 @@ const semanticScholarSearchTool = tool({
 							accumulatedSources.push({
 								title: item.name || ' - Semantic Scholar',
 								url: item.url,
-								type: 'url_citation'
+								type: 'url_citation',
+								start_index: 0,
+								end_index: 0
 							});
 						}
 						if (item.homepage) {
 							accumulatedSources.push({
 								title: item.name + ' - Homepage',
 								url: item.homepage,
-								type: 'url_citation'
+								type: 'url_citation',
+								start_index: 0,
+								end_index: 0
 							});
 						}
 					}
@@ -1533,7 +1553,9 @@ const semanticScholarRecommendationsTool = tool({
 						accumulatedSources.push({
 							title: paper.title || '',
 							url: paperUrl,
-							type: 'url_citation'
+							type: 'url_citation',
+							start_index: 0,
+							end_index: 0
 						});
 					}
 				});
@@ -1649,7 +1671,7 @@ app.post('/v1/responses', async (c: Context) => {
 	const messages = await toAiSdkMessages();
 	let modelId: string = model;
 	let thinking: Record<string, any> | undefined = undefined;
-	let extraBody: Record<string, any> = extra_body || {};
+	let extraBody: Record<string, any> = extra_body;
 	let search: boolean = false;
 	if (modelId.startsWith('doubao/')) {
 		if (Array.isArray(messages) && messages.length > 0) {
@@ -1806,6 +1828,8 @@ app.post('/v1/responses', async (c: Context) => {
 										title: part.title || '',
 										url: part.url || '',
 										type: part.sourceType + '_citation',
+										start_index: 0,
+										end_index: 0
 									});
 									break;
 								}
@@ -1939,6 +1963,7 @@ app.post('/v1/responses', async (c: Context) => {
 											part: {
 												type: 'output_text',
 												text: '',
+												annotations: accumulatedSources
 											}
 										});
 
@@ -2246,7 +2271,15 @@ app.post('/v1/responses', async (c: Context) => {
 								}
 								case 'text-end': {
 									if (textItemId) {
-										// Emit content_part.done with accumulated text
+										emit({
+											type: 'response.output_text.done',
+											sequence_number: sequenceNumber++,
+											item_id: textItemId,
+											output_index: outputIndex,
+											content_index: 0,
+											text: collectedText
+										});
+
 										emit({
 											type: 'response.content_part.done',
 											sequence_number: sequenceNumber++,
@@ -2381,71 +2414,139 @@ app.post('/v1/responses', async (c: Context) => {
 									break;
 								}
 								case 'tool-input-start': {
-									if (!EXCLUDED_TOOLS.has(part.toolName)) {
-										const trackingKey = part.id;
-										const funcItemId = randomId('fc');
-										const callId = randomId('call');
-										const currentOutputIndex = outputIndex + 1;
-
-										const functionItem = {
-											id: funcItemId,
-											type: 'function_call',
-											status: 'in_progress',
-											arguments: '',
-											call_id: callId,
-											name: part.toolName
-										};
-
+									const trackingKey = part.id;
+									const funcItemId = randomId('fc');
+									const currentOutputIndex = outputIndex + 1;
+									if (CODE_TOOLS.has(part.toolName)) {
 										functionCallItems.set(trackingKey, {
 											id: funcItemId,
 											name: part.toolName,
-											call_id: callId,
+											call_id: `ci_${trackingKey}`,
 											args: '',
 											outputIndex: currentOutputIndex
 										});
-										outputItems.push(functionItem);
-
 										emit({
 											type: 'response.output_item.added',
 											sequence_number: sequenceNumber++,
 											output_index: currentOutputIndex,
-											item: functionItem
+											item: {
+												id: funcItemId,
+												type: 'code_interpreter_call',
+												status: 'in_progress'
+											}
 										});
+										emit({
+											type: 'response.code_interpreter_call.in_progress',
+											sequence_number: sequenceNumber++,
+											output_index: currentOutputIndex,
+											item_id: trackingKey
+										});
+										break;
 									}
+									if (SEARCH_TOOLS.has(part.toolName)) {
+										functionCallItems.set(trackingKey, {
+											id: funcItemId,
+											name: part.toolName,
+											call_id: `ws_${trackingKey}`,
+											args: '',
+											outputIndex: currentOutputIndex
+										});
+										emit({
+											type: 'response.output_item.added',
+											sequence_number: sequenceNumber++,
+											output_index: currentOutputIndex,
+											item: {
+												id: funcItemId,
+												type: 'web_search_call',
+												status: 'in_progress'
+											}
+										});
+										emit({
+											type: 'response.web_search_call.in_progress',
+											sequence_number: sequenceNumber++,
+											output_index: currentOutputIndex,
+											item_id: trackingKey
+										});
+										break;
+									}
+									const callId = `call_${trackingKey}`;
+									functionCallItems.set(trackingKey, {
+										id: funcItemId,
+										name: part.toolName,
+										call_id: callId,
+										args: '',
+										outputIndex: currentOutputIndex
+									});
+									const functionItem = {
+										id: funcItemId,
+										type: 'function_call',
+										arguments: '',
+										call_id: callId,
+										name: part.toolName
+									};
+
+									outputItems.push(functionItem);
+
+									emit({
+										type: 'response.output_item.added',
+										sequence_number: sequenceNumber++,
+										output_index: currentOutputIndex,
+										item: functionItem
+									});
 									break;
 								}
 								case 'tool-call': {
-									// Final tool call with complete input - finalize arguments
-									if (!EXCLUDED_TOOLS.has(part.toolName)) {
-										const trackingKey = part.toolCallId;
-										const funcCall = functionCallItems.get(trackingKey);
-
-										if (funcCall) {
-											const finalArgs = JSON.stringify(part.input ?? {});
-
+									const trackingKey = part.toolCallId;
+									const funcCall = functionCallItems.get(trackingKey);
+									if (funcCall) {
+										outputIndex = Math.max(outputIndex, funcCall.outputIndex);
+										if (CODE_TOOLS.has(part.toolName)) {
 											emit({
-												type: 'response.function_call_arguments.done',
+												type: 'response.code_interpreter_call.interpreting',
 												sequence_number: sequenceNumber++,
-												item_id: funcCall.id,
 												output_index: funcCall.outputIndex,
-												arguments: finalArgs
+												item_id: trackingKey
 											});
-
-											// Update function call item with final arguments
-											const updatedItem = {
-												id: funcCall.id,
-												type: 'function_call',
-												status: 'in_progress',
-												arguments: finalArgs,
-												call_id: funcCall.call_id,
-												name: funcCall.name
-											};
-
-											// Update the item in outputItems and store final args
-											const itemIndex = outputItems.findIndex(item => item.id === funcCall.id);
-											if (itemIndex >= 0) outputItems[itemIndex] = updatedItem;
-											funcCall.args = finalArgs; // Store for tool-result
+											break;
 										}
+										if (SEARCH_TOOLS.has(part.toolName)) {
+											emit({
+												type: 'response.web_search_call.searching',
+												sequence_number: sequenceNumber++,
+												output_index: funcCall.outputIndex,
+												item_id: trackingKey
+											});
+											break;
+										}
+										const finalArgs = JSON.stringify(part.input ?? {});
+										emit({
+											type: 'response.function_call_arguments.done',
+											sequence_number: sequenceNumber++,
+											item_id: funcCall.id,
+											output_index: funcCall.outputIndex,
+											arguments: finalArgs
+										});
+
+										// Update function call item with final arguments
+										const updatedItem = {
+											id: funcCall.id,
+											type: 'function_call',
+											arguments: finalArgs,
+											call_id: funcCall.call_id,
+											name: funcCall.name
+										};
+
+										emit({
+											type: 'response.output_item.done',
+											sequence_number: sequenceNumber++,
+											output_index: funcCall.outputIndex,
+											item: updatedItem
+										});
+										functionCallItems.delete(trackingKey);
+										// Update the item in outputItems and store final args
+										const itemIndex = outputItems.findIndex(item => item.id === funcCall.id);
+										if (itemIndex >= 0) outputItems[itemIndex] = updatedItem;
+										funcCall.args = finalArgs; // Store for tool-result
 									}
 									break;
 								}
@@ -2473,42 +2574,57 @@ app.post('/v1/responses', async (c: Context) => {
 									const trackingKey = part.toolCallId;
 									const funcCall = functionCallItems.get(trackingKey);
 
-									if (funcCall && !EXCLUDED_TOOLS.has(funcCall.name)) {
-										// Mark function call as completed with the result
-										const completedItem = {
-											id: funcCall.id,
-											type: 'function_call',
-											status: 'completed',
-											arguments: funcCall.args || '{}',
-											call_id: funcCall.call_id,
-											name: funcCall.name
-										};
-
-										// Update the item in outputItems
-										const itemIndex = outputItems.findIndex(item => item.id === funcCall.id);
-										if (itemIndex >= 0) outputItems[itemIndex] = completedItem;
-
-										emit({
-											type: 'response.output_item.done',
-											sequence_number: sequenceNumber++,
-											output_index: funcCall.outputIndex,
-											item: completedItem
-										});
-
-										// Remove from tracking and increment global output index
-										functionCallItems.delete(trackingKey);
+									if (funcCall) {
 										outputIndex = Math.max(outputIndex, funcCall.outputIndex);
+										if (CODE_TOOLS.has(part.toolName)) {
+											emit({
+												type: 'response.code_interpreter_call.completed',
+												sequence_number: sequenceNumber++,
+												output_index: funcCall.outputIndex,
+												item_id: trackingKey
+											});
+											emit({
+												type: 'response.output_item.done',
+												sequence_number: sequenceNumber++,
+												output_index: funcCall.outputIndex,
+												item: {
+													id: funcCall.id,
+													type: 'code_interpreter_call',
+													status: 'completed'
+												}
+											});
+											break;
+										}
+										if (SEARCH_TOOLS.has(part.toolName)) {
+											emit({
+												type: 'response.web_search_call.completed',
+												sequence_number: sequenceNumber++,
+												output_index: funcCall.outputIndex,
+												item_id: trackingKey
+											});
+											emit({
+												type: 'response.output_item.done',
+												sequence_number: sequenceNumber++,
+												output_index: funcCall.outputIndex,
+												item: {
+													id: funcCall.id,
+													type: 'web_search_call',
+													status: 'completed'
+												}
+											});
+											break;
+										}
 									}
 									break;
 								}
 								case 'finish': {
-									const reason = part.finishReason || 'stop';
-									if (reason !== 'stop') {
+									const reason = part.finishReason.replace("-", "_") || 'stop';
+									if (reason !== 'stop' && reason !== 'tool_calls') {
 										emit({
 											type: 'error',
 											sequence_number: sequenceNumber++,
 											code: reason,
-											message: reason,
+											message: `**Unexpected finish**: ${reason}`,
 											param: null
 										});
 									}
@@ -2560,7 +2676,13 @@ app.post('/v1/responses', async (c: Context) => {
 										usage: part.totalUsage ? {
 											input_tokens: part.totalUsage.inputTokens,
 											output_tokens: part.totalUsage.outputTokens,
-											total_tokens: part.totalUsage.totalTokens
+											total_tokens: part.totalUsage.totalTokens,
+											input_tokens_details: {
+												cached_tokens: part.totalUsage.cachedInputTokens || 0,
+											},
+											output_tokens_details: {
+												reasoning_tokens: part.totalUsage.reasoningTokens,
+											}
 										} : null
 									};
 									if (store && (savedTextContent || storedImageMarkdown)) {
@@ -2584,6 +2706,7 @@ app.post('/v1/responses', async (c: Context) => {
 										sequence_number: sequenceNumber++,
 										response: completed
 									});
+									controller.enqueue(TEXT_ENCODER.encode('data: [DONE]\n\n'));
 									controller.close();
 									return;
 								}
@@ -2621,6 +2744,7 @@ app.post('/v1/responses', async (c: Context) => {
 									error: { code: 'request_aborted', message: 'Request was aborted by the user' }
 								}
 							});
+							controller.enqueue(TEXT_ENCODER.encode('data: [DONE]\n\n'));
 							controller.close();
 							return;
 						}
@@ -2652,6 +2776,7 @@ app.post('/v1/responses', async (c: Context) => {
 						error: { code: 'server_error', message }
 					}
 				});
+				controller.enqueue(TEXT_ENCODER.encode('data: [DONE]\n\n'));
 				controller.close();
 			},
 		});
@@ -2669,6 +2794,7 @@ app.post('/v1/responses', async (c: Context) => {
 			const gw = await getGatewayForAttempt(attempt);
 			const commonOptions = buildCommonOptions(gw, attempt, commonParams);
 			const result = await generateText(commonOptions);
+			const toolCalls = result.toolCalls;
 
 			// Handle Poe-specific reasoning extraction for non-streaming
 			let content = result.text || '';
@@ -2681,12 +2807,14 @@ app.post('/v1/responses', async (c: Context) => {
 			}
 
 			// Transform result.sources to annotations format  
-			const annotations = result.sources ? result.sources.map((source: any) => ({
+			const sources = result.sources ? result.sources.map((source: any) => ({
 				title: source.title || '',
 				url: source.url || '',
-				type: (source.sourceType || 'url') + '_citation'
+				type: (source.sourceType || 'url') + '_citation',
+				start_index: source.start_index || 0,
+				end_index: source.end_index || 0
 			})) : [];
-			accumulatedSources.push(...annotations);
+			accumulatedSources.push(...sources);
 
 			// Construct Responses API output
 			const inputNormalized = typeof input === 'string'
@@ -2696,7 +2824,6 @@ app.post('/v1/responses', async (c: Context) => {
 			// Build output items
 			const output: any[] = [];
 
-			// Add reasoning item if present
 			if (reasoningContent) {
 				output.push({
 					type: 'reasoning',
@@ -2707,8 +2834,6 @@ app.post('/v1/responses', async (c: Context) => {
 					}]
 				});
 			}
-
-			// Add message item if present
 			if (content) {
 				output.push({
 					type: 'message',
@@ -2717,6 +2842,40 @@ app.post('/v1/responses', async (c: Context) => {
 					role: 'assistant',
 					content: [{ type: 'output_text', text: content, annotations: accumulatedSources }]
 				});
+			}
+			if (result.steps && result.steps[0] && result.steps[0].content) {
+				for (const msg of result.steps[0].content) {
+					if (msg.type === 'tool-result') {
+						const name = msg.toolName || '';
+						if (CODE_TOOLS.has(name)) {
+							output.push({
+								type: 'code_interpreter_call',
+								id: msg.toolCallId,
+								status: 'completed',
+							});
+							continue;
+						}
+						if (SEARCH_TOOLS.has(name)) {
+							output.push({
+								type: 'web_search_call',
+								id: msg.toolCallId,
+								status: 'completed',
+							});
+							continue;
+						}
+					}
+				}
+			}
+			if (toolCalls && Array.isArray(toolCalls)) {
+				for (const tc of toolCalls) {
+					output.push({
+						type: 'function_call',
+						id: randomId('fc'),
+						call_id: `call_${tc.toolCallId}`,
+						name: tc.toolName,
+						arguments: JSON.stringify(tc.input ?? {}),
+					});
+				}
 			}
 
 			// Add image_generation_call items for any generated files
@@ -2752,7 +2911,17 @@ app.post('/v1/responses', async (c: Context) => {
 				tools: tools || [],
 				top_p: top_p ?? 1,
 				truncation: 'disabled',
-				usage: result.usage ? { input_tokens: result.usage.inputTokens, output_tokens: result.usage.outputTokens, total_tokens: result.usage.totalTokens } : null,
+				usage: result.usage ? {
+					input_tokens: result.usage.inputTokens,
+					output_tokens: result.usage.outputTokens,
+					total_tokens: result.usage.totalTokens,
+					input_tokens_details: {
+						cached_tokens: result.usage.cachedInputTokens || 0,
+					},
+					output_tokens_details: {
+						reasoning_tokens: result.usage.reasoningTokens,
+					}
+				} : null,
 				user: null,
 			} as any;
 
@@ -2843,7 +3012,27 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	semanticScholarApiKey = c.req.header('x-semantic-scholar-api-key') || (isPasswordAuth ? process.env.SEMANTIC_SCHOLAR_API_KEY || null : null);
 
 	const body = await c.req.json();
-	const { model, messages = [], tools, stream, temperature, top_p, top_k, max_tokens, stop_sequences, seed, presence_penalty, frequency_penalty, tool_choice, reasoning_effort, thinking, extra_body, text_verbosity, service_tier, store = true } = body;
+	const {
+		model,
+		messages = [],
+		tools,
+		stream,
+		temperature,
+		top_p,
+		top_k,
+		max_tokens,
+		stop_sequences,
+		seed,
+		presence_penalty,
+		frequency_penalty,
+		tool_choice,
+		reasoning_effort,
+		thinking,
+		extra_body,
+		text_verbosity,
+		service_tier,
+		store = true
+	} = body;
 	const contextMessages = (typeof model === 'string' && model.toLowerCase().includes('image')) ? messages : addContextMessages(messages, c);
 	const processedMessages = await processMessages(contextMessages, { extractMarkdownImages: true });
 
@@ -2866,8 +3055,8 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	})
 	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
 	let modelId: string = model;
-	let thinkingConfig = thinking;
-	let extraBody = extra_body || {};
+	let thinkingConfig: Record<string, any> = thinking;
+	let extraBody: Record<string, any> = extra_body;
 	let search: boolean = false;
 	if (modelId.startsWith('doubao/')) {
 		if (Array.isArray(processedMessages) && processedMessages.length > 0) {
@@ -3101,7 +3290,9 @@ app.post('/v1/chat/completions', async (c: Context) => {
 									accumulatedSources.push({
 										type: (part.sourceType || 'url') + '_citation',
 										url: part.url || '',
-										title: part.title || ''
+										title: part.title || '',
+										start_index: 0,
+										end_index: 0
 									});
 									break;
 								case 'file': {
@@ -3155,9 +3346,9 @@ app.post('/v1/chat/completions', async (c: Context) => {
 									}
 									break;
 								case 'finish':
-									const reason = part.finishReason || 'stop';
-									if (reason !== 'stop') {
-										chunk = { ...baseChunk, choices: [{ index: 0, delta: { refusal: reason, content: '**Unexpected Finish**: ' + reason }, finish_reason: reason }] };
+									const reason = part.finishReason.replace("-", "_") || 'stop';
+									if (reason !== 'stop' && reason !== 'tool_calls') {
+										chunk = { ...baseChunk, choices: [{ index: 0, delta: { refusal: reason, content: `**Unexpected Finish**: ${reason}` }, finish_reason: reason }] };
 										controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
 									}
 									if (accumulatedSources.length > 0) {
@@ -3171,7 +3362,23 @@ app.post('/v1/chat/completions', async (c: Context) => {
 										const citationsChunk = { ...baseChunk, choices: [{ index: 0, delta: { annotations: accumulatedCitations }, finish_reason: null }] };
 										controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(citationsChunk)}\n\n`));
 									}
-									chunk = { ...baseChunk, choices: [{ index: 0, delta: {}, finish_reason: reason }], usage: { prompt_tokens: part.totalUsage.inputTokens, completion_tokens: part.totalUsage.outputTokens, total_tokens: part.totalUsage.totalTokens } };
+									chunk = {
+										...baseChunk,
+										choices: [
+											{ index: 0, delta: {}, finish_reason: reason }
+										],
+										usage: {
+											prompt_tokens: part.totalUsage.inputTokens,
+											completion_tokens: part.totalUsage.outputTokens,
+											total_tokens: part.totalUsage.totalTokens,
+											prompt_tokens_details: {
+												cached_tokens: part.totalUsage.cachedInputTokens || 0
+											},
+											completion_tokens_details: {
+												reasoning_tokens: part.totalUsage.reasoningTokens || 0
+											}
+										}
+									};
 									controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
 									break;
 							}
@@ -3237,13 +3444,17 @@ app.post('/v1/chat/completions', async (c: Context) => {
 				type: (source.sourceType || 'url') + '_citation',
 				url: source.url || '',
 				title: source.title || '',
+				start_index: 0,
+				end_index: 0
 			})) : [];
 			accumulatedSources.push(...annotations);
 			const accumulatedCitations = accumulatedSources.map(source => ({
 				type: source.type === 'url_citation' ? 'url_citation' : `${source.type}_citation`,
 				url_citation: {
 					url: source.url,
-					title: source.title
+					title: source.title,
+					start_index: source.start_index,
+					end_index: source.end_index
 				}
 			}));
 
@@ -3327,6 +3538,12 @@ app.post('/v1/chat/completions', async (c: Context) => {
 					prompt_tokens: result.usage.inputTokens,
 					completion_tokens: result.usage.outputTokens,
 					total_tokens: result.usage.totalTokens,
+					prompt_tokens_details: {
+						cached_tokens: result.usage.cachedInputTokens || 0
+					},
+					completion_tokens_details: {
+						reasoning_tokens: result.usage.reasoningTokens
+					}
 				},
 			});
 
@@ -3468,10 +3685,13 @@ async function getModelsResponse(apiKey: string, providerKeys: Record<string, st
 	}
 
 	// Helper to enforce 5s timeout, returning [] on timeout or error
-	const withTimeout = <T>(p: Promise<T>): Promise<T> =>
+	const withTimeout = <T>(p: Promise<T>, provider: string): Promise<T> =>
 		new Promise((resolve) => {
 			const fallback = [] as T;
-			const id = setTimeout(() => resolve(fallback), 5000);
+			const id = setTimeout(() => {
+				console.warn(`Timeout fetching models from ${provider}`);
+				resolve(fallback);
+			}, 5000);
 			p.then((v) => {
 				clearTimeout(id);
 				resolve(v);
@@ -3506,7 +3726,7 @@ async function getModelsResponse(apiKey: string, providerKeys: Record<string, st
 				return [] as any[];
 			}
 		})();
-		fetchPromises.push(withTimeout(gatewayPromise));
+		fetchPromises.push(withTimeout(gatewayPromise, 'gateway'));
 	}
 
 	for (const [providerName, keys] of Object.entries(providerKeys)) {
@@ -3555,7 +3775,7 @@ async function getModelsResponse(apiKey: string, providerKeys: Record<string, st
 				return [];
 			}
 		})();
-		fetchPromises.push(withTimeout(providerPromise));
+		fetchPromises.push(withTimeout(providerPromise, providerName));
 	}
 
 	const results = await Promise.allSettled(fetchPromises);
