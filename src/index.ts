@@ -2629,12 +2629,12 @@ app.post('/v1/responses', async (c: Context) => {
 								}
 								case 'finish': {
 									const reason = part.finishReason.replace("-", "_") || 'stop';
-									if (reason !== 'stop' && reason !== 'tool_calls') {
+									if (!(['stop', 'tool_calls', 'unknown'].some((e) => reason.includes(e)))) {
 										emit({
 											type: 'error',
 											sequence_number: sequenceNumber++,
 											code: reason,
-											message: `**Unexpected finish**: ${reason}`,
+											message: `Unexpected finish: ${reason}`,
 											param: null
 										});
 										console.warn(`Warning: finish reason was ${reason}`);
@@ -3359,7 +3359,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 									break;
 								case 'finish':
 									const reason = part.finishReason.replace("-", "_") || 'stop';
-									if (reason !== 'stop' && reason !== 'tool_calls') {
+									if (!(['stop', 'tool_calls', 'unknown'].some((e) => reason.includes(e)))) {
 										chunk = { ...baseChunk, choices: [{ index: 0, delta: { refusal: reason, content: `**Unexpected Finish**: ${reason}` }, finish_reason: reason }] };
 										controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
 										console.warn(`Unexpected finish reason: ${reason}`);
@@ -3626,7 +3626,6 @@ const CUSTOM_MODEL_LISTS = {
 		{ id: 'command-a-translate-08-2025', name: 'Command A Translation' },
 	],
 	cloudflare: [
-		// { id: '@cf/openai/gpt-oss-120b', name: 'GPT-OSS-120B' },
 		{ id: '@cf/meta/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout' },
 	],
 };
