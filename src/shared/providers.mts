@@ -15,7 +15,7 @@ export const SUPPORTED_PROVIDERS = {
   cohere: { baseURL: 'https://api.cohere.ai/compatibility/v1' },
   poixe: { baseURL: 'https://api.poixe.com/v1' },
   huggingface: { baseURL: 'https://router.huggingface.co/v1' },
-  cloudflare: { baseURL: `https://gateway.ai.cloudflare.com/v1/${process.env.CLOUDFLARE_ACCOUNT_ID}/${process.env.CLOUDFLARE_GATEWAY}/workers-ai/v1` },
+  cloudflare: { baseURL: `https://gateway.ai.cloudflare.com/v1/${process.env.CLOUDFLARE_GATEWAY}/workers-ai/v1` },
 } as const;
 
 export const PROVIDER_KEYS = Object.keys(SUPPORTED_PROVIDERS);
