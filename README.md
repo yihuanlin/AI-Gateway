@@ -70,7 +70,7 @@ GET /v1/files/:file                # Serve a file from Netlify Blobs
 
 ### Tools & Extensions
 **If required environment variables are set, the following tools are enabled by adding tools in request body, even an empty array (in [Cherry Studio](https://www.cherry-ai.com), this is triggered by enabling model build-in search):**
-- **Code Execution**: [Python Executor API](https://github.com/yihuanlin/python-executor-api) `python_executor` or model build-in (Gateway and Custom `code_execution`)
+- **Code Execution**: [Python Executor API](https://github.com/yihuanlin/python-executor-api) `python_executor` or model build-in (Gateway and Custom Gemini `code_execution`, Gateway OpenAI `code_interpreter`)
 - **Web Search**: [Tavily Search API](https://docs.tavily.com/documentation/api-reference/endpoint/search) `web_search` or model build-in (Gateway and Custom Gemini `google_search`, Gateway OpenAI `web_search_preview`, Gateway Grok `mode = 'on'`, Gateway Perplexity `always on regardless of tools`)
 - **Content Extraction**: [Jina Reader API](https://jina.ai/reader/) `fetch` or model build-in (Gateway and Custom `url_context`)
 

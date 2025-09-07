@@ -13,7 +13,7 @@ import { string, number, boolean, array, object, optional, int, enum as zenum } 
 const app = new Hono()
 const TEXT_ENCODER = new TextEncoder();
 const SEARCH_TOOLS = new Set(['web_search', 'fetch', 'google_search', 'web_search_preview', 'url_context', 'scholar_search', 'paper_recommendations', 'ensembl_api']);
-const CODE_TOOLS = new Set(['code_execution', 'python_executor']);
+const CODE_TOOLS = new Set(['code_execution', 'python_executor', 'code_interpreter']);
 const EXCLUDED_TOOLS = new Set([...SEARCH_TOOLS, ...CODE_TOOLS]);
 const RESEARCH_KEYWORDS = ['research', 'paper'];
 const MAX_ATTEMPTS = 3;
