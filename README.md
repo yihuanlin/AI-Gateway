@@ -6,7 +6,6 @@ A high-performance AI Gateway built with [Hono](https://github.com/honojs/hono) 
 
 - **Unified Text API**: Images and videos models accessible through standard chat/responses endpoints  
 - **Admin Models**: Special administrative models for system management (admin/magic-vision)
-- **Multi-Provider Support**: OpenAI, Google, Groq, Cerebras, Doubao, ModelScope, and more
 - **Streaming Support**: Real-time responses with progress indicators
 - **Tool Integration**: Python execution, web search, content extraction
 - **Response Storage**: Persistent conversation management with Netlify Blobs
@@ -62,7 +61,7 @@ GET /v1/files/:file                # Serve a file from Netlify Blobs
 
 ### Text Generation
 - **Gateway**: Vercel AI Gateway
-- **Direct Providers**: Vercel AI Gateway (Gateway), OpenAI (ChatGPT), Google Generative AI (Gemini), Groq, Cerebras, OpenRouter, Poe, Volcengine (Doubao), ModelScope, Infini, Nvidia, Mistral, Poixe, Cohere, Morph, GitHub Models (GitHub), GitHub Copilot (Copilot), etc.
+- **Direct Providers**: Vercel AI Gateway (Gateway), OpenAI (ChatGPT), Google Generative AI (Gemini), Groq, Cerebras, OpenRouter, Poe, Volcengine (Doubao), ModelScope, Infini, Nvidia, Mistral, Poixe, Cohere, Morph, GitHub Models (GitHub), GitHub Copilot (Copilot), Cloudflare Gateway (Cloudflare), etc.
 
 ### Multimedia Generation  
 - **Doubao (ByteDance)**: i2i, t2i, i2v, and t2v
@@ -114,6 +113,11 @@ POIXE_API_KEY=sk-...
 COPILOT_API_KEY=ghu_...
 POE_API_KEY=your-poe-api-key
 HUGGINGFACE_API_KEY=hf_...
+
+# Cloudflare Gateway (GPT-OSS series currently not supported)
+CLOUDFLARE_API_KEY=your-cloudflare-api-key
+CLOUDFLARE_ACCOUNT_ID=your-cloudflare-account-id
+CLOUDFLARE_GATEWAY=your-cloudflare-gateway-name
 ```
 
 ## 🎨 Model Categories
