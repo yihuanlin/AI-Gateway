@@ -474,6 +474,12 @@ async function createCustomProvider(providerName: string, apiKey: string) {
 					"user-agent": "GitHubCopilotChat/0.30.1"
 				},
 			});
+		case 'cloudflare':
+			const { createWorkersAI } = await import('workers-ai-provider');
+			return createWorkersAI({
+				apiKey: apiKey,
+				accountId: config.baseURL,
+			});
 		default:
 			return createOpenAICompatible({
 				name: 'custom',
@@ -3626,7 +3632,7 @@ const CUSTOM_MODEL_LISTS = {
 		{ id: 'command-a-translate-08-2025', name: 'Command A Translation' },
 	],
 	cloudflare: [
-		// { id: '@cf/openai/gpt-oss-120b', name: 'GPT-OSS-120B' },
+		{ id: '@cf/openai/gpt-oss-120b', name: 'GPT-OSS-120B' },
 		{ id: '@cf/meta/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout' },
 	],
 };

@@ -12,6 +12,7 @@
         "@netlify/blobs": "^10.0.10",
         "ai": "^5.0.34",
         "hono": "^4.9.6",
+        "workers-ai-provider": "^2.0.0",
         "zod": "^4.1.5",
       },
       "devDependencies": {
@@ -120,6 +121,8 @@
     "urlpattern-polyfill": ["urlpattern-polyfill@10.1.0", "", {}, "sha512-IGjKp/o0NL3Bso1PymYURCJxMPNAf/ILOpendP9f5B6e1rTJgdgiOvgfoT8VxCAdY+Wisb9uhGaJJf3yZ2V9nw=="],
 
     "uuid": ["uuid@11.1.0", "", { "bin": { "uuid": "dist/esm/bin/uuid" } }, "sha512-0/A9rDy9P7cJ+8w1c9WD9V//9Wj15Ce2MPz8Ri6032usz+NfePxx5AcN3bN+r6ZL6jEo066/yNYB3tn4pQEx+A=="],
+
+    "workers-ai-provider": ["workers-ai-provider@2.0.0", "", { "dependencies": { "@ai-sdk/provider": "^2.0.0", "@ai-sdk/provider-utils": "^3.0.7" } }, "sha512-AoGGy8aOR3lzCzRouSxA6mgrCKuZfrnzxvOHHy9kOzwz4Mm4Hb55a/9G8zz+v0I/mn8bYLs/4I6JABSl/zXJ7w=="],
 
     "write-file-atomic": ["write-file-atomic@5.0.1", "", { "dependencies": { "imurmurhash": "^0.1.4", "signal-exit": "^4.0.1" } }, "sha512-+QU2zd6OTD8XWIJCbffaiQeH9U73qIqafo1x6V1snCWYGJf6cVE0cDR4D8xRzcEnfI21IFrUPzPGtcPf8AC+Rw=="],
 
