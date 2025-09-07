@@ -1,6 +1,146 @@
 import { getStoreWithConfig } from '../shared/store.mts';
 import { responsesBase, streamChatSingleText, streamResponsesSingleText } from './utils.mts';
 
+async function handleAdminRequest(args: {
+  text: string;
+  messages?: any[];
+  headers: Headers;
+  isPasswordAuth: boolean;
+}): Promise<string> {
+  let { text } = args;
+  const { messages = [], headers, isPasswordAuth } = args;
+  text = (text || '').trim();
+
+  const responsesStore = getStoreWithConfig('responses');
+  const filesStore = getStoreWithConfig('files');
+
+  // Help
+  if (/^\/help$/i.test(text)) {
+    return 'Commands: `refresh` (Copilot token) | `list` (responses) | `list [prefix]` (`-r`/`r` responses, `-m`/`m` media, `-c`/`c` chat, `-f`/`f`/`file` files) | `ls` (== `list all`) | `delete all` | `delete [id]` | `rm -f [fileKey]` (delete file in storage) | `upload` (from last user files) | `[id]` to view.';
+  }
+
+  // Refresh Copilot token
+  if (/^refresh$/i.test(text)) {
+    const result = await forceRefreshCopilotToken(headers, isPasswordAuth);
+    return result.message;
+  }
+
+  // Delete all (responses store)
+  if (/^delete\s+all$|^deleteall$|^rm\s+-rf$/i.test(text)) {
+    const listResult: any = await (responsesStore as any).list();
+    let blobs: any[] = [];
+    if (listResult && 'blobs' in listResult && Array.isArray(listResult.blobs)) blobs = listResult.blobs; else {
+      for await (const item of listResult) { if (item.blobs) blobs.push(...item.blobs); }
+    }
+    await Promise.all(blobs.map((b: any) => (responsesStore as any).delete(b.key)));
+    return `Deleted ${blobs.length} item(s).`;
+  }
+
+  // Delete a file: rm -f <key> or delete file <key>
+  {
+    const m = text.match(/^(?:delete|rm)\s+(?:-f|file)\s+(\S+)$/i);
+    if (m && m[1]) {
+      const key = m[1];
+      const existing = await (filesStore as any).getWithMetadata(key, { type: 'blob' });
+      if (!existing) return `File not found: ${key}`;
+      await (filesStore as any).delete(key);
+      return `Deleted file: ${key}.`;
+    }
+  }
+
+  // Delete a response: delete <id> / rm <id>
+  {
+    const m = text.match(/^(?:delete|rm)\s+(\S+)$/i);
+    if (m && m[1]) {
+      const id = m[1];
+      const existing = await (responsesStore as any).get(id, { type: 'json' });
+      if (!existing) return 'Response not found';
+      await (responsesStore as any).delete(id);
+      return `Deleted ${id}.`;
+    }
+  }
+
+  // List
+  if (/^(?:list|ls)(?:\s+(.+))?$/i.test(text)) {
+    const match = text.match(/^(?:list|ls)(?:\s+(.+))?$/i);
+    const prefix = match?.[1]?.trim();
+    // If files prefix
+    if (prefix && ['-f', 'f', 'file'].includes(prefix)) {
+      try {
+        const listResult: any = await (filesStore as any).list({});
+        let blobs: any[] = [];
+        if (listResult && 'blobs' in listResult && Array.isArray(listResult.blobs)) blobs = listResult.blobs; else {
+          for await (const item of listResult) { if (item.blobs) blobs.push(...item.blobs); }
+        }
+        const ids = blobs.map((b: any) => b.key);
+        return ids.length > 0 ? ids.map((id: string) => `- ${id}`).join('\n') : 'No items found.';
+      } catch (e: any) {
+        return `List files failed: ${e?.message || 'Unknown error'}`;
+      }
+    }
+
+    let listOptions: any = {};
+    if (prefix === 'r' || prefix === '-r') listOptions.prefix = 'resp';
+    else if (prefix === 'm' || prefix === '-m') listOptions.prefix = 'media';
+    else if (prefix === 'c' || prefix === '-c') listOptions.prefix = 'chatcmpl';
+    else if (prefix && prefix !== 'all') listOptions.prefix = prefix;
+
+    const listResult: any = await (responsesStore as any).list(listOptions);
+    let blobs: any[] = [];
+    if (listResult && 'blobs' in listResult && Array.isArray(listResult.blobs)) blobs = listResult.blobs; else {
+      for await (const item of listResult) { if (item.blobs) blobs.push(...item.blobs); }
+    }
+    const ids = blobs.map((b: any) => b.key);
+    return ids.length > 0 ? ids.map((id: string) => `- ${id}`).join('\n') : 'No items found.';
+  }
+
+  // Upload files from last user message
+  if (/^upload$|^\/upload$/i.test(text)) {
+    // Find last user message with file parts
+    const lastUser = (() => {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (m?.role === 'user' && Array.isArray(m.content)) return m;
+      }
+      return null;
+    })();
+    if (!lastUser) return 'No file found in your message.';
+    const uploads: string[] = [];
+    try {
+      const { uploadBase64ToStorage, uploadBlobToStorage } = await import('../shared/bucket.mts');
+      for (const part of lastUser.content) {
+        if (part?.type === 'file') {
+          try {
+            const mediaType = part.mediaType || 'application/octet-stream';
+            if (typeof part.data === 'string') {
+              const url = await uploadBase64ToStorage(part.data);
+              uploads.push(url);
+            } else if (part.data && typeof Blob !== 'undefined') {
+              const data = part.data as ArrayBuffer | Uint8Array;
+              const blob = new Blob([data as any], { type: mediaType });
+              const url = await uploadBlobToStorage(blob);
+              uploads.push(url);
+            }
+          } catch { }
+        }
+      }
+    } catch (e: any) {
+      return `Upload failed: ${e?.message || 'Unknown error'}`;
+    }
+    return uploads.length > 0 ? uploads.map(u => `Uploaded: ${u}`).join('\n') : 'No valid file parts to upload.';
+  }
+
+  // View by ID from responses store
+  try {
+    const id = text;
+    const existing = await (responsesStore as any).get(id, { type: 'json' });
+    if (!existing) return 'Item not found';
+    return toConversationMarkdown(existing, id);
+  } catch (e: any) {
+    return `Fetch failed: ${e?.message || 'Unknown error'}`;
+  }
+}
+
 async function forceRefreshCopilotToken(headers: Headers, isPasswordAuth: boolean = false): Promise<{ ok: true; message: string } | { ok: false; message: string }> {
   const { SUPPORTED_PROVIDERS, getProviderKeys } = await import('../shared/providers.mts');
   try {
@@ -101,193 +241,11 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
     return new Response(JSON.stringify({ error: { message: 'Unauthorized' } }), { status: 401, headers: { 'Content-Type': 'application/json' } });
   }
   const now = Math.floor(Date.now() / 1000);
-  let text = lastUserTextFromMessages(messages).trim();
-
-  const store = getStoreWithConfig('responses');
-
-  if (/^\/help$/.test(text)) {
-    const help = 'Commands: `refresh` (Copilot token) | `list` (responses) | `list [prefix]` | `ls` (== `list all`) | `delete all` | `delete [id]` | `rm -f [fileKey]` (delete file in storage) | `[id]` to view.';
-    if (stream) {
-      return streamChatSingleText(model, help);
-    }
-    const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: help } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
-    return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
-  }
-
-  if (/^refresh$/i.test(text)) {
-    const result = await forceRefreshCopilotToken(headers, !!isPasswordAuth);
-    const out = result.message;
-    if (stream) return streamChatSingleText(model, out);
-    const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: out } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } } as any;
-    return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
-  }
-
-  if (/^delete\s+all$|^deleteall$|^rm\s+-rf$/i.test(text)) {
-    // Delete all
-    try {
-      if (stream) {
-        let deleted = 0;
-        try {
-          const listResult: any = await (store as any).list();
-          let blobs: any[] = [];
-          if (listResult && 'blobs' in listResult && Array.isArray(listResult.blobs)) blobs = listResult.blobs; else {
-            for await (const item of listResult) { if (item.blobs) blobs.push(...item.blobs); }
-          }
-          await Promise.all(blobs.map((b: any) => (store as any).delete(b.key)));
-          deleted = blobs.length;
-        } catch { }
-        return streamChatSingleText(model, `Deleted ${deleted} item(s).`);
-      }
-      // Non-stream path
-      const listResult: any = await (store as any).list();
-      let blobs: any[] = [];
-      if (listResult && 'blobs' in listResult && Array.isArray(listResult.blobs)) blobs = listResult.blobs; else {
-        for await (const item of listResult) { if (item.blobs) blobs.push(...item.blobs); }
-      }
-      await Promise.all(blobs.map((b: any) => (store as any).delete(b.key)));
-      const msg = `Deleted ${blobs.length} item(s).`;
-      const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: msg } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
-      return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
-    } catch (e: any) {
-      return new Response(JSON.stringify({ error: { message: e?.message || 'Delete all failed' } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
-    }
-  }
-
-  // Delete a file item: rm -f <key> or delete file <key>
-  if (/^(?:delete|rm)\s+(?:-f|file)\s+\S+$/i.test(text)) {
-    const parts = text.split(/\s+/);
-    const key = parts[2];
-    try {
-      const filesStore = getStoreWithConfig('files');
-      const existing = await (filesStore as any).getWithMetadata(key, { type: 'blob' });
-      if (!existing) {
-        const msg = `File not found: ${key}`;
-        if (stream) return streamChatSingleText(model, msg);
-        const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: msg } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } } as any;
-        return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
-      }
-      await (filesStore as any).delete(key);
-      const msg = `Deleted file: ${key}.`;
-      if (stream) return streamChatSingleText(model, msg);
-      const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: msg } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } } as any;
-      return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
-    } catch (e: any) {
-      const msg = `Failed to delete file: ${e?.message || 'Unknown error'}`;
-      if (stream) return streamChatSingleText(model, msg);
-      return new Response(JSON.stringify({ error: { message: msg } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
-    }
-  }
-
-  if (/^(?:delete|rm)\s+\S+$/i.test(text)) {
-    const id = text.split(/\s+/)[1];
-    try {
-      if (stream) {
-        const existing = await (store as any).get(id, { type: 'json' });
-        if (!existing) return streamChatSingleText(model, 'Response not found');
-        await (store as any).delete(id);
-        return streamChatSingleText(model, `Deleted ${id}.`);
-      }
-      const existing = await (store as any).get(id, { type: 'json' });
-      if (!existing) return new Response(JSON.stringify({ error: { message: 'Response not found' } }), { status: 404, headers: { 'Content-Type': 'application/json' } });
-      await (store as any).delete(id);
-      const msg = `Deleted ${id}.`;
-      const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: msg } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
-      return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
-    } catch (e: any) {
-      return new Response(JSON.stringify({ error: { message: e?.message || 'Delete failed' } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
-    }
-  }
-
-  if (/^(?:list|ls)(?:\s+(.+))?$/i.test(text)) {
-    const match = text.match(/^(?:list|ls)(?:\s+(.+))?$/i);
-    const prefix = match?.[1]?.trim();
-
-    try {
-      let listOptions: any = {};
-      if (prefix === 'all' || text === 'ls') {
-        // List all items
-      } else if (prefix === 'm') {
-        listOptions.prefix = 'media';
-      } else if (prefix === 'c') {
-        listOptions.prefix = 'chatcmpl';
-      } else if (prefix) {
-        listOptions.prefix = prefix;
-      } else {
-        listOptions.prefix = 'resp'; // Default to responses
-      }
-
-      const listResult: any = await (store as any).list(listOptions);
-      let blobs: any[] = [];
-      if (listResult && 'blobs' in listResult && Array.isArray(listResult.blobs)) blobs = listResult.blobs; else {
-        for await (const item of listResult) { if (item.blobs) blobs.push(...item.blobs); }
-      }
-      const ids = blobs.map((b: any) => b.key);
-      const md = ids.length > 0 ? ids.map((id: string) => `- ${id}`).join('\n') : 'No items found.';
-      if (stream) {
-        return streamChatSingleText(model, md);
-      }
-      const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: md } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
-      return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
-    } catch (e: any) {
-      return new Response(JSON.stringify({ error: { message: e?.message || 'List failed' } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
-    }
-  }
-
-  // Upload command: user message with parts containing files
-  if (/^upload$|^\/upload$/i.test(text) && process.env.URL) {
-    const { uploadBase64ToStorage, uploadBlobToStorage } = await import('../shared/bucket.mts');
-    // Find last user message with file parts
-    const lastUser = (() => {
-      for (let i = messages.length - 1; i >= 0; i--) {
-        const m = messages[i];
-        if (m?.role === 'user' && Array.isArray(m.content)) return m;
-      }
-      return null;
-    })();
-    if (!lastUser) {
-      const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: 'No file found in your message.' } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } } as any;
-      return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
-    }
-    const uploads: string[] = [];
-    for (const part of lastUser.content) {
-      if (part?.type === 'file') {
-        try {
-          const mediaType = part.mediaType || 'application/octet-stream';
-          if (typeof part.data === 'string') {
-            const url = await uploadBase64ToStorage(part.data);
-            uploads.push(url);
-          } else if (part.data && typeof Blob !== 'undefined') {
-            const data = part.data as ArrayBuffer | Uint8Array;
-            const blob = new Blob([data as any], { type: mediaType });
-            const url = await uploadBlobToStorage(blob);
-            uploads.push(url);
-          }
-        } catch { }
-      }
-    }
-    const message = uploads.length > 0 ? uploads.map(u => `Uploaded: ${u}`).join('\n') : 'No valid file parts to upload.';
-    if (stream) return streamChatSingleText(model, message);
-    const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: message } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } } as any;
-    return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
-  }
-
-  // Treat as ID
-  const id = text;
-  try {
-    if (stream) {
-      const existing = await (store as any).get(id, { type: 'json' });
-      if (!existing) return streamChatSingleText(model, 'Item not found');
-      const md = toConversationMarkdown(existing, id);
-      return streamChatSingleText(model, md);
-    }
-    const existing = await (store as any).get(id, { type: 'json' });
-    if (!existing) return new Response(JSON.stringify({ error: { message: 'Item not found' } }), { status: 404, headers: { 'Content-Type': 'application/json' } });
-    const md = toConversationMarkdown(existing, id);
-    const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: md } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
-    return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
-  } catch (e: any) {
-    return new Response(JSON.stringify({ error: { message: e?.message || 'Fetch failed' } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
-  }
+  const text = lastUserTextFromMessages(messages).trim();
+  const md = await handleAdminRequest({ text, messages, headers, isPasswordAuth: !!isPasswordAuth });
+  if (stream) return streamChatSingleText(model, md);
+  const payload = { id: `chatcmpl-${now}`, object: 'chat.completion', created: now, model, choices: [{ index: 0, message: { role: 'assistant', content: md } }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } } as any;
+  return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
 }
 
 export async function handleAdminForResponses(args: { messages: any[]; headers: Headers; model: string; request_id: string; store?: boolean; stream?: boolean, isPasswordAuth?: boolean }): Promise<Response> {
@@ -295,165 +253,17 @@ export async function handleAdminForResponses(args: { messages: any[]; headers: 
   if (!isPasswordAuth) {
     return new Response(JSON.stringify({ error: { message: 'Unauthorized' } }), { status: 401, headers: { 'Content-Type': 'application/json' } });
   }
-  let text = lastUserTextFromMessages(messages).trim();
-  const responseStore = getStoreWithConfig('responses');
-
   const now = Date.now();
   const baseObj = responsesBase(now, request_id, model, null, null, store, undefined, undefined, undefined, undefined);
-
-  const buildCompleted = (messageText: string) => {
-    const finalItem = { id: textItemId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: messageText }] };
-    return { ...baseObj, status: 'completed', output: [finalItem], usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } } as any;
-  };
-
   const textItemId = `msg_${now}`;
-  const streamTextOnce = (messageText: string) => streamResponsesSingleText(baseObj, messageText, textItemId, true);
-
-  if (/^\/help$/.test(text)) {
-    const msg = 'Commands: `refresh` (Copilot token) | `list` (responses) | `list [prefix]` | `ls` (== `list all`) | `delete all` | `delete [id]` | `rm -f [fileKey]` (delete file in storage) | `[id]` to view.';
-    if (!stream) return new Response(JSON.stringify(buildCompleted(msg)), { headers: { 'Content-Type': 'application/json' } });
-    return streamTextOnce(msg);
+  const text = lastUserTextFromMessages(messages).trim();
+  const md = await handleAdminRequest({ text, messages, headers, isPasswordAuth: !!isPasswordAuth });
+  if (!stream) {
+    const finalItem = { id: textItemId, type: 'message', status: 'completed', role: 'assistant', content: [{ type: 'output_text', text: md }] };
+    const completed = { ...baseObj, status: 'completed', output: [finalItem], usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } } as any;
+    return new Response(JSON.stringify(completed), { headers: { 'Content-Type': 'application/json' } });
   }
-
-  if (/^refresh$/i.test(text)) {
-    const result = await forceRefreshCopilotToken(headers, !!isPasswordAuth);
-    const msg = result.message;
-    if (!stream) return new Response(JSON.stringify(buildCompleted(msg)), { headers: { 'Content-Type': 'application/json' } });
-    return streamTextOnce(msg);
-  }
-
-  if (/^delete\s+all$|^deleteall$|^rm\s+-rf$/i.test(text)) {
-    try {
-      const listResult: any = await (responseStore as any).list();
-      let blobs: any[] = [];
-      if (listResult && 'blobs' in listResult && Array.isArray(listResult.blobs)) blobs = listResult.blobs; else {
-        for await (const item of listResult) { if (item.blobs) blobs.push(...item.blobs); }
-      }
-      await Promise.all(blobs.map((b: any) => (responseStore as any).delete(b.key)));
-      const msg = `Deleted ${blobs.length} item(s).`;
-      if (!stream) return new Response(JSON.stringify(buildCompleted(msg)), { headers: { 'Content-Type': 'application/json' } });
-      return streamTextOnce(msg);
-    } catch (e: any) {
-      return new Response(JSON.stringify({ error: { message: e?.message || 'Delete all failed' } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
-    }
-  }
-
-  // Delete a file item: rm -f <key> or delete file <key>
-  if (/^(?:delete|rm)\s+(?:-f|file)\s+\S+$/i.test(text)) {
-    const parts = text.split(/\s+/);
-    const key = parts[2];
-    try {
-      const filesStore = getStoreWithConfig('files');
-      const existing = await (filesStore as any).getWithMetadata(key, { type: 'blob' });
-      if (!existing) {
-        const msg = `File not found: ${key}`;
-        if (!stream) return new Response(JSON.stringify(buildCompleted(msg)), { headers: { 'Content-Type': 'application/json' } });
-        return streamTextOnce(msg);
-      }
-      await (filesStore as any).delete(key);
-      const msg = `Deleted file: ${key}.`;
-      if (!stream) return new Response(JSON.stringify(buildCompleted(msg)), { headers: { 'Content-Type': 'application/json' } });
-      return streamTextOnce(msg);
-    } catch (e: any) {
-      const msg = `Failed to delete file: ${e?.message || 'Unknown error'}`;
-      return new Response(JSON.stringify({ error: { message: msg } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
-    }
-  }
-
-  if (/^(?:delete|rm)\s+\S+$/i.test(text)) {
-    const id = text.split(/\s+/)[1];
-    try {
-      const existing = await (responseStore as any).get(id, { type: 'json' });
-      if (!existing) return new Response(JSON.stringify({ error: { message: 'Response not found' } }), { status: 404, headers: { 'Content-Type': 'application/json' } });
-      await (responseStore as any).delete(id);
-      const msg = `Deleted ${id}.`;
-      if (!stream) return new Response(JSON.stringify(buildCompleted(msg)), { headers: { 'Content-Type': 'application/json' } });
-      return streamTextOnce(msg);
-    } catch (e: any) {
-      return new Response(JSON.stringify({ error: { message: e?.message || 'Delete failed' } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
-    }
-  }
-
-  if (/^(?:list|ls)(?:\s+(.+))?$/i.test(text)) {
-    const match = text.match(/^(?:list|ls)(?:\s+(.+))?$/i);
-    const prefix = match?.[1]?.trim();
-
-    try {
-      let listOptions: any = {};
-      if (prefix === 'all' || text === 'ls') {
-        // List all items
-      } else if (prefix === 'm') {
-        listOptions.prefix = 'media';
-      } else if (prefix === 'c') {
-        listOptions.prefix = 'chatcmpl';
-      } else if (prefix) {
-        listOptions.prefix = prefix;
-      } else {
-        listOptions.prefix = 'resp'; // Default to responses
-      }
-
-      const listResult: any = await (responseStore as any).list(listOptions);
-      let blobs: any[] = [];
-      if (listResult && 'blobs' in listResult && Array.isArray(listResult.blobs)) blobs = listResult.blobs; else {
-        for await (const item of listResult) { if (item.blobs) blobs.push(...item.blobs); }
-      }
-      const ids = blobs.map((b: any) => b.key);
-      const md = ids.length > 0 ? ids.map((id: string) => `- ${id}`).join('\n') : 'No items found.';
-      if (!stream) return new Response(JSON.stringify(buildCompleted(md)), { headers: { 'Content-Type': 'application/json' } });
-      return streamTextOnce(md);
-    } catch (e: any) {
-      return new Response(JSON.stringify({ error: { message: e?.message || 'List failed' } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
-    }
-  }
-
-  // Upload command
-  if (/^upload$|^\/upload$/i.test(text) && process.env.URL) {
-    const { uploadBase64ToStorage, uploadBlobToStorage } = await import('../shared/bucket.mts');
-    // Find last user message with file parts
-    const lastUser = (() => {
-      for (let i = messages.length - 1; i >= 0; i--) {
-        const m = messages[i];
-        if (m?.role === 'user' && Array.isArray(m.content)) return m;
-      }
-      return null;
-    })();
-    const textItemId = `msg_${now}`;
-    if (!lastUser) {
-      return stream ? streamResponsesSingleText(baseObj, 'No file found in your message.', textItemId, true) : new Response(JSON.stringify(buildCompleted('No file found in your message.')), { headers: { 'Content-Type': 'application/json' } });
-    }
-    const uploads: string[] = [];
-    for (const part of lastUser.content) {
-      if (part?.type === 'file') {
-        try {
-          const mediaType = part.mediaType || 'application/octet-stream';
-          if (typeof part.data === 'string') {
-            const url = await uploadBase64ToStorage(part.data);
-            uploads.push(url);
-          } else if (part.data && typeof Blob !== 'undefined') {
-            const data = part.data as ArrayBuffer | Uint8Array;
-            const blob = new Blob([data as any], { type: mediaType });
-            const url = await uploadBlobToStorage(blob);
-            uploads.push(url);
-          }
-        } catch { }
-      }
-    }
-    const messageText = uploads.length > 0 ? uploads.map(u => `Uploaded: ${u}`).join('\n') : 'No valid file parts to upload.';
-    if (!stream) return new Response(JSON.stringify(buildCompleted(messageText)), { headers: { 'Content-Type': 'application/json' } });
-    return streamResponsesSingleText(baseObj, messageText, textItemId, true);
-  }
-
-  // Treat as ID
-  try {
-    const id = text;
-    const existing = await (responseStore as any).get(id, { type: 'json' });
-    if (!existing) return new Response(JSON.stringify({ error: { message: 'Item not found' } }), { status: 404, headers: { 'Content-Type': 'application/json' } });
-    const md = toConversationMarkdown(existing, id);
-    if (!stream) return new Response(JSON.stringify(buildCompleted(md)), { headers: { 'Content-Type': 'application/json' } });
-    return streamTextOnce(md);
-  } catch (e: any) {
-    return new Response(JSON.stringify({ error: { message: e?.message || 'Fetch failed' } }), { status: 500, headers: { 'Content-Type': 'application/json' } });
-  }
+  return streamResponsesSingleText(baseObj, md, textItemId, true);
 }
 
 export async function listResponsesHttp(c: any) {
