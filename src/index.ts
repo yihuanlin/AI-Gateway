@@ -2271,6 +2271,16 @@ app.post('/v1/responses', async (c: Context) => {
 								}
 								case 'text-end': {
 									if (textItemId) {
+										for (const annotation of accumulatedSources) {
+											emit({
+												type: 'response.output_text.annotation.added',
+												sequence_number: sequenceNumber++,
+												item_id: textItemId,
+												output_index: outputIndex,
+												content_index: 0,
+												annotation
+											});
+										}
 										emit({
 											type: 'response.output_text.done',
 											sequence_number: sequenceNumber++,
