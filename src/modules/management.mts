@@ -95,28 +95,6 @@ function lastUserTextFromMessages(messages: any[]): string {
   return '';
 }
 
-function lastUserTextFromResponses(input: any): string {
-  if (typeof input === 'string') return input;
-  if (Array.isArray(input)) {
-    for (let i = input.length - 1; i >= 0; i--) {
-      const m = input[i];
-      if (m?.role === 'user') {
-        if (typeof m.content === 'string') return m.content;
-        if (Array.isArray(m.content)) {
-          for (let j = m.content.length - 1; j >= 0; j--) {
-            const p = m.content[j];
-            if ((p?.type === 'input_text' || p?.type === 'text') && typeof p.text === 'string') return p.text;
-            if (typeof p === 'string') return p;
-          }
-        }
-      }
-    }
-  } else if (input && input.type === 'input_text') {
-    return input.text || '';
-  }
-  return '';
-}
-
 export async function handleAdminForChat(args: { messages: any[]; headers: Headers; model: string; stream?: boolean; isPasswordAuth?: boolean }): Promise<Response> {
   const { messages, headers, model, stream = false, isPasswordAuth } = args;
   if (!isPasswordAuth) {

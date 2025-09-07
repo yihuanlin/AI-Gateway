@@ -52,33 +52,6 @@ export function lastUserPromptFromMessages(messages: any[]): { text: string; con
   return { text: '' };
 }
 
-export function lastUserPromptFromResponsesInput(input: any): { text: string; content?: any[] } {
-  if (!input) return { text: '' };
-  if (typeof input === 'string') return { text: input };
-  if (Array.isArray(input)) {
-    for (let i = input.length - 1; i >= 0; i--) {
-      const item = input[i];
-      if (!item) continue;
-      if (item.role === 'user') {
-        if (typeof item.content === 'string') return { text: item.content };
-        if (Array.isArray(item.content)) {
-          const parts = item.content;
-          let text = '';
-          for (let j = parts.length - 1; j >= 0; j--) {
-            const p = parts[j];
-            if (p?.type === 'input_text' && typeof p.text === 'string') { text = p.text; break; }
-            if (p?.type === 'text' && typeof p.text === 'string') { text = p.text; break; }
-          }
-          return { text, content: parts };
-        }
-      }
-    }
-  } else if (input && input.type === 'input_text') {
-    return { text: input.text || '' };
-  }
-  return { text: '' };
-}
-
 export function responsesBase(createdAt: number, id: string, model: string, input: any, instructions: any, store: boolean, temperature: any, tool_choice: any, tools: any, top_p: any) {
   return {
     id,
