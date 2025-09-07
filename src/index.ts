@@ -713,11 +713,14 @@ function responsesInputToAiSdkMessages(input: any): any[] {
 			}
 
 			const role = item?.role;
-
-			// Handle assistant messages with string content
-			if (role === 'assistant' && typeof item?.content === 'string') {
-				messages.push({ role: 'assistant', content: { type: 'text', text: item.content } });
-				continue;
+			if (typeof item?.content === 'string') {
+				if (role === 'assistant' || role === 'user') {
+					messages.push({ role, content: { type: 'text', text: item.content } });
+					continue;
+				} else if (role === 'system') {
+					messages.push({ role, content: item.content });
+					continue;
+				}
 			}
 
 			const contentArr = Array.isArray(item?.content) ? item.content : [];
@@ -1646,6 +1649,10 @@ app.post('/v1/responses', async (c: Context) => {
 	const toAiSdkMessages = async (): Promise<any[]> => {
 		// Seed from previous stored conversation if provided
 		let history: any[] = [];
+
+		const mapped = responsesInputToAiSdkMessages(input);
+		const messages = await processMessages(mapped);
+
 		if (previous_response_id) {
 			try {
 				const blobStore = getStoreWithConfig('responses');
@@ -1655,17 +1662,13 @@ app.post('/v1/responses', async (c: Context) => {
 				}
 			} catch { }
 		}
-
-		const mapped = responsesInputToAiSdkMessages(input);
+		if (typeof model === 'string' && !model.toLowerCase().includes('image')) {
+			history = addContextMessages(history, c);
+		}
 		if (instructions) {
 			history = [{ role: 'system', content: String(instructions) }, ...history];
 		}
-		const combined = [...history, ...mapped];
-		if (typeof model === 'string' && model.toLowerCase().includes('image')) {
-			return processMessages(combined);
-		}
-		const contextMessages = addContextMessages(combined, c);
-		return processMessages(contextMessages);
+		return [...history, ...messages];
 	};
 
 	const messages = await toAiSdkMessages();
@@ -2321,7 +2324,7 @@ app.post('/v1/responses', async (c: Context) => {
 											output_index: outputIndex,
 											item: completedTextItem
 										});
-										savedTextContent = collectedText;
+										savedTextContent += collectedText;
 										collectedText = '';
 										accumulatedSources = [];
 										textItemId = null;
@@ -2698,15 +2701,14 @@ app.post('/v1/responses', async (c: Context) => {
 									if (store && (savedTextContent || storedImageMarkdown)) {
 										try {
 											const blobStore = getStoreWithConfig('responses');
+											await blobStore.setJSON(responseId, {
+												id: responseId,
+												messages: [...messages, { role: 'assistant', content: savedTextContent }]
+											});
 											if (storedImageMarkdown) {
 												await blobStore.setJSON(responseId + '_image', {
 													id: responseId,
-													messages: [{ role: 'assistant', content: savedTextContent + storedImageMarkdown }]
-												});
-											} else {
-												await blobStore.setJSON(responseId, {
-													id: responseId,
-													messages: [...messages, { role: 'assistant', content: savedTextContent }]
+													messages: [{ role: 'assistant', content: storedImageMarkdown }]
 												});
 											}
 										} catch { }
@@ -2956,11 +2958,9 @@ app.post('/v1/responses', async (c: Context) => {
 							} catch { }
 						}
 					}
-					const storedContent = extraMd ? (content ? content + '\n\n' + extraMd : extraMd) : content;
-					if (storedContent) {
-						const blobStore = getStoreWithConfig('responses');
-						await blobStore.setJSON(extraMd ? responseId + '_image' : responseId, { id: responseId, messages: [...messages, { role: 'assistant', content: storedContent }] });
-					}
+					const blobStore = getStoreWithConfig('responses');
+					await blobStore.setJSON(responseId, { id: responseId, messages: [...messages, { role: 'assistant', content }] });
+					if (extraMd) await blobStore.setJSON(responseId + '_image', { id: responseId, messages: [...messages, { role: 'assistant', content: extraMd }] });
 				} catch { }
 			}
 
