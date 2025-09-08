@@ -8,14 +8,14 @@
     "build": "mkdir -p netlify/edge-functions && cp src/index.ts netlify/edge-functions/index.ts && cp -R src/modules netlify/edge-functions/ && cp -R src/shared netlify/edge-functions/"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^2.0.12",
+    "@ai-sdk/anthropic": "^2.0.14",
     "@ai-sdk/gateway": "^1.0.19",
-    "@ai-sdk/google": "^2.0.12",
-    "@ai-sdk/openai": "^2.0.25",
+    "@ai-sdk/google": "^2.0.13",
+    "@ai-sdk/openai": "^2.0.27",
     "@ai-sdk/openai-compatible": "^1.0.15",
     "@huggingface/inference": "^4.7.1",
     "@netlify/blobs": "^10.0.10",
-    "ai": "^5.0.35",
+    "ai": "^5.0.37",
     "hono": "^4.9.6",
     "zod": "^4.1.5"
   },
