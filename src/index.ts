@@ -107,7 +107,7 @@ const fetchCopilotToken = async (apiKey: string): Promise<string> => {
 	return key;
 }
 
-const processChatMessages = async (contextMessages: any[]): Promise<any[]> => {
+const processChatMessages = async (contextMessages: any[], model: string): Promise<any[]> => {
 	const processedMessages: any[] = [];
 
 	const extractFromText = async (text: string): Promise<{ cleaned: string; files: any[] }> => {
@@ -213,38 +213,40 @@ const processChatMessages = async (contextMessages: any[]): Promise<any[]> => {
 				nextMessage.content = await appendToolCallsToContent(message.content, message.tool_calls);
 			}
 			// Extract images from text markdown
-			if (typeof nextMessage.content === 'string') {
-				const { cleaned, files } = await extractFromText(nextMessage.content);
-				if (files.length > 0) {
-					const parts: any[] = [];
-					if (cleaned) parts.push({ type: 'text', text: cleaned });
-					parts.push(...files);
-					nextMessage.content = parts;
-				}
-			} else if (Array.isArray(nextMessage.content)) {
-				const updatedParts: any[] = [];
-				const appendedFiles: any[] = [];
-				for (const part of nextMessage.content) {
-					if (part && part.type === 'text' && typeof part.text === 'string') {
-						const { cleaned, files } = await extractFromText(part.text);
-						updatedParts.push({ ...part, text: cleaned });
-						if (files.length > 0) appendedFiles.push(...files);
-					} else {
-						updatedParts.push(part);
+			if (model.includes('image')) {
+				if (typeof nextMessage.content === 'string') {
+					const { cleaned, files } = await extractFromText(nextMessage.content);
+					if (files.length > 0) {
+						const parts: any[] = [];
+						if (cleaned) parts.push({ type: 'text', text: cleaned });
+						parts.push(...files);
+						nextMessage.content = parts;
 					}
-				}
-				if (appendedFiles.length > 0) {
-					nextMessage.content = [...updatedParts, ...appendedFiles];
-				} else {
-					nextMessage.content = updatedParts;
-				}
-			} else if (typeof nextMessage.content === 'object' && nextMessage.content && typeof nextMessage.content.text === 'string') {
-				const { cleaned, files } = await extractFromText(nextMessage.content.text);
-				if (files.length > 0) {
-					const parts: any[] = [];
-					if (cleaned) parts.push({ type: 'text', text: cleaned });
-					parts.push(...files);
-					nextMessage.content = parts;
+				} else if (Array.isArray(nextMessage.content)) {
+					const updatedParts: any[] = [];
+					const appendedFiles: any[] = [];
+					for (const part of nextMessage.content) {
+						if (part && part.type === 'text' && typeof part.text === 'string') {
+							const { cleaned, files } = await extractFromText(part.text);
+							updatedParts.push({ ...part, text: cleaned });
+							if (files.length > 0) appendedFiles.push(...files);
+						} else {
+							updatedParts.push(part);
+						}
+					}
+					if (appendedFiles.length > 0) {
+						nextMessage.content = [...updatedParts, ...appendedFiles];
+					} else {
+						nextMessage.content = updatedParts;
+					}
+				} else if (typeof nextMessage.content === 'object' && nextMessage.content && typeof nextMessage.content.text === 'string') {
+					const { cleaned, files } = await extractFromText(nextMessage.content.text);
+					if (files.length > 0) {
+						const parts: any[] = [];
+						if (cleaned) parts.push({ type: 'text', text: cleaned });
+						parts.push(...files);
+						nextMessage.content = parts;
+					}
 				}
 			}
 		} else if (message.role === 'user' && Array.isArray(message.content)) {
@@ -2872,7 +2874,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 		store = true
 	} = body;
 	const contextMessages = (typeof model === 'string' && model.toLowerCase().includes('image')) ? messages : addContextMessages(messages, c);
-	const processedMessages = await processChatMessages(contextMessages);
+	const processedMessages = await processChatMessages(contextMessages, model);
 	const headers = c.req.raw.headers;
 	if (typeof model === 'string' && model.startsWith('image/')) {
 		const { handleImageForChat } = await import('./modules/images.mts');
