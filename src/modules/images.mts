@@ -6,11 +6,11 @@ export type ImageResult = {
   data: any;
 };
 
-function toMarkdownImage(url: string): string {
+const toMarkdownImage = (url: string): string => {
   return `![Generated Image](${url})`;
 }
 
-function getHelpForModel(model: string) {
+const getHelpForModel = (model: string) => {
   if (model.startsWith('image/doubao')) {
     return 'Use **Doubao** t2i model *doubao-seedream-3-0-t2i-250415* or i2i *doubao-seededit-3-0-i2i-250628* (if has an input image).\nFlags: `--format url|b64_json`, `--size {WxH}|--ratio {e.g., 16:9}`, `--seed N`, `--guidance F`.\n`/upload` upload input images to storage .';
   }
@@ -23,7 +23,7 @@ function getHelpForModel(model: string) {
   return 'Unknown image model';
 }
 
-export async function handleImageForChat(args: {
+export const handleImageForChat = async (args: {
   model: string;
   messages: any[];
   headers: Headers;
@@ -32,7 +32,7 @@ export async function handleImageForChat(args: {
   top_p?: number;
   authHeader: string | null;
   isPasswordAuth: boolean;
-}): Promise<Response> {
+}): Promise<Response> => {
   const { model, messages, headers, stream = false, temperature, top_p, authHeader, isPasswordAuth } = args;
 
   const now = Date.now();
@@ -81,7 +81,7 @@ export async function handleImageForChat(args: {
   }
 }
 
-export async function handleImageForResponses(args: {
+export const handleImageForResponses = async (args: {
   model: string;
   messages: any[];
   headers: Headers;
@@ -91,7 +91,7 @@ export async function handleImageForResponses(args: {
   request_id: string;
   authHeader: string | null;
   isPasswordAuth: boolean;
-}): Promise<Response> {
+}): Promise<Response> => {
   const { model, messages, headers, stream = false, temperature, top_p, request_id, authHeader, isPasswordAuth } = args;
   const now = Date.now();
   const last = lastUserPromptFromMessages(messages);
@@ -135,7 +135,7 @@ export async function handleImageForResponses(args: {
   }
 }
 
-function extractFlags(prompt: string) {
+const extractFlags = (prompt: string) => {
   const flags: Record<string, string | number | boolean> = {};
   let cleaned = prompt;
   const flagRegex = /\s--([a-zA-Z_\-]+)(?:\s+([^\s][^\n]*?))?(?=\s--|$)/g;
@@ -156,7 +156,7 @@ function extractFlags(prompt: string) {
   return { cleaned, flags };
 }
 
-function guidanceFromTopP(topP?: number, temperature?: number): number | undefined {
+const guidanceFromTopP = (topP?: number, temperature?: number): number | undefined => {
   if (typeof topP === 'number') {
     const t = typeof temperature === 'number' ? temperature : 1;
     const mapped = 1 + (1 - Math.max(0, Math.min(1, topP))) * 9;
@@ -166,7 +166,7 @@ function guidanceFromTopP(topP?: number, temperature?: number): number | undefin
   return undefined;
 }
 
-function ratioToSize(r: string, model: string): string | null {
+const ratioToSize = (r: string, model: string): string | null => {
   const ratio = String(r).trim();
 
   // Parse ratio
@@ -203,7 +203,7 @@ function ratioToSize(r: string, model: string): string | null {
   return null;
 }
 
-function getSizeString(flags: Record<string, any>, effectiveModel: string): string | undefined {
+const getSizeString = (flags: Record<string, any>, effectiveModel: string): string | undefined => {
   let sizeStr: string | undefined = undefined;
   if (typeof flags['size'] === 'string') {
     sizeStr = flags['size'] as string;
@@ -218,7 +218,7 @@ function getSizeString(flags: Record<string, any>, effectiveModel: string): stri
   return sizeStr;
 }
 
-async function buildImageGenerationWaiter(params: {
+const buildImageGenerationWaiter = async (params: {
   model: string;
   prompt: string;
   flags: Record<string, any>;
@@ -228,7 +228,7 @@ async function buildImageGenerationWaiter(params: {
   contentParts: any[];
   temperature?: number;
   top_p?: number;
-}): Promise<{ ok: true; wait: (signal: AbortSignal) => Promise<WaitResult>; taskId: string } | { ok: false; error: any; status?: number }> {
+}): Promise<{ ok: true; wait: (signal: AbortSignal) => Promise<WaitResult>; taskId: string } | { ok: false; error: any; status?: number }> => {
   const { model, headers, authHeader, isPasswordAuth, contentParts, flags, temperature, top_p } = params;
   let prompt = params.prompt || '';
   const links = findLinks(prompt);

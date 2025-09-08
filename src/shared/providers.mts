@@ -20,7 +20,7 @@ export const SUPPORTED_PROVIDERS = {
 
 export const PROVIDER_KEYS = Object.keys(SUPPORTED_PROVIDERS);
 
-export async function getProviderKeys(headers: any, authHeader: string | null, isPasswordAuth: boolean = false): Promise<Record<string, string[]>> {
+export const getProviderKeys = async (headers: any, authHeader: string | null, isPasswordAuth: boolean = false): Promise<Record<string, string[]>> => {
   const providerKeys: Record<string, string[]> = {};
 
   const getHeader = (name: string): string | null => {
@@ -50,11 +50,8 @@ export async function getProviderKeys(headers: any, authHeader: string | null, i
   }
 
   if (Object.keys(providerKeys).length === 0 && authHeader && !isPasswordAuth) {
-    const headerKey = authHeader.split(' ')[1];
-    if (headerKey) {
-      const keys = headerKey.split(',').map((k: string) => k.trim());
-      for (const provider of PROVIDER_KEYS) providerKeys[provider] = keys;
-    }
+    const keys = authHeader.split(',').map((k: string) => k.trim());
+    for (const provider of PROVIDER_KEYS) providerKeys[provider] = keys;
   }
   return providerKeys;
 }

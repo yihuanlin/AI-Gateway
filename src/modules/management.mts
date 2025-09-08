@@ -1,12 +1,12 @@
 import { getStoreWithConfig } from '../shared/store.mts';
 import { responsesBase, streamChatSingleText, streamResponsesSingleText } from './utils.mts';
 
-async function handleAdminRequest(args: {
+const handleAdminRequest = async (args: {
   text: string;
   messages?: any[];
   headers: Headers;
   isPasswordAuth: boolean;
-}): Promise<string> {
+}): Promise<string> => {
   let { text } = args;
   const { messages = [], headers, isPasswordAuth } = args;
   text = (text || '').trim();
@@ -141,7 +141,7 @@ async function handleAdminRequest(args: {
   }
 }
 
-async function forceRefreshCopilotToken(headers: Headers, isPasswordAuth: boolean = false): Promise<{ ok: true; message: string } | { ok: false; message: string }> {
+const forceRefreshCopilotToken = async (headers: Headers, isPasswordAuth: boolean = false): Promise<{ ok: true; message: string } | { ok: false; message: string }> => {
   const { SUPPORTED_PROVIDERS, getProviderKeys } = await import('../shared/providers.mts');
   try {
     // Resolve Copilot API key from headers or environment (when password auth is enabled)
@@ -180,7 +180,7 @@ async function forceRefreshCopilotToken(headers: Headers, isPasswordAuth: boolea
   }
 }
 
-function toConversationMarkdown(stored: any, key?: string): string {
+const toConversationMarkdown = (stored: any, key?: string): string => {
   if (!stored) return 'No content found.';
 
   // Check if this is a media entry (key starts with media_)
@@ -218,7 +218,7 @@ function toConversationMarkdown(stored: any, key?: string): string {
   return typeof stored === 'string' ? stored : JSON.stringify(stored);
 }
 
-function lastUserTextFromMessages(messages: any[]): string {
+const lastUserTextFromMessages = (messages: any[]): string => {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     if (m?.role === 'user') {
@@ -235,7 +235,7 @@ function lastUserTextFromMessages(messages: any[]): string {
   return '';
 }
 
-export async function handleAdminForChat(args: { messages: any[]; headers: Headers; model: string; stream?: boolean; isPasswordAuth?: boolean }): Promise<Response> {
+export const handleAdminForChat = async (args: { messages: any[]; headers: Headers; model: string; stream?: boolean; isPasswordAuth?: boolean }): Promise<Response> => {
   const { messages, headers, model, stream = false, isPasswordAuth } = args;
   if (!isPasswordAuth) {
     return new Response(JSON.stringify({ error: { message: 'Unauthorized' } }), { status: 401, headers: { 'Content-Type': 'application/json' } });
@@ -248,7 +248,7 @@ export async function handleAdminForChat(args: { messages: any[]; headers: Heade
   return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
 }
 
-export async function handleAdminForResponses(args: { messages: any[]; headers: Headers; model: string; request_id: string; store?: boolean; stream?: boolean, isPasswordAuth?: boolean }): Promise<Response> {
+export const handleAdminForResponses = async (args: { messages: any[]; headers: Headers; model: string; request_id: string; store?: boolean; stream?: boolean; isPasswordAuth?: boolean }): Promise<Response> => {
   const { messages, headers, model, request_id, store = false, stream = false, isPasswordAuth = false } = args;
   if (!isPasswordAuth) {
     return new Response(JSON.stringify({ error: { message: 'Unauthorized' } }), { status: 401, headers: { 'Content-Type': 'application/json' } });
@@ -266,11 +266,10 @@ export async function handleAdminForResponses(args: { messages: any[]; headers: 
   return streamResponsesSingleText(baseObj, md, textItemId, true);
 }
 
-export async function listResponsesHttp(c: any) {
-  const authHeader = c.req.header('Authorization');
-  const apiKey = authHeader?.split(' ')[1];
+export const listResponsesHttp = async (c: any) => {
+  const authHeader = c.req.header('Authorization').split(' ')[1] || null;
   const envPassword = process.env.PASSWORD;
-  const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
+  const isPasswordAuth = !!(envPassword && authHeader && envPassword.trim() === authHeader.trim());
   if (!isPasswordAuth) return c.text('Unauthorized', 401);
 
   const prefix = c.req.query('prefix') || '';
@@ -299,11 +298,10 @@ export async function listResponsesHttp(c: any) {
   }
 }
 
-export async function deleteAllResponsesHttp(c: any) {
-  const authHeader = c.req.header('Authorization');
-  const apiKey = authHeader?.split(' ')[1];
+export const deleteAllResponsesHttp = async (c: any) => {
+  const authHeader = c.req.header('Authorization')?.split(' ')[1] || null;
   const envPassword = process.env.PASSWORD;
-  const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
+  const isPasswordAuth = !!(envPassword && authHeader && envPassword.trim() === authHeader.trim());
   if (!isPasswordAuth) return c.text('Unauthorized', 401);
 
   try {
@@ -326,11 +324,10 @@ export async function deleteAllResponsesHttp(c: any) {
   }
 }
 
-export async function deleteResponseHttp(c: any) {
-  const authHeader = c.req.header('Authorization');
-  const apiKey = authHeader?.split(' ')[1];
+export const deleteResponseHttp = async (c: any) => {
+  const authHeader = c.req.header('Authorization')?.split(' ')[1] || null;
   const envPassword = process.env.PASSWORD;
-  const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
+  const isPasswordAuth = !!(envPassword && authHeader && envPassword.trim() === authHeader.trim());
   if (!isPasswordAuth) return c.text('Unauthorized', 401);
 
   const responseId = c.req.param('response_id');
@@ -347,11 +344,10 @@ export async function deleteResponseHttp(c: any) {
   }
 }
 
-export async function getResponseHttp(c: any) {
-  const authHeader = c.req.header('Authorization');
-  const apiKey = authHeader?.split(' ')[1];
+export const getResponseHttp = async (c: any) => {
+  const authHeader = c.req.header('Authorization')?.split(' ')[1] || null;
   const envPassword = process.env.PASSWORD;
-  const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
+  const isPasswordAuth = !!(envPassword && authHeader && envPassword.trim() === authHeader.trim());
   if (!isPasswordAuth) return c.text('Unauthorized', 401);
 
   const responseId = c.req.param('response_id');

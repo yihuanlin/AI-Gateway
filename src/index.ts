@@ -2,10 +2,11 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import type { Context } from 'hono'
 import { generateText, stepCountIs, streamText, tool } from 'ai'
-import { createGateway } from '@ai-sdk/gateway'
+import { createGateway, gateway } from '@ai-sdk/gateway'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { openai, createOpenAI } from '@ai-sdk/openai'
 import { google, createGoogleGenerativeAI } from '@ai-sdk/google'
+import { anthropic } from '@ai-sdk/anthropic';
 import { SUPPORTED_PROVIDERS, getProviderKeys } from './shared/providers.mts'
 import { getStoreWithConfig } from './shared/store.mts'
 import { string, number, boolean, array, object, optional, int, enum as zenum } from 'zod/mini'
@@ -17,6 +18,8 @@ const CODE_TOOLS = new Set(['code_execution', 'python_executor', 'code_interpret
 const EXCLUDED_TOOLS = new Set([...SEARCH_TOOLS, ...CODE_TOOLS]);
 const RESEARCH_KEYWORDS = ['research', 'paper'];
 const MAX_ATTEMPTS = 3;
+
+type Attempt = { type: 'gateway' | 'custom', name?: string, apiKey: string, model: string };
 
 let accumulatedSources: Array<{ title: string, url: string, type: string, start_index: number, end_index: number }> = [];
 let tavilyApiKey: string | null = null;
@@ -32,7 +35,45 @@ let geo: {
 let isResearchMode: boolean = false;
 
 // Helper functions
-async function fetchCopilotToken(apiKey: string): Promise<string> {
+
+const randomId = (prefix: string) => {
+	try {
+		// Prefer Web Crypto for consistency across runtimes
+		const bytes = crypto.getRandomValues(new Uint8Array(16));
+		const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+		return `${prefix}_${hex}`;
+	} catch {
+		// Fallback
+		const hex = Array.from({ length: 16 }, () => Math.floor(Math.random() * 256).toString(16).padStart(2, '0')).join('');
+		return `${prefix}_${hex}`;
+	}
+}
+
+const addContextMessages = (messages: any[], c: Context): any[] => {
+	if (!geo) return messages;
+
+	const { country, city, timezone } = geo;
+	const ip = c.req.header('x-forwarded-for');
+	const now = new Date();
+
+	const contextParts = [
+		(city && country) ? `Location: ${city} (${country.name})` : country && `Country: ${country.name}`,
+		`Time: ${now.toLocaleString(country?.code === 'GB' ? 'en-GB' : 'en-US', { timeZone: timezone }).replace(',', '')} (${now.toLocaleDateString('en-US', { weekday: 'long', timeZone: timezone })})`,
+		ip && `IP: ${ip}`
+	].filter(Boolean);
+
+	if (contextParts.length > 0) {
+		const systemMessage = {
+			role: 'system' as const,
+			content: `Context Information: ${contextParts.join(', ')}`
+		};
+		return [systemMessage, ...messages];
+	}
+
+	return messages;
+}
+
+const fetchCopilotToken = async (apiKey: string): Promise<string> => {
 	const store = await getStoreWithConfig('copilot-tokens');
 	const res = await store.getWithMetadata('token', { type: 'text' }) as { data?: string | null, metadata?: { expiration?: number } | null } | null;
 	const token = res?.data ?? null;
@@ -66,215 +107,7 @@ async function fetchCopilotToken(apiKey: string): Promise<string> {
 	return key;
 }
 
-function randomId(prefix: string) {
-	try {
-		// Prefer Web Crypto for consistency across runtimes
-		const bytes = crypto.getRandomValues(new Uint8Array(16));
-		const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
-		return `${prefix}_${hex}`;
-	} catch {
-		// Fallback
-		const hex = Array.from({ length: 16 }, () => Math.floor(Math.random() * 256).toString(16).padStart(2, '0')).join('');
-		return `${prefix}_${hex}`;
-	}
-}
-
-function startsWithThinking(text: string): boolean {
-	// Remove leading whitespace and empty newlines
-	const lines = text.split('\n');
-	const nonEmptyLines: string[] = [];
-
-	for (const line of lines) {
-		const trimmed = line.trim();
-		if (trimmed !== '') {
-			nonEmptyLines.push(trimmed);
-		}
-	}
-
-	// Check if the first or second non-empty line starts with >
-	if (nonEmptyLines.length >= 1 && nonEmptyLines[0] && nonEmptyLines[0].startsWith('>')) {
-		return true;
-	}
-	if (nonEmptyLines.length >= 2 && nonEmptyLines[1] && nonEmptyLines[1].startsWith('>')) {
-		return true;
-	}
-
-	return false;
-}
-
-function findThinkingIndex(text: string): number {
-	// Find where the actual reasoning content (>) starts
-	// Look for the first line that starts with > and return the position of the >
-	const lines = text.split('\n');
-	let currentIndex = 0;
-
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i];
-		if (!line) {
-			currentIndex += 1; // Just the newline
-			continue;
-		}
-
-		const trimmedLine = line.trim();
-
-		// If this line starts with >, find the exact position of the >
-		if (trimmedLine.startsWith('>')) {
-			return currentIndex;
-		}
-
-		// Add the length of this line plus the newline character
-		currentIndex += line.length + 1; // +1 for the \n
-	}
-
-	return -1; // No reasoning content found
-}
-
-function cleanPoeReasoningDelta(delta: string, isFirstDelta: boolean = false): string {
-	let cleanedDelta = delta;
-
-	// For first delta, remove everything before the first line that starts with >
-	if (isFirstDelta) {
-		const lines = cleanedDelta.split('\n');
-		let firstQuoteLineIndex = -1;
-
-		// Find the first line that starts with >
-		for (let i = 0; i < lines.length; i++) {
-			const line = lines[i];
-			if (line && line.trim().startsWith('>')) {
-				firstQuoteLineIndex = i;
-				break;
-			}
-		}
-
-		// If we found a quote line, remove everything before it
-		if (firstQuoteLineIndex >= 0) {
-			cleanedDelta = lines.slice(firstQuoteLineIndex).join('\n');
-		}
-	}
-
-	// Remove ">" quotation markdown from the beginning of lines
-	const lines = cleanedDelta.split('\n');
-	const cleanedLines = lines.map(line => {
-		if (line.startsWith('> ')) {
-			return line.substring(2); // Remove "> "
-		} else if (line.startsWith('>')) {
-			return line.substring(1); // Remove ">"
-		}
-		return line;
-	});
-
-	return cleanedLines.join('\n');
-}
-
-function cleanPoeReasoning(reasoning: string): string {
-	// Remove everything before the first line that starts with >
-	const lines = reasoning.split('\n');
-	let firstQuoteLineIndex = -1;
-
-	// Find the first line that starts with >
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i];
-		if (line && line.trim().startsWith('>')) {
-			firstQuoteLineIndex = i;
-			break;
-		}
-	}
-
-	// If no quote line found, return empty
-	if (firstQuoteLineIndex < 0) {
-		return '';
-	}
-
-	// Take only the lines from the first quote line onwards
-	const reasoningLines = lines.slice(firstQuoteLineIndex);
-
-	// Remove ">" quotation markdown from the beginning of lines
-	const cleanedLines = reasoningLines.map(line => {
-		if (line.startsWith('> ')) {
-			return line.substring(2); // Remove "> "
-		} else if (line.startsWith('>')) {
-			return line.substring(1); // Remove ">"
-		}
-		return line;
-	});
-
-	return cleanedLines.join('\n').trim();
-}
-
-// Helper function to extract Poe reasoning content from text
-function extractPoeReasoning(text: string): { reasoning: string, content: string } {
-	if (!startsWithThinking(text)) {
-		return { reasoning: '', content: text };
-	}
-
-	// Find where "Thinking..." starts
-	const thinkingIndex = findThinkingIndex(text);
-	if (thinkingIndex < 0) {
-		return { reasoning: '', content: text };
-	}
-
-	const beforeThinking = text.substring(0, thinkingIndex);
-	const afterThinking = text.substring(thinkingIndex);
-
-	// Find the end of reasoning (two consecutive newlines where the second doesn't start with >)
-	const lines = afterThinking.split('\n');
-	let reasoningEndIndex = -1;
-
-	for (let i = 0; i < lines.length - 1; i++) {
-		const currentLine = lines[i];
-		const nextLine = lines[i + 1];
-		if (currentLine === '' && nextLine && nextLine !== '' && !nextLine.startsWith('>')) {
-			// Found the end, calculate the position in the original text
-			const linesBefore = lines.slice(0, i).join('\n');
-			reasoningEndIndex = thinkingIndex + linesBefore.length + 1; // +1 for the newline
-			break;
-		}
-	}
-
-	if (reasoningEndIndex >= 0) {
-		let reasoning = text.substring(thinkingIndex, reasoningEndIndex);
-		const content = beforeThinking + text.substring(reasoningEndIndex + 1); // +1 to skip the newline
-
-		// Clean up reasoning content
-		reasoning = cleanPoeReasoning(reasoning);
-
-		return { reasoning, content };
-	} else {
-		// No clear end found, treat everything after Thinking... as reasoning
-		let reasoning = afterThinking;
-
-		// Clean up reasoning content
-		reasoning = cleanPoeReasoning(reasoning);
-
-		return { reasoning, content: beforeThinking };
-	}
-}
-
-function addContextMessages(messages: any[], c: Context): any[] {
-	if (!geo) return messages;
-
-	const { country, city, timezone } = geo;
-	const ip = c.req.header('x-forwarded-for');
-	const now = new Date();
-
-	const contextParts = [
-		(city && country) ? `Location: ${city} (${country.name})` : country && `Country: ${country.name}`,
-		`Time: ${now.toLocaleString(country?.code === 'GB' ? 'en-GB' : 'en-US', { timeZone: timezone }).replace(',', '')} (${now.toLocaleDateString('en-US', { weekday: 'long', timeZone: timezone })})`,
-		ip && `IP: ${ip}`
-	].filter(Boolean);
-
-	if (contextParts.length > 0) {
-		const systemMessage = {
-			role: 'system' as const,
-			content: `Context Information: ${contextParts.join(', ')}`
-		};
-		return [systemMessage, ...messages];
-	}
-
-	return messages;
-}
-
-async function processChatMessages(contextMessages: any[]): Promise<any[]> {
+const processChatMessages = async (contextMessages: any[]): Promise<any[]> => {
 	const processedMessages: any[] = [];
 
 	const extractFromText = async (text: string): Promise<{ cleaned: string; files: any[] }> => {
@@ -442,7 +275,7 @@ async function processChatMessages(contextMessages: any[]): Promise<any[]> {
 	return processedMessages;
 }
 
-async function createCustomProvider(providerName: string, apiKey: string) {
+const createCustomProvider = async (providerName: string, apiKey: string) => {
 	const config = SUPPORTED_PROVIDERS[providerName as keyof typeof SUPPORTED_PROVIDERS];
 	if (!config) {
 		throw new Error(`Unsupported provider: ${providerName}`);
@@ -484,7 +317,7 @@ async function createCustomProvider(providerName: string, apiKey: string) {
 	}
 }
 
-function buildDefaultProviderOptions(args: {
+const buildDefaultProviderOptions = (args: {
 	providerOptionsHeader?: string | null,
 	thinking?: any,
 	reasoning_effort?: any,
@@ -495,14 +328,16 @@ function buildDefaultProviderOptions(args: {
 	store?: any,
 	model?: any,
 	search?: boolean,
-}) {
+}) => {
 	const { providerOptionsHeader, thinking, reasoning_effort, extra_body, text_verbosity, service_tier, reasoning_summary, store, model, search } = args;
 	if (model.startsWith('anthropic/')) {
 		return {
-			anthropic:
-			{
-				thinking: thinking || { type: "enabled", budgetTokens: isResearchMode ? 32000 : 4000 },
+			anthropic: {
+				thinking: { type: thinking?.type || "enabled", budgetTokens: thinking?.budget_tokens || (isResearchMode ? 32000 : 2048) },
 				cacheControl: { type: "ephemeral" },
+			},
+			gateway: {
+				only: ['anthropic', 'vertex']
 			}
 		};
 	}
@@ -576,8 +411,6 @@ function buildDefaultProviderOptions(args: {
 	return providerOptions;
 }
 
-type Attempt = { type: 'gateway' | 'custom', name?: string, apiKey: string, model: string };
-
 const getGatewayForAttempt = async (attempt: Attempt) => {
 	if (attempt.type === 'gateway') {
 		const gatewayOptions: any = { apiKey: attempt.apiKey };
@@ -589,12 +422,12 @@ const getGatewayForAttempt = async (attempt: Attempt) => {
 	return await createCustomProvider(attempt.name!, attempt.apiKey);
 };
 
-function prepareProvidersToTry(args: {
+const prepareProvidersToTry = (args: {
 	model: string,
 	providerKeys: Record<string, string[]>,
 	isPasswordAuth: boolean,
 	authApiKey?: string | null,
-}) {
+}) => {
 	const { model, providerKeys, isPasswordAuth, authApiKey } = args;
 	const modelInfo = parseModelName(model);
 	const providersToTry: Array<Attempt> = [];
@@ -655,7 +488,7 @@ function prepareProvidersToTry(args: {
 }
 
 // Convert OpenAI Responses API input format to AI SDK messages
-function responsesInputToAiSdkMessages(input: any): any[] {
+const responsesInputToAiSdkMessages = (input: any): any[] => {
 	if (!input) return [];
 
 	// Simple string => user text
@@ -782,9 +615,10 @@ function responsesInputToAiSdkMessages(input: any): any[] {
 }
 
 // Build AI SDK tools from OpenAI tools array with shared heuristics
-function buildAiSdkTools(model: string, userTools: any[] | undefined): Record<string, any> {
+const buildAiSdkTools = (model: string, userTools: any[] | undefined): Record<string, any> => {
+	let isAnthropic: boolean = false;
 	let aiSdkTools: Record<string, any> = {};
-	function buildResearchTools() {
+	const buildResearchTools = () => {
 		if (isResearchMode) {
 			aiSdkTools.ensembl_api = ensemblApiTool;
 			aiSdkTools.scholar_search = semanticScholarSearchTool;
@@ -796,10 +630,24 @@ function buildAiSdkTools(model: string, userTools: any[] | undefined): Record<st
 		buildResearchTools();
 	} else if (Array.isArray(userTools)) {
 		userTools.forEach((userTool: any) => {
-			// Support both OpenAI Chat-style and flat Responses-style tool schemas
+			// Support OpenAI Chat-style, Responses-style, and Anthropic-style tool schemas
 			const isFunctionType = userTool?.type === 'function';
-			const fn = userTool.function || (isFunctionType ? { name: userTool.name, parameters: userTool.parameters } : null);
-			if (isFunctionType && fn && (fn.name || userTool.name)) {
+			const isAnthropicTool = userTool?.name && userTool?.input_schema && !userTool?.type && !userTool?.function;
+
+			let fn: any = null;
+			if (isFunctionType) {
+				fn = userTool.function || { name: userTool.name, parameters: userTool.parameters };
+			} else if (isAnthropicTool) {
+				// Convert Anthropic format to internal format
+				isAnthropic = true;
+				fn = {
+					name: userTool.name,
+					description: userTool.description,
+					parameters: userTool.input_schema
+				};
+			}
+
+			if (fn && (fn.name || userTool.name)) {
 				let clientParameters = fn.parameters || fn.inputSchema;
 				if (!clientParameters) return;
 				const finalParameters: Record<string, any> = {
@@ -815,12 +663,12 @@ function buildAiSdkTools(model: string, userTools: any[] | undefined): Record<st
 					const propDef = prop as any;
 					let zodType: any;
 					switch (propDef.type) {
-						case 'string': zodType = string({ message: propDef.description || 'String parameter' }); break;
-						case 'number': zodType = number({ message: propDef.description || 'Number parameter' }); break;
-						case 'integer': zodType = int({ message: propDef.description || 'Integer parameter' }); break;
-						case 'boolean': zodType = boolean({ message: propDef.description || 'Boolean parameter' }); break;
-						case 'array': zodType = array(string({ message: 'Array item' }), { message: propDef.description || 'Array parameter' }); break;
-						case 'object': zodType = object({}, { message: propDef.description || 'Object parameter' }); break;
+						case 'string': zodType = string({ message: propDef.description || propDef.title || 'String parameter' }); break;
+						case 'number': zodType = number({ message: propDef.description || propDef.title || 'Number parameter' }); break;
+						case 'integer': zodType = int({ message: propDef.description || propDef.title || 'Integer parameter' }); break;
+						case 'boolean': zodType = boolean({ message: propDef.description || propDef.title || 'Boolean parameter' }); break;
+						case 'array': zodType = array(string({ message: 'Array item' }), { message: propDef.description || propDef.title || 'Array parameter' }); break;
+						case 'object': zodType = object({}, { message: propDef.description || propDef.title || 'Object parameter' }); break;
 						default: zodType = string({ message: 'Any parameter' });
 					}
 					if (!required.includes(key)) zodType = optional(zodType);
@@ -832,7 +680,7 @@ function buildAiSdkTools(model: string, userTools: any[] | undefined): Record<st
 				aiSdkTools[fnName] = tool({ description, inputSchema: object(zodFields) });
 			}
 		});
-
+		if (isAnthropic) return aiSdkTools;
 		buildResearchTools();
 
 		const googleIncompatible = (!['google', 'gemini'].some(prefix => model.startsWith(prefix)) || Object.keys(aiSdkTools).length > 0);
@@ -851,66 +699,41 @@ function buildAiSdkTools(model: string, userTools: any[] | undefined): Record<st
 				} : {})
 			});
 			aiSdkTools.code_interpreter = openai.tools.codeInterpreter({});
+		} else if (model.startsWith('anthropic')) {
+			aiSdkTools.web_search = anthropic.tools.webSearch_20250305({
+				maxUses: isResearchMode ? 18 : 4,
+				...(!isResearchMode && geo ? {
+					userLocation: {
+						type: 'approximate',
+						...(geo.city && { city: geo.city }),
+						...(geo.subdivision?.name && { region: geo.subdivision.name }),
+						...(geo.country?.code && { country: geo.country.code }),
+						...(geo.timezone && { timezone: geo.timezone }),
+					}
+				} : {})
+			});
+			aiSdkTools.code_execution = anthropic.tools.codeExecution_20250522()
 		} else if (googleIncompatible && !model.startsWith('xai')) {
 			if (tavilyApiKey) aiSdkTools.web_search = tavilySearchTool;
 		}
 		if (googleIncompatible) {
 			aiSdkTools.fetch = jinaReaderTool;
-			if (!isResearchMode && !model.startsWith('openai') && pythonApiKey && pythonUrl) {
+			if (!isResearchMode && !model.startsWith('openai') && !model.startsWith('anthropic') && pythonApiKey && pythonUrl) {
 				aiSdkTools.python_executor = pythonExecutorTool;
 			}
 		} else {
 			aiSdkTools = {
 				google_search: google.tools.googleSearch({}),
 				url_context: google.tools.urlContext({}),
-				code_execution: google.tools.codeExecution({}),
 			};
+			aiSdkTools.code_execution = google.tools.codeExecution({});
 		}
 	}
 
 	return aiSdkTools;
 }
 
-// Helper function to modify messages for Poe provider
-function modifyMessagesForPoe(messages: any[], reasoning_effort?: string): any[] {
-	if (!reasoning_effort) return messages;
-
-	// Find the last user message
-	const modifiedMessages = [...messages];
-	for (let i = modifiedMessages.length - 1; i >= 0; i--) {
-		const message = modifiedMessages[i];
-		if (message.role === 'user') {
-			// Clone the message to avoid mutating the original
-			const modifiedMessage = { ...message };
-
-			// Handle different content types
-			if (typeof modifiedMessage.content === 'string') {
-				modifiedMessage.content = `${modifiedMessage.content} --reasoning_effort "${reasoning_effort}"`;
-			} else if (Array.isArray(modifiedMessage.content)) {
-				// Find the last text part and append to it
-				const contentCopy = [...modifiedMessage.content];
-				for (let j = contentCopy.length - 1; j >= 0; j--) {
-					const part = contentCopy[j];
-					if (part.type === 'text' && typeof part.text === 'string') {
-						contentCopy[j] = {
-							...part,
-							text: `${part.text} --reasoning_effort "${reasoning_effort}"`
-						};
-						break;
-					}
-				}
-				modifiedMessage.content = contentCopy;
-			}
-
-			modifiedMessages[i] = modifiedMessage;
-			break;
-		}
-	}
-
-	return modifiedMessages;
-}
-
-const buildCommonOptions = (
+const buildCommonOptions = async (
 	gw: any,
 	attempt: Attempt,
 	params: {
@@ -930,10 +753,13 @@ const buildCommonOptions = (
 		reasoning_effort?: string,
 	}
 ) => {
-	// Modify messages for Poe provider if reasoning_effort is provided
-	const finalMessages = attempt.name === 'poe' ?
-		modifyMessagesForPoe(params.messages, params.reasoning_effort) :
-		params.messages;
+	let finalMessages;
+	if (attempt.name === 'poe' && params.reasoning_effort) {
+		const { modifyMessagesForPoe } = await import('./modules/poe.mts');
+		finalMessages = modifyMessagesForPoe(params.messages, params.reasoning_effort);
+	} else {
+		finalMessages = params.messages;
+	}
 
 	return {
 		model: gw(attempt.model),
@@ -950,7 +776,7 @@ const buildCommonOptions = (
 		toolChoice: params.tool_choice,
 		abortSignal: params.abortSignal,
 		providerOptions: params.providerOptions,
-		stopWhen: [stepCountIs(20)],
+		stopWhen: [stepCountIs(isResearchMode ? 20 : 5)],
 		maxRetries: 0,
 		onError: () => { }
 	} as any;
@@ -1578,11 +1404,10 @@ app.use('*', cors({
 }))
 
 app.post('/v1/responses', async (c: Context) => {
-	const authHeader = c.req.header('Authorization');
-	const apiKey = authHeader?.split(' ')[1] || null;
+	const authHeader = c.req.header('Authorization')?.split(' ')[1] || null;
 	const envPassword = process.env.PASSWORD;
-	const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
-	if (!apiKey) return c.text('Unauthorized', 401);
+	const isPasswordAuth = !!(envPassword && authHeader && envPassword.trim() === authHeader.trim());
+	if (!authHeader) return c.text('Unauthorized', 401);
 
 	const abortController = new AbortController();
 	if (c.req.raw?.signal) {
@@ -1616,21 +1441,22 @@ app.post('/v1/responses', async (c: Context) => {
 		store = true,
 	} = body || {};
 	const now = Date.now();
+	const headers = c.req.raw.headers;
 	const responseId = request_id || 'resp_' + new Date(now).toISOString().slice(0, 16).replace(/[-:T]/g, '');
 	if (typeof model === 'string' && (model.startsWith('image/') || model.startsWith('video/') || model.startsWith('admin/'))) {
 		// Build AI SDK-style messages from Responses input (streamlined for modules)
 		const mapped = responsesInputToAiSdkMessages(input);
 		if (model.startsWith('image/')) {
 			const { handleImageForResponses } = await import('./modules/images.mts');
-			return await handleImageForResponses({ model, messages: mapped, headers: c.req.raw.headers as any, stream: !!stream, temperature, top_p, request_id: responseId, authHeader: authHeader || null, isPasswordAuth });
+			return await handleImageForResponses({ model, messages: mapped, headers, stream: !!stream, temperature, top_p, request_id: responseId, authHeader: authHeader || null, isPasswordAuth });
 		}
 		if (model.startsWith('video/')) {
 			const { handleVideoForResponses } = await import('./modules/videos.mts');
-			return await handleVideoForResponses({ model, messages: mapped, headers: c.req.raw.headers as any, stream: !!stream, request_id: responseId, authHeader: authHeader || null, isPasswordAuth });
+			return await handleVideoForResponses({ model, messages: mapped, headers, stream: !!stream, request_id: responseId, authHeader: authHeader || null, isPasswordAuth });
 		}
 		if (model.startsWith('admin/')) {
 			const { handleAdminForResponses } = await import('./modules/management.mts');
-			return await handleAdminForResponses({ messages: mapped, headers: c.req.raw.headers as any, model, request_id: responseId, stream: !!stream, isPasswordAuth });
+			return await handleAdminForResponses({ messages: mapped, headers, model, request_id: responseId, stream: !!stream, isPasswordAuth });
 		}
 	}
 	// Headers and aux keys
@@ -1639,10 +1465,6 @@ app.post('/v1/responses', async (c: Context) => {
 	pythonUrl = c.req.header('x-python-url') || (isPasswordAuth ? process.env.PYTHON_URL || null : null);
 	semanticScholarApiKey = c.req.header('x-semantic-scholar-api-key') || (isPasswordAuth ? process.env.SEMANTIC_SCHOLAR_API_KEY || null : null);
 	// Provider keys and headers map
-	const headers: Record<string, string> = {};
-	c.req.raw.headers.forEach((value, key) => {
-		headers[key.toLowerCase().replace(/-/g, '_')] = value;
-	});
 	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
 	const getResponsesMessages = async (): Promise<any[]> => {
 		// Seed from previous stored conversation if provided
@@ -1706,7 +1528,7 @@ app.post('/v1/responses', async (c: Context) => {
 		search = true;
 	}
 
-	const { providersToTry } = prepareProvidersToTry({ model: modelId, providerKeys, isPasswordAuth, authApiKey: apiKey });
+	const { providersToTry } = prepareProvidersToTry({ model: modelId, providerKeys, isPasswordAuth, authApiKey: authHeader });
 	const providerOptionsHeader = c.req.header('x-provider-options');
 	const providerOptions = buildDefaultProviderOptions({
 		providerOptionsHeader: providerOptionsHeader ?? null,
@@ -1814,8 +1636,14 @@ app.post('/v1/responses', async (c: Context) => {
 
 						// Check if this is Poe provider
 						isPoeProvider = attempt.name === 'poe';
+						let startsWithThinking: (text: string) => boolean = () => false;
+						let findThinkingIndex: (text: string) => number = () => -1;
+						let cleanPoeReasoningDelta = (delta: string, isFirstDelta: boolean = false) => delta;
+						if (isPoeProvider) {
+							({ startsWithThinking, findThinkingIndex, cleanPoeReasoningDelta } = await import('./modules/poe.mts'));
+						}
 
-						const commonOptions = buildCommonOptions(gw, attempt, commonParams);
+						const commonOptions = await buildCommonOptions(gw, attempt, commonParams);
 						const result = streamText(commonOptions);
 
 						for await (const part of (result as any).fullStream) {
@@ -2804,7 +2632,7 @@ app.post('/v1/responses', async (c: Context) => {
 		if (!attempt) continue;
 		try {
 			const gw = await getGatewayForAttempt(attempt);
-			const commonOptions = buildCommonOptions(gw, attempt, commonParams);
+			const commonOptions = await buildCommonOptions(gw, attempt, commonParams);
 			const result = await generateText(commonOptions);
 			const toolCalls = result.toolCalls;
 
@@ -2813,6 +2641,7 @@ app.post('/v1/responses', async (c: Context) => {
 			let reasoningContent = result.reasoningText || '';
 
 			if (attempt.name === 'poe' && content && !reasoningContent) {
+				const { extractPoeReasoning } = await import('./modules/poe.mts');
 				const extracted = extractPoeReasoning(content);
 				content = extracted.content;
 				reasoningContent = extracted.reasoning;
@@ -2992,13 +2821,12 @@ app.post('/v1/responses', async (c: Context) => {
 });
 
 app.post('/v1/chat/completions', async (c: Context) => {
-	const authHeader = c.req.header('Authorization');
-	let apiKey = authHeader?.split(' ')[1];
+	const authHeader = c.req.header('Authorization')?.split(' ')[1] || null;
 
 	const envPassword = process.env.PASSWORD;
-	const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
+	const isPasswordAuth = !!(envPassword && authHeader && envPassword.trim() === authHeader.trim());
 
-	if (!apiKey) {
+	if (!authHeader) {
 		return c.text('Unauthorized', 401);
 	}
 
@@ -3045,24 +2873,19 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	} = body;
 	const contextMessages = (typeof model === 'string' && model.toLowerCase().includes('image')) ? messages : addContextMessages(messages, c);
 	const processedMessages = await processChatMessages(contextMessages);
-
+	const headers = c.req.raw.headers;
 	if (typeof model === 'string' && model.startsWith('image/')) {
 		const { handleImageForChat } = await import('./modules/images.mts');
-		return await handleImageForChat({ model, messages: processedMessages, headers: c.req.raw.headers as any, stream: !!stream, temperature, top_p, authHeader: authHeader || null, isPasswordAuth });
+		return await handleImageForChat({ model, messages: processedMessages, headers, stream: !!stream, temperature, top_p, authHeader: authHeader || null, isPasswordAuth });
 	}
 	if (typeof model === 'string' && model.startsWith('video/')) {
 		const { handleVideoForChat } = await import('./modules/videos.mts');
-		return await handleVideoForChat({ model, messages: processedMessages, headers: c.req.raw.headers as any, stream: !!stream, authHeader: authHeader || null, isPasswordAuth });
+		return await handleVideoForChat({ model, messages: processedMessages, headers, stream: !!stream, authHeader: authHeader || null, isPasswordAuth });
 	}
 	if (typeof model === 'string' && model.startsWith('admin/')) {
 		const { handleAdminForChat } = await import('./modules/management.mts');
-		return await handleAdminForChat({ messages: processedMessages, headers: c.req.raw.headers as any, model, stream: !!stream, isPasswordAuth });
+		return await handleAdminForChat({ messages: processedMessages, headers, model, stream: !!stream, isPasswordAuth });
 	}
-
-	const headers: Record<string, string> = {}
-	c.req.raw.headers.forEach((value, key) => {
-		headers[key.toLowerCase().replace(/-/g, '_')] = value
-	})
 	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
 	let modelId: string = model;
 	let thinkingConfig: Record<string, any> = thinking;
@@ -3100,7 +2923,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	} else {
 		search = true;
 	}
-	const { providersToTry } = prepareProvidersToTry({ model: modelId, providerKeys, isPasswordAuth, authApiKey: apiKey });
+	const { providersToTry } = prepareProvidersToTry({ model: modelId, providerKeys, isPasswordAuth, authApiKey: authHeader });
 	const providerOptionsHeader = c.req.header('x-provider-options');
 	const providerOptions = buildDefaultProviderOptions({
 		providerOptionsHeader: providerOptionsHeader ?? null,
@@ -3157,8 +2980,14 @@ app.post('/v1/chat/completions', async (c: Context) => {
 
 						// Check if this is Poe provider
 						isPoeProvider = attempt.name === 'poe';
+						let startsWithThinking = (text: string) => false;
+						let findThinkingIndex = (text: string) => -1;
+						let cleanPoeReasoningDelta = (text: string, isFirstDelta = false) => text;
+						if (isPoeProvider) {
+							({ startsWithThinking, findThinkingIndex, cleanPoeReasoningDelta } = await import('./modules/poe.mts'));
+						}
 
-						const commonOptions = buildCommonOptions(gw, attempt, commonParams);
+						const commonOptions = await buildCommonOptions(gw, attempt, commonParams);
 
 						const result = streamText(commonOptions);
 						// Forward chunks; on error, try next key/provider
@@ -3449,7 +3278,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 		try {
 			attemptsTried++;
 			const gw = await getGatewayForAttempt(provider);
-			const commonOptions = buildCommonOptions(gw, provider, commonParams);
+			const commonOptions = await buildCommonOptions(gw, provider, commonParams);
 
 			const result = await generateText(commonOptions);
 
@@ -3476,6 +3305,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 
 			// Handle Poe-specific reasoning extraction for non-streaming
 			if (provider.name === 'poe' && content && !reasoningContent) {
+				const { extractPoeReasoning } = await import('./modules/poe.mts');
 				const extracted = extractPoeReasoning(content);
 				content = extracted.content;
 				reasoningContent = extracted.reasoning;
@@ -3603,6 +3433,779 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	return c.json(errorPayload, statusCode);
 })
 
+const processAnthropicMessages = async (contextMessages: any[]): Promise<any[]> => {
+	const processedMessages: any[] = [];
+
+	for (let mi = 0; mi < contextMessages.length; mi++) {
+		const message = contextMessages[mi];
+		if (!message) continue;
+		const role = message.role;
+
+		// Handle tool_result messages by converting them to assistant messages with tool_use_result format
+		if (role === 'user' && Array.isArray(message.content)) {
+			const toolResults = message.content.filter((block: any) => block.type === 'tool_result');
+			const otherContent = message.content.filter((block: any) => block.type !== 'tool_result');
+
+			// Process non-tool-result content first
+			if (otherContent.length > 0) {
+				let processedMessage = { ...message };
+				processedMessage.content = [];
+
+				for (const contentBlock of otherContent) {
+					if (!contentBlock || typeof contentBlock !== 'object') continue;
+
+					switch (contentBlock.type) {
+						case 'text':
+							processedMessage.content.push({
+								type: 'text',
+								text: contentBlock.text || ''
+							});
+							break;
+
+						case 'image':
+							if (contentBlock.source?.type === 'base64' && contentBlock.source?.data) {
+								const base64Data = contentBlock.source.data;
+								const mediaType = contentBlock.source.media_type || 'image/png';
+								const dataUrl = `data:${mediaType};base64,${base64Data}`;
+								processedMessage.content.push({
+									type: 'image',
+									image: dataUrl
+								});
+							}
+							break;
+
+						case 'document':
+							if (contentBlock.source?.type === 'base64' && contentBlock.source?.data) {
+								const base64Data = contentBlock.source.data;
+								const mediaType = contentBlock.source.media_type || 'application/pdf';
+								const title = contentBlock.title || 'document';
+								const dataUrl = `data:${mediaType};base64,${base64Data}`;
+								processedMessage.content.push({
+									type: 'file',
+									data: dataUrl,
+									mediaType: mediaType,
+									name: title
+								});
+							}
+							break;
+
+						default:
+							processedMessage.content.push(contentBlock);
+							break;
+					}
+				}
+
+				if (processedMessage.content.length > 0) {
+					processedMessages.push(processedMessage);
+				}
+			}
+
+			// Process tool_result messages by creating assistant messages with tool_use_result format
+			for (const toolResult of toolResults) {
+				// Find the corresponding tool_use from previous messages to get name and input
+				let toolName = 'unknown_tool';
+				let toolInput = '{}';
+
+				// Look backwards through the context to find the tool_use with matching id
+				for (let i = mi - 1; i >= 0; i--) {
+					const prevMsg = contextMessages[i];
+					if (prevMsg && Array.isArray(prevMsg.content)) {
+						const toolUse = prevMsg.content.find((block: any) =>
+							block.type === 'tool_use' && block.id === toolResult.tool_use_id
+						);
+						if (toolUse) {
+							toolName = toolUse.name;
+							toolInput = JSON.stringify(toolUse.input || {});
+							break;
+						}
+					}
+				}
+
+				// Create assistant message with tool_use_result format
+				const assistantMessage = {
+					role: 'assistant',
+					content: `<tool_use_result>\n  <name>${toolName}</name>\n  <arguments>${toolInput}</arguments>\n  <result>${toolResult.content}</result>\n</tool_use_result>`
+				};
+				// {
+				// 	role: 'tool',
+				// 	content: [{
+				// 		type: 'tool-result',
+				// 		toolName: toolName,
+				// 		toolCallId: toolResult.tool_use_id,
+				// 		result: typeof toolResult.content === 'string' ? toolResult.content : JSON.stringify(toolResult.content)
+				// 	}]
+				// };
+
+				processedMessages.push(assistantMessage);
+			}
+		} else {
+			// Handle regular messages (non-tool-result)
+			let processedMessage = { ...message };
+
+			// Handle different content formats
+			if (typeof message.content === 'string' && role !== 'system') {
+				processedMessage.content = [{ type: 'text', text: message.content }];
+			} else if (Array.isArray(message.content)) {
+				const processedContent: any[] = [];
+
+				for (const contentBlock of message.content) {
+					if (!contentBlock || typeof contentBlock !== 'object') continue;
+
+					switch (contentBlock.type) {
+						case 'text':
+							processedContent.push({
+								type: 'text',
+								text: contentBlock.text || ''
+							});
+							break;
+
+						case 'image':
+							if (contentBlock.source?.type === 'base64' && contentBlock.source?.data) {
+								const base64Data = contentBlock.source.data;
+								const mediaType = contentBlock.source.media_type || 'image/png';
+								const dataUrl = `data:${mediaType};base64,${base64Data}`;
+								processedContent.push({
+									type: 'image',
+									image: dataUrl
+								});
+							}
+							break;
+
+						case 'document':
+							if (contentBlock.source?.type === 'base64' && contentBlock.source?.data) {
+								const base64Data = contentBlock.source.data;
+								const mediaType = contentBlock.source.media_type || 'application/pdf';
+								const title = contentBlock.title || 'document';
+								const dataUrl = `data:${mediaType};base64,${base64Data}`;
+								processedContent.push({
+									type: 'file',
+									data: dataUrl,
+									mediaType: mediaType,
+									name: title
+								});
+							}
+							break;
+
+						case 'web_search_tool_result':
+							break;
+
+						case 'tool_use':
+							// processedContent.push({
+							// 	type: 'tool-call',
+							// 	toolCallId: contentBlock.id,
+							// 	toolName: contentBlock.name,
+							// 	input: contentBlock.input || {}
+							// });
+							break;
+
+						default:
+							processedContent.push(contentBlock);
+							break;
+					}
+				}
+
+				processedMessage.content = processedContent;
+			} else if (typeof message.content === 'object' && message.content?.text) {
+				processedMessage.content = [{ type: 'text', text: message.content.text }];
+			}
+
+			processedMessages.push(processedMessage);
+		}
+	}
+
+	return processedMessages;
+}
+
+app.post('/v1/messages', async (c: Context) => {
+	const authHeader = c.req.header('x-api-key') || c.req.header('Authorization')?.split(' ')[1] || null;
+
+	const envPassword = process.env.PASSWORD;
+	const isPasswordAuth = !!(envPassword && authHeader && envPassword.trim() === authHeader.trim());
+
+	if (!authHeader) {
+		return c.text('Unauthorized', 401);
+	}
+
+	const abortController = new AbortController();
+	if (c.req.raw?.signal) {
+		c.req.raw.signal.addEventListener('abort', () => {
+			abortController.abort();
+		});
+		if (c.req.raw.signal.aborted) {
+			abortController.abort();
+		}
+	}
+
+	// Get headers for auxiliary services
+	tavilyApiKey = c.req.header('x-tavily-api-key') || (isPasswordAuth ? process.env.TAVILY_API_KEY || null : null);
+	pythonApiKey = c.req.header('x-python-api-key') || (isPasswordAuth ? process.env.PYTHON_API_KEY || null : null);
+	pythonUrl = c.req.header('x-python-url') || (isPasswordAuth ? process.env.PYTHON_URL || null : null);
+	semanticScholarApiKey = c.req.header('x-semantic-scholar-api-key') || (isPasswordAuth ? process.env.SEMANTIC_SCHOLAR_API_KEY || null : null);
+
+	const body = await c.req.json();
+	const {
+		model,
+		messages = [],
+		system,
+		tools,
+		stream = false,
+		temperature,
+		top_p,
+		top_k,
+		max_tokens,
+		service_tier,
+		stop_sequences,
+		tool_choice,
+		thinking
+	} = body;
+
+	// Convert Anthropic format to internal format - combine system message with messages
+	const contextMessages = (() => {
+		if (!system) return messages;
+
+		if (Array.isArray(system)) {
+			const systemMessages = system.map(item => ({
+				role: 'system',
+				content: item?.text
+			}));
+			return [...systemMessages, ...messages];
+		}
+	})();
+
+	const processedMessages = await processAnthropicMessages(contextMessages);
+
+	const headers = c.req.raw.headers;
+	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
+
+	let modelId: string = model;
+	let search: boolean = false;
+
+	const messageText = processedMessages.map((msg: any) =>
+		typeof msg.content === 'string'
+			? msg.content.toLowerCase()
+			: Array.isArray(msg.content)
+				? msg.content.map((p: any) => (p?.text || '')).join(' ').toLowerCase()
+				: ''
+	).join(' ');
+
+	// Use existing shared function for tools
+	const aiSdkTools: Record<string, any> = buildAiSdkTools(modelId, tools);
+	if (Object.keys(aiSdkTools).length > 0) {
+		search = true;
+	}
+
+	const { providersToTry } = prepareProvidersToTry({ model: modelId, providerKeys, isPasswordAuth, authApiKey: authHeader });
+	const providerOptionsHeader = c.req.header('x-provider-options');
+	const providerOptions = buildDefaultProviderOptions({
+		providerOptionsHeader: providerOptionsHeader ?? null,
+		thinking,
+		service_tier,
+		store: false,
+		model: modelId,
+		search,
+	});
+
+	const commonParams = {
+		messages: processedMessages,
+		aiSdkTools,
+		temperature,
+		top_p,
+		top_k,
+		max_tokens,
+		stop_sequences,
+		tool_choice: tool_choice?.type || 'auto',
+		abortSignal: abortController.signal,
+		providerOptions,
+	};
+
+	const maxAttempts = Math.min(providersToTry.length, MAX_ATTEMPTS);
+	const messageId = randomId('msg');
+
+	if (stream) {
+		// Anthropic streaming format
+		const streamResponse = new ReadableStream({
+			async start(controller) {
+				let attemptsTried = 0;
+				let lastStreamError: any = null;
+				let accumulatedText = '';
+
+				for (let i = 0; i < maxAttempts; i++) {
+					if (abortController.signal.aborted) break;
+					const attempt = providersToTry[i];
+					if (!attempt) continue;
+					try {
+						attemptsTried++;
+						const gw = await getGatewayForAttempt(attempt);
+						const commonOptions = await buildCommonOptions(gw, attempt, commonParams);
+						const result = streamText(commonOptions);
+
+						// Send message_start event
+						const startEvent = {
+							type: 'message_start',
+							message: {
+								id: messageId,
+								type: 'message',
+								role: 'assistant',
+								content: [],
+								model: modelId,
+								stop_reason: null,
+								stop_sequence: null,
+								usage: { input_tokens: 0, output_tokens: 0 }
+							}
+						};
+						controller.enqueue(TEXT_ENCODER.encode(`event: message_start\ndata: ${JSON.stringify(startEvent)}\n\n`));
+
+						let contentBlockIndex = 0;
+						let contentBlockStarted = false;
+
+						for await (const part of (result as any).fullStream) {
+							if (abortController.signal.aborted) throw new Error('aborted');
+
+							switch (part.type) {
+								case 'reasoning-start':
+									if (contentBlockStarted) {
+										const contentBlockStop = {
+											type: 'content_block_stop',
+											index: contentBlockIndex
+										};
+										controller.enqueue(TEXT_ENCODER.encode(`event: content_block_stop\ndata: ${JSON.stringify(contentBlockStop)}\n\n`));
+										contentBlockIndex++;
+										contentBlockStarted = false;
+									}
+
+									const thinkingStart = {
+										type: 'content_block_start',
+										index: contentBlockIndex,
+										content_block: {
+											type: 'thinking',
+											signature: '',
+											thinking: ''
+										}
+									};
+									controller.enqueue(TEXT_ENCODER.encode(`event: content_block_start\ndata: ${JSON.stringify(thinkingStart)}\n\n`));
+									contentBlockStarted = true;
+									break;
+								case 'reasoning-delta':
+									if (!contentBlockStarted) {
+										const thinkingStart = {
+											type: 'content_block_start',
+											index: contentBlockIndex,
+											content_block: {
+												type: 'thinking',
+												signature: '',
+												thinking: ''
+											}
+										};
+										controller.enqueue(TEXT_ENCODER.encode(`event: content_block_start\ndata: ${JSON.stringify(thinkingStart)}\n\n`));
+										contentBlockStarted = true;
+									}
+									const thinkingText = part.delta || part.text || '';
+									const delta = {
+										type: 'content_block_delta',
+										index: contentBlockIndex,
+										delta: {
+											type: 'thinking_delta',
+											thinking: thinkingText
+										}
+									};
+									controller.enqueue(TEXT_ENCODER.encode(`event: content_block_delta\ndata: ${JSON.stringify(delta)}\n\n`));
+									break;
+								case 'reasoning-end':
+									const contentBlockStop = {
+										type: 'content_block_stop',
+										index: contentBlockIndex
+									};
+									controller.enqueue(TEXT_ENCODER.encode(`event: content_block_stop\ndata: ${JSON.stringify(contentBlockStop)}\n\n`));
+									contentBlockIndex++;
+									contentBlockStarted = false;
+									break;
+								case 'source': {
+									// Accumulate sources for later inclusion in content_part.done
+									accumulatedSources.push({
+										title: part.title || '',
+										url: part.url || '',
+										type: part.sourceType + '_citation',
+										start_index: 0,
+										end_index: 0
+									});
+									break;
+								}
+								case 'text-start':
+									if (contentBlockStarted) {
+										const contentBlockStop = {
+											type: 'content_block_stop',
+											index: contentBlockIndex
+										};
+										controller.enqueue(TEXT_ENCODER.encode(`event: content_block_stop\ndata: ${JSON.stringify(contentBlockStop)}\n\n`));
+										contentBlockIndex++;
+										contentBlockStarted = false;
+									}
+									// Start new text content block
+									const textBlockStart = {
+										type: 'content_block_start',
+										index: contentBlockIndex,
+										content_block: { type: 'text', text: '' }
+									};
+									controller.enqueue(TEXT_ENCODER.encode(`event: content_block_start\ndata: ${JSON.stringify(textBlockStart)}\n\n`));
+									contentBlockStarted = true;
+									break;
+								case 'text-delta':
+									if (!contentBlockStarted) {
+										const contentBlockStart = {
+											type: 'content_block_start',
+											index: contentBlockIndex,
+											content_block: { type: 'text', text: '' }
+										};
+										controller.enqueue(TEXT_ENCODER.encode(`event: content_block_start\ndata: ${JSON.stringify(contentBlockStart)}\n\n`));
+										contentBlockStarted = true;
+									}
+
+									const text = part.text;
+									accumulatedText += text;
+
+									const data = {
+										type: 'content_block_delta',
+										index: contentBlockIndex,
+										delta: { type: 'text_delta', text: text }
+									};
+									controller.enqueue(TEXT_ENCODER.encode(`event: content_block_delta\ndata: ${JSON.stringify(data)}\n\n`));
+									break;
+
+								case 'text-end':
+									if (contentBlockStarted) {
+										const contentBlockStop = {
+											type: 'content_block_stop',
+											index: contentBlockIndex
+										};
+										controller.enqueue(TEXT_ENCODER.encode(`event: content_block_stop\ndata: ${JSON.stringify(contentBlockStop)}\n\n`));
+										contentBlockIndex++;
+										contentBlockStarted = false;
+									}
+									break;
+
+								case 'tool-input-start':
+									if (contentBlockStarted) {
+										const contentBlockStop = {
+											type: 'content_block_stop',
+											index: contentBlockIndex
+										};
+										controller.enqueue(TEXT_ENCODER.encode(`event: content_block_stop\ndata: ${JSON.stringify(contentBlockStop)}\n\n`));
+										contentBlockIndex++;
+										contentBlockStarted = false;
+									}
+									if (!EXCLUDED_TOOLS.has(part.toolName)) {
+										const toolInputStart = {
+											type: 'content_block_start',
+											index: contentBlockIndex,
+											content_block: {
+												type: 'tool_use',
+												id: part.id,
+												name: part.toolName,
+												input: {}
+											}
+										};
+										controller.enqueue(TEXT_ENCODER.encode(`event: content_block_start\ndata: ${JSON.stringify(toolInputStart)}\n\n`));
+										contentBlockStarted = true;
+									}
+									break;
+
+								case 'tool-input-delta':
+									if (contentBlockStarted) {
+										const delta = {
+											type: 'content_block_delta',
+											index: contentBlockIndex,
+											delta: {
+												type: 'input_json_delta',
+												partial_json: part.delta || ''
+											}
+										};
+										controller.enqueue(TEXT_ENCODER.encode(`event: content_block_delta\ndata: ${JSON.stringify(delta)}\n\n`));
+									}
+									break;
+
+								case 'tool-call':
+									if (contentBlockStarted) {
+										const contentBlockStop = {
+											type: 'content_block_stop',
+											index: contentBlockIndex
+										};
+										controller.enqueue(TEXT_ENCODER.encode(`event: content_block_stop\ndata: ${JSON.stringify(contentBlockStop)}\n\n`));
+										contentBlockIndex++;
+										contentBlockStarted = false;
+									}
+									if (EXCLUDED_TOOLS.has(part.toolName)) {
+										break; // Wait for Cherry Studio to fix their bug with server_tool_use
+										// Server tool use event
+										const serverToolUseStart = {
+											type: 'content_block_start',
+											index: contentBlockIndex,
+											content_block: {
+												type: 'server_tool_use',
+												id: part.toolCallId,
+												name: SEARCH_TOOLS.has(part.toolName) ? 'web_search' : 'code_execution',
+												input: part.input || {}
+											}
+										};
+										controller.enqueue(TEXT_ENCODER.encode(`event: content_block_start\ndata: ${JSON.stringify(serverToolUseStart)}\n\n`));
+
+										const serverToolUseStop = {
+											type: 'content_block_stop',
+											index: contentBlockIndex
+										};
+										controller.enqueue(TEXT_ENCODER.encode(`event: content_block_stop\ndata: ${JSON.stringify(serverToolUseStop)}\n\n`));
+										contentBlockIndex++;
+										contentBlockStarted = false;
+									}
+									break;
+								case 'finish':
+									if (contentBlockStarted) {
+										const contentBlockStop = {
+											type: 'content_block_stop',
+											index: contentBlockIndex
+										};
+										controller.enqueue(TEXT_ENCODER.encode(`event: content_block_stop\ndata: ${JSON.stringify(contentBlockStop)}\n\n`));
+										contentBlockIndex++;
+										contentBlockStarted = false;
+									}
+
+									// Add accumulated sources as single web_search_tool_result content block
+									if (accumulatedSources.length > 0) {
+										const sourceBlockStart = {
+											type: 'content_block_start',
+											index: contentBlockIndex,
+											content_block: {
+												type: 'web_search_tool_result',
+												tool_use_id: 'web_search_' + Date.now(),
+												content: accumulatedSources.map(source => ({
+													type: 'web_search_result',
+													title: source.title,
+													url: source.url,
+													encrypted_content: ''
+												}))
+											}
+										};
+										controller.enqueue(TEXT_ENCODER.encode(`event: content_block_start\ndata: ${JSON.stringify(sourceBlockStart)}\n\n`));
+
+										const sourceBlockStop = {
+											type: 'content_block_stop',
+											index: contentBlockIndex
+										};
+										controller.enqueue(TEXT_ENCODER.encode(`event: content_block_stop\ndata: ${JSON.stringify(sourceBlockStop)}\n\n`));
+										contentBlockIndex++;
+										// Reset accumulated sources
+										accumulatedSources = [];
+									}
+
+									const stopReason = part.finishReason === 'tool-calls' ? 'tool_use' : 'end_turn';
+									const usage = {
+										input_tokens: part.totalUsage?.inputTokens || 0,
+										output_tokens: part.totalUsage?.outputTokens || 0,
+										cache_read_input_tokens: part.totalUsage?.cachedInputTokens || 0,
+										service_tier: providerOptions.service_tier || 'standard'
+									};
+
+									const messageDelta = {
+										type: 'message_delta',
+										delta: { stop_reason: stopReason, stop_sequence: null },
+										usage
+									};
+									controller.enqueue(TEXT_ENCODER.encode(`event: message_delta\ndata: ${JSON.stringify(messageDelta)}\n\n`));
+
+									const messageStop = { type: 'message_stop' };
+									controller.enqueue(TEXT_ENCODER.encode(`event: message_stop\ndata: ${JSON.stringify(messageStop)}\n\n`));
+									controller.close();
+									return;
+
+								case 'error':
+									const errInfo = (part as any)?.error || {};
+									const code = errInfo?.statusCode || 'ERR';
+									const responseBody = JSON.parse(errInfo.responseBody || '{}');
+									const message = responseBody.errors?.[0]?.message || responseBody.error?.metadata?.raw || errInfo.message || errInfo;
+									if ([429, 401, 402].includes(code)) {
+										const e = new Error(message);
+										(e as any).statusCode = code;
+										(e as any).type = errInfo?.type || 'provider_error';
+										throw e;
+									}
+									i = maxAttempts;
+									const errorEvent = {
+										type: 'error',
+										error: { type: 'api_error', message: message }
+									};
+									controller.enqueue(TEXT_ENCODER.encode(`event: error\ndata: ${JSON.stringify(errorEvent)}\n\n`));
+									console.error(`Error with provider ${attempt.name}: ${message}`);
+									break;
+							}
+						}
+					} catch (error: any) {
+						if (abortController.signal.aborted || error?.message === 'aborted' || error?.name === 'AbortError') {
+							const errorEvent = {
+								type: 'error',
+								error: { type: 'api_error', message: 'Request was aborted by the user' }
+							};
+							controller.enqueue(TEXT_ENCODER.encode(`event: error\ndata: ${JSON.stringify(errorEvent)}\n\n`));
+							controller.close();
+							return;
+						}
+						lastStreamError = error;
+						console.error(`Error with provider: ${attempt.name} (${i + 1}/${maxAttempts}): ${error.message}`);
+						continue;
+					}
+				}
+
+				// All attempts failed
+				if (lastStreamError) {
+					const statusCode = lastStreamError?.statusCode || 500;
+					const errMsg = lastStreamError?.message || 'An unknown error occurred';
+					const errorEvent = {
+						type: 'error',
+						error: { type: 'api_error', message: `${statusCode} All ${attemptsTried} attempt(s) failed. Last error: ${errMsg}` }
+					};
+					controller.enqueue(TEXT_ENCODER.encode(`event: error\ndata: ${JSON.stringify(errorEvent)}\n\n`));
+				}
+				controller.close();
+			},
+		});
+		return new Response(streamResponse, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
+	}
+
+	// Non-streaming Anthropic response format
+	let lastError: any;
+	let attemptsTried = 0;
+	for (let i = 0; i < maxAttempts; i++) {
+		const provider = providersToTry[i];
+		if (!provider) continue;
+		try {
+			attemptsTried++;
+			const gw = await getGatewayForAttempt(provider);
+			const commonOptions = await buildCommonOptions(gw, provider, commonParams);
+
+			const result = await generateText(commonOptions);
+
+			const sources = result.sources ? result.sources.map((source: any) => ({
+				title: source.title || '',
+				url: source.url || '',
+				type: (source.sourceType || 'url') + '_citation',
+				start_index: source.start_index || 0,
+				end_index: source.end_index || 0
+			})) : [];
+			accumulatedSources.push(...sources);
+
+			let content = result.text || '';
+			let reasoningContent = result.reasoningText || '';
+			const stopReason = result.finishReason === 'tool-calls' ? 'tool_use' : 'end_turn';
+
+			// Build Anthropic content array
+			const contentArray: any[] = [];
+
+			// Add thinking content if present
+			if (reasoningContent) {
+				contentArray.push({
+					type: 'thinking',
+					signature: '',
+					thinking: reasoningContent
+				});
+			}
+
+			if (content) {
+				contentArray.push({ type: 'text', text: content });
+			}
+
+			// Add tool calls if present
+			if (result.toolCalls && Array.isArray(result.toolCalls)) {
+				for (const tc of result.toolCalls) {
+					if (EXCLUDED_TOOLS.has(tc.toolName)) {
+						// Server tool use
+						contentArray.push({
+							type: 'server_tool_use',
+							id: tc.toolCallId,
+							name: SEARCH_TOOLS.has(tc.toolName) ? 'web_search' : 'code_execution',
+							input: tc.input || {}
+						});
+					} else {
+						// Regular client tool use
+						contentArray.push({
+							type: 'tool_use',
+							id: tc.toolCallId,
+							name: tc.toolName,
+							input: tc.input || {}
+						});
+					}
+				}
+			}
+
+			// Add accumulated sources as single web_search_tool_result content block
+			if (accumulatedSources.length > 0) {
+				contentArray.push({
+					type: 'web_search_tool_result',
+					tool_use_id: 'web_search_' + Date.now(),
+					content: accumulatedSources.map(source => ({
+						type: 'web_search_result',
+						title: source.title,
+						url: source.url,
+						encrypted_content: ''
+					}))
+				});
+				// Reset accumulated sources
+				accumulatedSources = [];
+			}
+
+			// Return Anthropic format response
+			return c.json({
+				id: messageId,
+				type: 'message',
+				role: 'assistant',
+				content: contentArray,
+				model: modelId,
+				stop_reason: stopReason,
+				stop_sequence: null,
+				usage: {
+					input_tokens: result.usage?.inputTokens || 0,
+					output_tokens: result.usage?.outputTokens || 0,
+					cache_read_input_tokens: result.usage?.cachedInputTokens || 0,
+					service_tier: providerOptions.service_tier || 'standard'
+				}
+			});
+
+		} catch (error: any) {
+			lastError = error;
+
+			if (error.name === 'AbortError' || abortController.signal.aborted) {
+				return c.json({
+					type: 'error',
+					error: { type: 'api_error', message: 'Request was aborted by the user' }
+				}, 499 as any);
+			}
+			console.error(`Error with provider: ${provider.name} (${i + 1}/${maxAttempts}): ${JSON.parse(error.responseBody || '{}').error?.metadata?.raw || error.message || error}`);
+			const statusCode = error.statusCode;
+			if (![429, 401, 402].includes(statusCode) || i >= maxAttempts - 1) {
+				break;
+			}
+			continue;
+		}
+	}
+
+	let errorMessage = lastError?.message || 'An unknown error occurred';
+	const statusCode = lastError?.statusCode || 500;
+
+	const rb = lastError?.responseBody || lastError?.cause?.responseBody;
+	if (rb) {
+		try {
+			const obj = typeof rb === 'string' ? JSON.parse(rb) : rb;
+			errorMessage = obj?.error?.metadata?.raw || obj?.error?.message || errorMessage;
+		} catch { }
+	}
+
+	const errorPayload = {
+		type: 'error',
+		error: {
+			type: 'api_error',
+			message: `All ${attemptsTried} attempt(s) failed. Last error: ${errorMessage}`
+		},
+	};
+	return c.json(errorPayload, statusCode);
+})
+
 const CUSTOM_MODEL_LISTS = {
 	poixe: [
 		{ id: 'gpt-5:free', name: 'GPT-5 4K/2K' },
@@ -3630,11 +4233,11 @@ const CUSTOM_MODEL_LISTS = {
 	],
 };
 
-function isSupportedProvider(name: string): name is keyof typeof SUPPORTED_PROVIDERS {
+const isSupportedProvider = (name: string): name is keyof typeof SUPPORTED_PROVIDERS => {
 	return Object.prototype.hasOwnProperty.call(SUPPORTED_PROVIDERS, name);
 }
 
-function shouldIncludeModel(model: any, providerName?: string) {
+const shouldIncludeModel = (model: any, providerName?: string) => {
 	const modelId = String(model.id || '').toLowerCase();
 	const commonExclusions = [
 		'gemma', 'rerank', 'distill', 'parse', 'embed', 'bge-', 'tts', 'phi', 'live', 'audio', 'lite',
@@ -3652,7 +4255,7 @@ function shouldIncludeModel(model: any, providerName?: string) {
 	return true;
 }
 
-async function fetchProviderModels(providerName: string, apiKey: string) {
+const fetchProviderModels = async (providerName: string, apiKey: string) => {
 	if (!isSupportedProvider(providerName)) {
 		throw new Error(`Unsupported provider: ${providerName}`);
 	}
@@ -3692,7 +4295,7 @@ async function fetchProviderModels(providerName: string, apiKey: string) {
 	return data;
 }
 
-async function getModelsResponse(apiKey: string, providerKeys: Record<string, string[]>, isPasswordAuth: boolean = false) {
+const getModelsResponse = async (apiKey: string, providerKeys: Record<string, string[]>, isPasswordAuth: boolean = false) => {
 	let gatewayApiKeys: string[] = [];
 	if (isPasswordAuth) {
 		const gatewayKey = process.env.GATEWAY_API_KEY;
@@ -3823,12 +4426,11 @@ async function getModelsResponse(apiKey: string, providerKeys: Record<string, st
 	throw new Error('All provider(s) failed to return models');
 }
 
-async function handleModelsRequest(c: any) {
-	const authHeader = c.req.header('Authorization');
-	let apiKey = authHeader?.split(' ')[1];
+const handleModelsRequest = async (c: any) => {
+	const authHeader = c.req.header('Authorization').split(' ')[1] || null;
 	const envPassword = process.env.PASSWORD;
-	const isPasswordAuth = !!(envPassword && apiKey && envPassword.trim() === apiKey.trim());
-	if (!apiKey) return c.text('Unauthorized', 401);
+	const isPasswordAuth = !!(envPassword && authHeader && envPassword.trim() === authHeader.trim());
+	if (!authHeader) return c.text('Unauthorized', 401);
 
 	const headers: Record<string, string> = {};
 	c.req.raw.headers.forEach((value: string, key: string) => {
@@ -3837,7 +4439,7 @@ async function handleModelsRequest(c: any) {
 	const providerKeys = await getProviderKeys(headers as any, authHeader || null, isPasswordAuth);
 
 	try {
-		const modelsResponse = await getModelsResponse(apiKey, providerKeys, isPasswordAuth);
+		const modelsResponse = await getModelsResponse(authHeader, providerKeys, isPasswordAuth);
 		c.header('Cache-Control', 'private, max-age=7200');
 		return c.json(modelsResponse);
 	} catch (error: any) {
@@ -3845,7 +4447,7 @@ async function handleModelsRequest(c: any) {
 	}
 }
 
-function parseModelDisplayName(model: string) {
+const parseModelDisplayName = (model: string) => {
 	let baseName = model.split('/').pop() || model;
 	if (baseName.endsWith(':free')) baseName = baseName.slice(0, -5);
 	let displayName = baseName.replace(/-/g, ' ');
@@ -3866,7 +4468,7 @@ function parseModelDisplayName(model: string) {
 	return displayName;
 }
 
-export function parseModelName(model: string) {
+const parseModelName = (model: string) => {
 	const parts = model.split('/');
 	if (parts.length >= 2) {
 		const [providerName, ...modelParts] = parts as [keyof typeof SUPPORTED_PROVIDERS, ...string[]];

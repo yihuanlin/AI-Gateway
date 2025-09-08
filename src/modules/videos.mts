@@ -1,16 +1,16 @@
 import { type WaitResult, lastUserPromptFromMessages, responsesBase, streamChatSingleText, streamResponsesSingleText, streamResponsesGenerationElapsed, streamChatGenerationElapsed, findLinks, hasImageInMessages, sleep } from './utils.mts';
 import { SUPPORTED_PROVIDERS, getProviderKeys } from '../shared/providers.mts';
 
-export function toMarkdownVideo(url: string): string {
+export const toMarkdownVideo = (url: string): string => {
     return `[Generated Video](${url})`;
 }
 
-function ensureRatioInPrompt(prompt: string): string {
+const ensureRatioInPrompt = (prompt: string): string => {
     if (/\s--(rt|ratio)\s/.test(prompt)) return prompt;
     return `${prompt} --ratio 16:9`;
 }
 
-function helpForVideo(model: string) {
+const helpForVideo = (model: string) => {
     if (model.includes('doubao')) {
         return '**Doubao** Video models (supports both t2v and i2v. To use i2v, include an image in your message).\nFlags: `--rs/--resolution 480p|720p|1080p`, `--dur/--duration 3-12`, `--seed -1|[0,2^32-1]`, `--cf/--camerafixed true|false`, `--rt/--ratio 16:9` (default of t2v), 4:3, 1:1, 3:4, 9:16, 21:9, adaptive (default of i2v). Special: `/repeat` (use same image as first and last frame), `/upload` upload input images to storage.';
     } else {
@@ -18,14 +18,14 @@ function helpForVideo(model: string) {
     }
 }
 
-async function buildVideoGenerationWaiter(params: {
+const buildVideoGenerationWaiter = async (params: {
     model: string;
     prompt: string;
     headers: Headers;
     authHeader: string | null;
     isPasswordAuth: boolean;
     contentParts: any[];
-}): Promise<{ ok: true; wait: (signal: AbortSignal) => Promise<WaitResult>; taskId: string } | { ok: false; error: any; status?: number }> {
+}): Promise<{ ok: true; wait: (signal: AbortSignal) => Promise<WaitResult>; taskId: string } | { ok: false; error: any; status?: number }> => {
     const { model, prompt: rawPrompt, headers, authHeader, isPasswordAuth, contentParts } = params;
     const links = findLinks(rawPrompt || '');
     const imgs = hasImageInMessages(contentParts || []);
@@ -278,7 +278,7 @@ async function buildVideoGenerationWaiter(params: {
     }
 }
 
-export async function handleVideoForChat(args: { model: string; messages: any[]; headers: Headers; stream?: boolean; authHeader: string | null; isPasswordAuth: boolean; }): Promise<Response> {
+export const handleVideoForChat = async (args: { model: string; messages: any[]; headers: Headers; stream?: boolean; authHeader: string | null; isPasswordAuth: boolean; }): Promise<Response> => {
     const { model, messages, headers, stream = false, authHeader, isPasswordAuth } = args;
     const now = Date.now();
     const last = lastUserPromptFromMessages(messages);
@@ -310,7 +310,7 @@ export async function handleVideoForChat(args: { model: string; messages: any[];
     return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
 }
 
-export async function handleVideoForResponses(args: { model: string; messages: any[]; headers: Headers; stream?: boolean; request_id: string; authHeader: string | null; isPasswordAuth: boolean; }): Promise<Response> {
+export const handleVideoForResponses = async (args: { model: string; messages: any[]; headers: Headers; stream?: boolean; request_id: string; authHeader: string | null; isPasswordAuth: boolean; }): Promise<Response> => {
     const { model, messages, headers, stream = false, request_id, authHeader, isPasswordAuth } = args;
     const now = Date.now();
     const last = lastUserPromptFromMessages(messages);

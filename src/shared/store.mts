@@ -1,6 +1,6 @@
 import { getStore } from '@netlify/blobs';
 
-export function getStoreWithConfig(name: string) {
+export const getStoreWithConfig = (name: string) => {
   const siteID = process.env.NETLIFY_SITE_ID;
   const token = process.env.NETLIFY_TOKEN;
   if ((siteID && token)) {

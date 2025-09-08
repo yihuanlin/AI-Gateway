@@ -1,6 +1,6 @@
 export type WaitResult = { ok: true; text: string; usage?: { input_tokens: number; output_tokens: number; total_tokens: number }; downloadLink?: string; taskId?: string } | { ok: false; error: any };
 
-export function findLinks(text: string): string[] {
+export const findLinks = (text: string): string[] => {
   if (!text) return [];
   const urlRegex = /(https?:\/\/[^\s)]+)(?![^\(]*\))/g;
   const links: string[] = [];
@@ -12,11 +12,11 @@ export function findLinks(text: string): string[] {
   return links;
 }
 
-export function sleep(ms: number) {
+export const sleep = (ms: number) => {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-export function hasImageInMessages(content: any): { has: boolean; first?: string | undefined; second?: string | undefined } {
+export const hasImageInMessages = (content: any): { has: boolean; first?: string | undefined; second?: string | undefined } => {
   if (!Array.isArray(content)) return { has: false };
   const urls: string[] = [];
   for (const part of content) {
@@ -29,7 +29,7 @@ export function hasImageInMessages(content: any): { has: boolean; first?: string
   return { has: urls.length > 0, first: urls[0], second: urls[1] };
 }
 
-export function lastUserPromptFromMessages(messages: any[]): { text: string; content?: any[] } {
+export const lastUserPromptFromMessages = (messages: any[]): { text: string; content?: any[] } => {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     if (m?.role === 'user') {
@@ -49,7 +49,7 @@ export function lastUserPromptFromMessages(messages: any[]): { text: string; con
   return { text: '' };
 }
 
-export function responsesBase(createdAt: number, id: string, model: string, input: any, instructions: any, store: boolean, temperature: any, tool_choice: any, tools: any, top_p: any) {
+export const responsesBase = (createdAt: number, id: string, model: string, input: any, instructions: any, store: boolean, temperature: any, tool_choice: any, tools: any, top_p: any) => {
   return {
     id,
     object: 'response',
@@ -80,7 +80,7 @@ export function responsesBase(createdAt: number, id: string, model: string, inpu
   } as any;
 }
 
-export function streamChatSingleText(model: string, text: string): Response {
+export const streamChatSingleText = (model: string, text: string): Response => {
   const now = Date.now();
   const created = Math.floor(now / 1000);
   const baseChunk: any = { id: `chatcmpl-${now}`, object: 'chat.completion.chunk', created, model, choices: [] };
@@ -96,7 +96,7 @@ export function streamChatSingleText(model: string, text: string): Response {
   return new Response(rs, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } });
 }
 
-export function streamResponsesSingleText(baseObj: any, messageText: string, textItemId?: string, includeInProgress: boolean = true): Response {
+export const streamResponsesSingleText = (baseObj: any, messageText: string, textItemId?: string, includeInProgress: boolean = true): Response => {
   const enc = new TextEncoder();
   let sequenceNumber = 0;
   const itemId = textItemId || `msg_${Date.now()}`;
@@ -126,7 +126,7 @@ export function streamResponsesSingleText(baseObj: any, messageText: string, tex
 type Usage = { input_tokens: number; output_tokens: number; total_tokens: number };
 type GenResult = { ok: true; text: string; usage?: Usage; downloadLink?: string; taskId?: string } | { ok: false; error: any };
 
-export function streamResponsesGenerationElapsed(params: {
+export const streamResponsesGenerationElapsed = (params: {
   baseObj: any;
   requestId: string;
   waitForResult: (signal: AbortSignal) => Promise<GenResult>;
@@ -135,7 +135,7 @@ export function streamResponsesGenerationElapsed(params: {
   startOutputIndex?: number;
   taskId?: string;
   headers?: Headers;
-}): Response {
+}): Response => {
   const { baseObj, requestId, waitForResult, headers } = params;
   const now = Date.now();
   const enc = new TextEncoder();
@@ -218,7 +218,7 @@ export function streamResponsesGenerationElapsed(params: {
   return new Response(rs, { headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' } });
 }
 
-export function streamChatGenerationElapsed(model: string, waitForResult: (signal: AbortSignal) => Promise<GenResult>, taskId?: string): Response {
+export const streamChatGenerationElapsed = (model: string, waitForResult: (signal: AbortSignal) => Promise<GenResult>, taskId?: string): Response => {
   const now = Date.now();
   const created = Math.floor(now / 1000);
   const baseChunk: any = { id: `chatcmpl-${now}`, object: 'chat.completion.chunk', created, model, choices: [] };
@@ -275,7 +275,7 @@ export function streamChatGenerationElapsed(model: string, waitForResult: (signa
   return new Response(rs, { headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' } });
 }
 
-function generationFinalizeEvents(params: {
+const generationFinalizeEvents = (params: {
   baseObj: any;
   reasoningId: string;
   textItemId: string;
@@ -284,7 +284,7 @@ function generationFinalizeEvents(params: {
   usage?: { input_tokens: number; output_tokens: number; total_tokens: number } | null;
   reasoningIndex?: number;
   messageIndex?: number;
-}): any[] {
+}): any[] => {
   const { baseObj, reasoningId, textItemId, finalText, finalReasoningText, usage } = params;
   const reasoningIndex = params.reasoningIndex ?? 0;
   const messageIndex = params.messageIndex ?? 1;

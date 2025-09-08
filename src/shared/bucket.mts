@@ -1,22 +1,22 @@
 import { getStoreWithConfig } from './store.mts';
 
-function extFromContentType(contentType: string): string {
+const extFromContentType = (contentType: string): string => {
     if (!contentType) return 'bin';
     const main = (contentType.split?.(';')[0]) || contentType;
     const parts = main.includes('/') ? main.split('/') : ['application', 'octet-stream'];
     return parts[1] || 'bin';
 }
 
-function nowKey(ext: string, timestamp?: string): string {
+const nowKey = (ext: string, timestamp?: string): string => {
     const ts = timestamp || new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
     return `${ts}.${ext}`;
 }
 
-export function buildPublicUrlForKey(key: string): string {
+export const buildPublicUrlForKey = (key: string): string => {
     return `${process.env.URL}/v1/files/${encodeURIComponent(key)}`;
 }
 
-export async function uploadBase64ToStorage(base64Data: string, timestamp?: string): Promise<string> {
+export const uploadBase64ToStorage = async (base64Data: string, timestamp?: string): Promise<string> => {
     // Parse base64 data and determine content type
     let contentType = 'application/pdf';
     let bytes: Uint8Array | null = null;
@@ -47,7 +47,7 @@ export async function uploadBase64ToStorage(base64Data: string, timestamp?: stri
     return buildPublicUrlForKey(key);
 }
 
-export async function uploadBlobToStorage(blob: Blob, timestamp?: string): Promise<string> {
+export const uploadBlobToStorage = async (blob: Blob, timestamp?: string): Promise<string> => {
     const contentType = blob.type || 'application/pdf';
     const ext = extFromContentType(contentType);
     const key = nowKey(ext, timestamp);
@@ -56,7 +56,7 @@ export async function uploadBlobToStorage(blob: Blob, timestamp?: string): Promi
     return buildPublicUrlForKey(key);
 }
 
-export async function getFileWithMetadata<T extends 'arrayBuffer' | 'blob' | 'json' | 'stream' | 'text' = 'blob'>(key: string, type?: T): Promise<{ data: any; metadata?: Record<string, any> } | null> {
+export const getFileWithMetadata = async <T extends 'arrayBuffer' | 'blob' | 'json' | 'stream' | 'text' = 'blob'>(key: string, type?: T): Promise<{ data: any; metadata?: Record<string, any> } | null> => {
     const store = await getStoreWithConfig('files');
     try {
         const res = await store.getWithMetadata(key, { type: (type || 'blob') as any });

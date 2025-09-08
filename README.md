@@ -4,7 +4,7 @@ A high-performance AI Gateway built with [Hono](https://github.com/honojs/hono) 
 
 ## ✨ Features
 
-- **Unified Text API**: Images and videos models accessible through standard chat/responses endpoints  
+- **Unified Text API**: Images and videos models accessible through standard OpenAI chat/responses and Anthropic messages endpoints  
 - **Admin Models**: Special administrative models for system management (admin/magic-vision)
 - **Streaming Support**: Real-time responses with progress indicators
 - **Tool Integration**: Python execution, web search, content extraction
@@ -26,23 +26,28 @@ bun build
 
 ## 📡 API Endpoints
 
-### Chat Completions
+### Chat Completions (OpenAI)
 ```
 POST /v1/chat/completions
 ```
 
-### Responses
+### Messages (Anthropic)
+```
+POST /v1/messages
+```
+
+### Responses (OpenAI)
 ```
 POST /v1/responses
 ```
 
-### Models List
+### Models List (OpenAI)
 ```
 GET /v1/models
 POST /v1/models
 ```
 
-### Response Management (Stored in Netlify Blobs)
+### Response Management (Stored in Netlify Blobs; OpenAI)
 ```
 GET /v1/responses/:response_id     # Get a specific response
 GET /v1/responses                  # List all responses
@@ -69,12 +74,12 @@ GET /v1/files/:file                # Serve a file from Netlify Blobs
 - **Hugging Face**: Community models for i2i, t2v, and i2v
 
 ### Tools & Extensions
-**If required environment variables are set, the following tools are enabled by adding tools in request body, even an empty array (in [Cherry Studio](https://www.cherry-ai.com), this is triggered by enabling model build-in search):**
-- **Code Execution**: [Python Executor API](https://github.com/yihuanlin/python-executor-api) `python_executor` or model build-in (Gateway and Custom Gemini `code_execution`, Gateway OpenAI `code_interpreter`)
-- **Web Search**: [Tavily Search API](https://docs.tavily.com/documentation/api-reference/endpoint/search) `web_search` or model build-in (Gateway and Custom Gemini `google_search`, Gateway OpenAI `web_search_preview`, Gateway Grok `mode = 'on'`, Gateway Perplexity `always on regardless of tools`)
+**If required environment variables are set, the following tools are enabled by adding tools in request body (except for when Anthropic format client tools are provided), even an empty array (in [Cherry Studio](https://www.cherry-ai.com), this is triggered by enabling model build-in search):**
+- **Code Execution**: [Python Executor API](https://github.com/yihuanlin/python-executor-api) `python_executor` or model build-in (Gateway and Custom Gemini `code_execution`, Gateway Anthropic `code_execution`, Gateway OpenAI `code_interpreter`)
+- **Web Search**: [Tavily Search API](https://docs.tavily.com/documentation/api-reference/endpoint/search) `web_search` or model build-in (Gateway and Custom Gemini `google_search`, Gateway OpenAI `web_search_preview`, Gateway Anthropic `web_search`, Gateway Grok `mode = 'on'`, Gateway Perplexity `always on regardless of tools`)
 - **Content Extraction**: [Jina Reader API](https://jina.ai/reader/) `fetch` or model build-in (Gateway and Custom `url_context`)
 
-**Research mode is triggered by detecting keywards `research` and `paper` in conversation. Default search depth and reasoning effort will increase, all tools above and research APIs will be enabled:**
+**In OpenAI endpoints, research mode is triggered by detecting keywards `research` and `paper` in conversation. Default search depth and reasoning effort will increase, all tools above (except `python_executor`) and research APIs below will be enabled:**
 - **Research APIs**: [Ensembl API](https://rest.ensembl.org) `ensembl_api`, [Semantic Scholar APIs](https://www.semanticscholar.org/product/api) `scholar_search` and `paper_recommendations`
 
 ## 🔧 Environment Variables
@@ -158,6 +163,54 @@ curl -X POST "$HOSTNAME/v1/chat/completions" \
     "temperature": 1.0,
     "max_tokens": 1000,
     "stream": false
+  }'
+```
+
+### Messages (Anthropic Format)
+
+#### Text Generation with Anthropic Format
+```bash
+# Basic message completion with Anthropic format
+curl -X POST "$HOSTNAME/v1/messages" \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: $PASSWORD" \
+  -d '{
+    "model": "anthropic/claude-sonnet-4",
+    "messages": [
+      {"role": "user", "content": "What is the capital of France?"}
+    ],
+    "max_tokens": 1000,
+    "stream": false
+  }'
+```
+
+#### Anthropic Format with Tools and Search
+```bash
+# Message with tools and web search capabilities
+curl -X POST "$HOSTNAME/v1/messages" \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: $PASSWORD" \
+  -H "x-tavily-api-key: tvly-dev-..." \
+  -d '{
+    "model": "anthropic/claude-sonnet-4",
+    "messages": [
+      {"role": "user", "content": "Search for the latest developments in AI research"}
+    ],
+    "tools": [
+      {
+        "name": "paper_search",
+        "description": "Search the web for papers",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "query": {"type": "string", "description": "Search query"}
+          },
+          "required": ["query"]
+        }
+      }
+    ],
+    "max_tokens": 2000,
+    "stream": true
   }'
 ```
 
