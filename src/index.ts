@@ -381,7 +381,7 @@ const buildDefaultProviderOptions = (args: {
 						search_context_size: 'high',
 					},
 				}
-			};
+			}
 		}
 		return {};
 	}
@@ -392,32 +392,40 @@ const buildDefaultProviderOptions = (args: {
 					effort: reasoning_effort || (isResearchMode ? 'high' : "medium"),
 				}
 			}
-		};
+		}
+	}
+	if (model.startsWith('openai/') || model.startsWith('chatgpt/')) {
+		return {
+			openai: {
+				reasoningEffort: reasoning_effort || (isResearchMode ? 'high' : "medium"),
+				reasoningSummary: reasoning_summary || "auto",
+				textVerbosity: text_verbosity || "medium",
+				serviceTier: service_tier || "auto",
+				store: model.startsWith('chatgpt/') ? store : false,
+				promptCacheKey: 'ai-gateway',
+			}
+		}
+	}
+	if (model.startsWith('google/') || model.startsWith('gemini/')) {
+		return {
+			google: {
+				...(!model.toLowerCase().includes('image') ? {
+					thinkingConfig: {
+						thinkingBudget: extra_body?.google?.thinking_config?.thinking_budget || -1,
+						includeThoughts: true,
+					}
+				} : {
+					responseModalities: ["IMAGE", "TEXT"]
+				}),
+			}
+		}
 	}
 	const providerOptions = providerOptionsHeader ? JSON.parse(providerOptionsHeader) : {
-		openai: {
-			reasoningEffort: reasoning_effort || (isResearchMode ? 'high' : "medium"),
-			reasoningSummary: reasoning_summary || "auto",
-			textVerbosity: text_verbosity || "medium",
-			serviceTier: service_tier || "auto",
-			store: model.startsWith('chatgpt/') ? store : false,
-			promptCacheKey: 'ai-gateway',
-		},
-		google: {
-			...(!model.toLowerCase().includes('image') ? {
-				thinkingConfig: {
-					thinkingBudget: extra_body?.google?.thinking_config?.thinking_budget || -1,
-					includeThoughts: true,
-				}
-			} : {
-				responseModalities: ["IMAGE", "TEXT"]
-			}),
-		},
 		custom: {
 			reasoning_effort: reasoning_effort || (isResearchMode ? 'high' : "medium"),
 			...(extra_body && { extra_body }),
 			...(thinking && { thinking }),
-		},
+		}
 	};
 	return providerOptions;
 }
