@@ -1,11 +1,11 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { cors } from 'hono/cors'
-import type { Context } from 'hono'
-import { generateText, stepCountIs, streamText, tool } from 'ai'
-import { createGateway, gateway } from '@ai-sdk/gateway'
+import { generateText, streamText, stepCountIs, tool } from 'ai'
+import { createGateway } from '@ai-sdk/gateway'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { openai, createOpenAI } from '@ai-sdk/openai'
 import { google, createGoogleGenerativeAI } from '@ai-sdk/google'
+import { uploadBlobToStorage, getFileWithMetadata } from './shared/bucket.mts';
 import { anthropic } from '@ai-sdk/anthropic';
 import { SUPPORTED_PROVIDERS, getProviderKeys } from './shared/providers.mts'
 import { getStoreWithConfig } from './shared/store.mts'
@@ -384,6 +384,15 @@ const buildDefaultProviderOptions = (args: {
 			};
 		}
 		return {};
+	}
+	if (model.startsWith('openrouter/')) {
+		return {
+			custom: {
+				reasoning: {
+					effort: reasoning_effort || (isResearchMode ? 'high' : "medium"),
+				}
+			}
+		};
 	}
 	const providerOptions = providerOptionsHeader ? JSON.parse(providerOptionsHeader) : {
 		openai: {
@@ -1495,7 +1504,6 @@ app.post('/v1/responses', async (c: Context) => {
 	const messages = await getResponsesMessages();
 	let modelId: string = model;
 	let thinking: Record<string, any> | undefined = undefined;
-	let extraBody: Record<string, any> = extra_body;
 	let search: boolean = false;
 	if (modelId.startsWith('doubao/')) {
 		if (Array.isArray(messages) && messages.length > 0) {
@@ -1521,10 +1529,6 @@ app.post('/v1/responses', async (c: Context) => {
 			thinking = {
 				type: 'enabled',
 			};
-		} else if (modelId.startsWith('modelscope/deepseek-ai/DeepSeek-V3.1')) {
-			extraBody = {
-				enable_thinking: true,
-			};
 		}
 	} else {
 		search = true;
@@ -1536,7 +1540,7 @@ app.post('/v1/responses', async (c: Context) => {
 		providerOptionsHeader: providerOptionsHeader ?? null,
 		thinking,
 		reasoning_effort: reasoning?.effort || undefined,
-		extra_body: extraBody,
+		extra_body,
 		text_verbosity: text?.verbosity || undefined,
 		service_tier,
 		reasoning_summary: reasoning?.summary || undefined,
@@ -2238,7 +2242,6 @@ app.post('/v1/responses', async (c: Context) => {
 										// If storing, upload to blob store and accumulate markdown to store (not to response)
 										if (store && base64Data && process.env.URL) {
 											try {
-												const { uploadBlobToStorage } = await import('./shared/bucket.mts');
 												const bin = atob(base64Data);
 												const bytes = new Uint8Array(bin.length);
 												for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
@@ -2772,7 +2775,6 @@ app.post('/v1/responses', async (c: Context) => {
 				try {
 					let extraMd = '';
 					if (process.env.URL && Array.isArray((result as any).files) && (result as any).files.length > 0) {
-						const { uploadBlobToStorage } = await import('./shared/bucket.mts');
 						for (const f of (result as any).files) {
 							try {
 								const fileObj = (f as any)?.file;
@@ -2891,7 +2893,6 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
 	let modelId: string = model;
 	let thinkingConfig: Record<string, any> = thinking;
-	let extraBody: Record<string, any> = extra_body;
 	let search: boolean = false;
 	if (modelId.startsWith('doubao/')) {
 		if (Array.isArray(processedMessages) && processedMessages.length > 0) {
@@ -2917,10 +2918,6 @@ app.post('/v1/chat/completions', async (c: Context) => {
 			thinkingConfig = {
 				type: 'enabled',
 			};
-		} else if (modelId.startsWith('modelscope/deepseek-ai/DeepSeek-V3.1')) {
-			extraBody = {
-				enable_thinking: true,
-			};
 		}
 	} else {
 		search = true;
@@ -2931,7 +2928,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 		providerOptionsHeader: providerOptionsHeader ?? null,
 		thinking: thinkingConfig,
 		reasoning_effort,
-		extra_body: extraBody,
+		extra_body,
 		text_verbosity,
 		service_tier,
 		store,
@@ -3160,7 +3157,6 @@ app.post('/v1/chat/completions', async (c: Context) => {
 											// Also upload and stream markdown if storing
 											if (store && process.env.URL) {
 												try {
-													const { uploadBlobToStorage } = await import('./shared/bucket.mts');
 													const bin = atob(b64);
 													const bytes = new Uint8Array(bin.length);
 													for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
@@ -3333,7 +3329,6 @@ app.post('/v1/chat/completions', async (c: Context) => {
 			if (process.env.URL && store && Array.isArray((result as any).files) && (result as any).files.length > 0) {
 				for (const f of (result as any).files) {
 					try {
-						const { uploadBlobToStorage } = await import('./shared/bucket.mts');
 						const fileObj = (f as any)?.file;
 						const b64 = fileObj?.base64Data as string | undefined;
 						const mt = fileObj?.mediaType as string | undefined;
@@ -3679,32 +3674,15 @@ app.post('/v1/messages', async (c: Context) => {
 	const headers = c.req.raw.headers;
 	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
 
-	let modelId: string = model;
-	let search: boolean = false;
-
-	const messageText = processedMessages.map((msg: any) =>
-		typeof msg.content === 'string'
-			? msg.content.toLowerCase()
-			: Array.isArray(msg.content)
-				? msg.content.map((p: any) => (p?.text || '')).join(' ').toLowerCase()
-				: ''
-	).join(' ');
 
 	// Use existing shared function for tools
-	const aiSdkTools: Record<string, any> = buildAiSdkTools(modelId, tools);
-	if (Object.keys(aiSdkTools).length > 0) {
-		search = true;
-	}
-
-	const { providersToTry } = prepareProvidersToTry({ model: modelId, providerKeys, isPasswordAuth, authApiKey: authHeader });
-	const providerOptionsHeader = c.req.header('x-provider-options');
+	const aiSdkTools: Record<string, any> = buildAiSdkTools(model, tools);
+	const { providersToTry } = prepareProvidersToTry({ model, providerKeys, isPasswordAuth, authApiKey: authHeader });
 	const providerOptions = buildDefaultProviderOptions({
-		providerOptionsHeader: providerOptionsHeader ?? null,
 		thinking,
 		service_tier,
 		store: false,
-		model: modelId,
-		search,
+		model,
 	});
 
 	const commonParams = {
@@ -3749,7 +3727,7 @@ app.post('/v1/messages', async (c: Context) => {
 								type: 'message',
 								role: 'assistant',
 								content: [],
-								model: modelId,
+								model,
 								stop_reason: null,
 								stop_sequence: null,
 								usage: { input_tokens: 0, output_tokens: 0 }
@@ -4158,7 +4136,7 @@ app.post('/v1/messages', async (c: Context) => {
 				type: 'message',
 				role: 'assistant',
 				content: contentArray,
-				model: modelId,
+				model,
 				stop_reason: stopReason,
 				stop_sequence: null,
 				usage: {
@@ -4431,27 +4409,6 @@ const getModelsResponse = async (apiKey: string, providerKeys: Record<string, st
 	throw new Error('All provider(s) failed to return models');
 }
 
-const handleModelsRequest = async (c: any) => {
-	const authHeader = c.req.header('Authorization').split(' ')[1] || null;
-	const envPassword = process.env.PASSWORD;
-	const isPasswordAuth = !!(envPassword && authHeader && envPassword.trim() === authHeader.trim());
-	if (!authHeader) return c.text('Unauthorized', 401);
-
-	const headers: Record<string, string> = {};
-	c.req.raw.headers.forEach((value: string, key: string) => {
-		headers[key.toLowerCase().replace(/-/g, '_')] = value;
-	});
-	const providerKeys = await getProviderKeys(headers as any, authHeader || null, isPasswordAuth);
-
-	try {
-		const modelsResponse = await getModelsResponse(authHeader, providerKeys, isPasswordAuth);
-		c.header('Cache-Control', 'private, max-age=7200');
-		return c.json(modelsResponse);
-	} catch (error: any) {
-		return c.json({ error: error?.message || 'All provider(s) failed to return models' }, 500);
-	}
-}
-
 const parseModelDisplayName = (model: string) => {
 	let baseName = model.split('/').pop() || model;
 	if (baseName.endsWith(':free')) baseName = baseName.slice(0, -5);
@@ -4486,17 +4443,30 @@ const parseModelName = (model: string) => {
 }
 
 app.get('/v1/models', async (c: Context) => {
-	return handleModelsRequest(c);
-});
-app.post('/v1/models', async (c: Context) => {
-	return handleModelsRequest(c);
+	const authHeader = c.req.header('Authorization')?.split(' ')[1] || null;
+	const envPassword = process.env.PASSWORD;
+	const isPasswordAuth = !!(envPassword && authHeader && envPassword.trim() === authHeader.trim());
+	if (!authHeader) return c.text('Unauthorized', 401);
+
+	const headers: Record<string, string> = {};
+	c.req.raw.headers.forEach((value: string, key: string) => {
+		headers[key.toLowerCase().replace(/-/g, '_')] = value;
+	});
+	const providerKeys = await getProviderKeys(headers as any, authHeader || null, isPasswordAuth);
+
+	try {
+		const modelsResponse = await getModelsResponse(authHeader, providerKeys, isPasswordAuth);
+		c.header('Cache-Control', 'private, max-age=7200');
+		return c.json(modelsResponse);
+	} catch (error: any) {
+		return c.json({ error: error?.message || 'All provider(s) failed to return models' }, 500);
+	}
 });
 
 // Files: serve blobs stored in Netlify store
 app.get('/v1/files/:key', async (c: Context) => {
 	try {
 		const key = c.req.param('key');
-		const { getFileWithMetadata } = await import('./shared/bucket.mts');
 		const res = await getFileWithMetadata(key, 'blob' as any);
 		if (!res || !res.data) return c.text('Not found', 404);
 		const blob: Blob = res.data as Blob;

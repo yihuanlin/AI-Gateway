@@ -44,7 +44,6 @@ POST /v1/responses
 ### Models List (OpenAI)
 ```
 GET /v1/models
-POST /v1/models
 ```
 
 ### Response Management (Stored in Netlify Blobs; OpenAI)
@@ -66,7 +65,7 @@ GET /v1/files/:file                # Serve a file from Netlify Blobs
 
 ### Text Generation
 - **Gateway**: Vercel AI Gateway
-- **Direct Providers**: Vercel AI Gateway (Gateway), OpenAI (ChatGPT), Google Generative AI (Gemini), Groq, Cerebras, OpenRouter, Poe, Volcengine (Doubao), ModelScope, Infini, Nvidia, Mistral, Poixe, Cohere, Morph, GitHub Models (GitHub), GitHub Copilot (Copilot), Cloudflare Gateway (Cloudflare), etc.
+- **Direct Providers**: Vercel AI Gateway (Gateway), OpenAI (ChatGPT), Google Generative AI (Gemini), Groq, Cerebras, OpenRouter, Poe, Volcengine (Doubao), ModelScope, Infini, Nvidia, Mistral, Poixe, Cohere, Morph, GitHub Models (GitHub), GitHub Copilot (Copilot), Cloudflare Gateway (Cloudflare), Meituan (LongCat), etc.
 
 ### Multimedia Generation  
 - **Doubao (ByteDance)**: i2i, t2i, i2v, and t2v
@@ -118,6 +117,7 @@ POIXE_API_KEY=sk-...
 COPILOT_API_KEY=ghu_...
 POE_API_KEY=your-poe-api-key
 HUGGINGFACE_API_KEY=hf_...
+LONGCAT_API_KEY=ak_...
 
 # Cloudflare Gateway (GPT-OSS series currently not supported)
 CLOUDFLARE_API_KEY=your-cloudflare-api-key
