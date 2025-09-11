@@ -4222,13 +4222,16 @@ const CUSTOM_MODEL_LISTS = {
 		{ id: 'doubao-seed-1-6-thinking-250715', name: 'Doubao Seed 1.6 Thinking' },
 		{ id: 'deepseek-v3-1-250821', name: 'DeepSeek V3.1' },
 		{ id: 'deepseek-r1-250528', name: 'DeepSeek R1' },
-		{ id: 'kimi-k2-250711', name: 'Kimi K2' },
+		{ id: 'kimi-k2-250905', name: 'Kimi K2' },
 	],
 	cohere: [
 		{ id: 'command-a-03-2025', name: 'Command A' },
 		{ id: 'command-a-vision-07-2025', name: 'Cohere A Vision' },
 		{ id: 'command-a-reasoning-08-2025', name: 'Command A Reasoning' },
 		{ id: 'command-a-translate-08-2025', name: 'Command A Translation' },
+	],
+	longcat: [
+		{ id: 'longcat-flash-chat', name: 'LongCat Flash Chat' },
 	],
 	cloudflare: [
 		{ id: '@cf/meta/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout' },
@@ -4242,18 +4245,17 @@ const isSupportedProvider = (name: string): name is keyof typeof SUPPORTED_PROVI
 const shouldIncludeModel = (model: any, providerName?: string) => {
 	const modelId = String(model.id || '').toLowerCase();
 	const commonExclusions = [
-		'gemma', 'rerank', 'distill', 'parse', 'embed', 'bge-', 'tts', 'phi', 'live', 'audio', 'lite',
+		'gemma', 'rerank', 'distill', 'parse', 'embed', 'bge-', 'tts', 'phi', 'live', 'audio', 'lite', 'ctc',
 		'qwen2', 'qwen-2', 'qwen1', 'qwq', 'qvq', 'gemini-1', 'gemini-2.0', 'learnlm', 'gemini-exp', 'gpt-4', 'gpt-3',
 		'turbo', 'claude-3', 'voxtral', 'pixtral', 'mixtral', 'ministral', '-24', 'moderation', 'saba', '-ocr-',
-		'transcribe', 'dall', 'davinci', 'babbage', 'hailuo', 'kling', 'wan', 'ideogram', 'background'
+		'transcribe', 'dall', 'davinci', 'babbage', 'hailuo', 'kling', 'wan', 'ideogram', 'background', 'voyage'
 	];
 	if (commonExclusions.some((e) => modelId.includes(e))) return false;
-	if (!(['super', 'oss', 'kimi', 'deepseek', 'qwen3', 'phi', 'maverick'].some((e) => modelId.includes(e))) && ((['nemotron', 'llama'].some((e) => modelId.includes(e))) || modelId.includes('nvidia'))) return false;
+	if (!(['super', 'oss', 'kimi', 'deepseek', 'qwen3', 'phi', 'maverick', '@cf'].some((e) => modelId.includes(e))) && (['nemotron', 'llama', 'nvidia'].some((e) => modelId.includes(e)))) return false;
 	if (providerName === 'openrouter' && !modelId.includes(':free')) return false;
 	if (providerName !== 'mistral' && modelId.includes('mistral')) return false;
 	if (providerName === 'chatgpt' && modelId.split('-').length > 4) return false;
 	if (providerName === 'modelscope' && modelId.includes('image')) return false;
-	if (!providerName && ['mistral', 'cohere'].some((e) => modelId.includes(e))) return false;
 	return true;
 }
 
@@ -4369,6 +4371,7 @@ const getModelsResponse = async (apiKey: string, providerKeys: Record<string, st
 					const customModels = CUSTOM_MODEL_LISTS[providerName as keyof typeof CUSTOM_MODEL_LISTS];
 					formattedModels = customModels.map(model => ({
 						id: `${providerName}/${model.id}`,
+						description: '',
 						name: model.name,
 						object: 'model',
 						created: 0,
