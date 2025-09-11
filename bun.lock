@@ -9,11 +9,11 @@
         "@ai-sdk/google": "^2.0.13",
         "@ai-sdk/openai": "^2.0.28",
         "@ai-sdk/openai-compatible": "^1.0.15",
-        "@huggingface/inference": "^4.7.1",
+        "@huggingface/inference": "^4.8.0",
         "@netlify/blobs": "^10.0.10",
         "ai": "^5.0.40",
         "hono": "^4.9.6",
-        "zod": "^4.1.7",
+        "zod": "^4.1.8",
       },
       "devDependencies": {
         "@types/node": "^24.3.1",
@@ -40,11 +40,11 @@
 
     "@fastify/busboy": ["@fastify/busboy@3.2.0", "", {}, "sha512-m9FVDXU3GT2ITSe0UaMA5rU3QkfC/UXtCU8y0gSN/GugTqtVldOBWIB5V6V3sbmenVZUIpU6f+mPEO2+m5iTaA=="],
 
-    "@huggingface/inference": ["@huggingface/inference@4.7.1", "", { "dependencies": { "@huggingface/jinja": "^0.5.1", "@huggingface/tasks": "^0.19.35" } }, "sha512-gXrMocGDsE6kUZPEj82c3O+/OKnIfbHvg9rYjGA6svbWrYVmHCIAdCrrgCwNl2v5GELfPJrrfIv0bvzCTfa64A=="],
+    "@huggingface/inference": ["@huggingface/inference@4.8.0", "", { "dependencies": { "@huggingface/jinja": "^0.5.1", "@huggingface/tasks": "^0.19.45" } }, "sha512-Eq98EAXqYn4rKMfrbEXuhc3IjKfaeIO6eXNOZk9xk6v5akrIWRtd6d1h0fjAWyX4zRbdUpXRh6MvsqXnzGvXCA=="],
 
     "@huggingface/jinja": ["@huggingface/jinja@0.5.1", "", {}, "sha512-yUZLld4lrM9iFxHCwFQ7D1HW2MWMwSbeB7WzWqFYDWK+rEb+WldkLdAJxUPOmgICMHZLzZGVcVjFh3w/YGubng=="],
 
-    "@huggingface/tasks": ["@huggingface/tasks@0.19.37", "", {}, "sha512-Te1VB1tB1HoLfTGluCwy8sLO90YV+uNOAFktQ1h7jKas4TlHT/7SlfwFaDJFTV8lN7qCw2nDB+7PRkKzwIb/hg=="],
+    "@huggingface/tasks": ["@huggingface/tasks@0.19.45", "", {}, "sha512-lM3QOgbfkGZ5gAZOYWOmzMM6BbKcXOIHjgnUAoymTdZEcEcGSr0vy/LWGEiK+vBXC4vU+sCT+WNoA/JZ8TEWdA=="],
 
     "@netlify/blobs": ["@netlify/blobs@10.0.10", "", { "dependencies": { "@netlify/dev-utils": "4.1.3", "@netlify/runtime-utils": "2.1.0" } }, "sha512-900jiduBT3b7GagpOGJKD3FQypkNbskGyx+Mvd9Ajy7pU3K0CNj4JBaji4aJZz7krrMxZZJacr0wCEsqWLQQmA=="],
 
@@ -126,6 +126,6 @@
 
     "write-file-atomic": ["write-file-atomic@5.0.1", "", { "dependencies": { "imurmurhash": "^0.1.4", "signal-exit": "^4.0.1" } }, "sha512-+QU2zd6OTD8XWIJCbffaiQeH9U73qIqafo1x6V1snCWYGJf6cVE0cDR4D8xRzcEnfI21IFrUPzPGtcPf8AC+Rw=="],
 
-    "zod": ["zod@4.1.7", "", {}, "sha512-6qi6UYyzAl7W9uV29KvcSFXqK4QCYNYUz2YASPNBWpJE1RY6R1nArmmFPgGY/CBYWzpeMw3EOER+DR9a05O4IA=="],
+    "zod": ["zod@4.1.8", "", {}, "sha512-5R1P+WwQqmmMIEACyzSvo4JXHY5WiAFHRMg+zBZKgKS+Q1viRa0C1hmUKtHltoIFKtIdki3pRxkmpP74jnNYHQ=="],
   }
 }

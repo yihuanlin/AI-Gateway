@@ -13,11 +13,11 @@
     "@ai-sdk/google": "^2.0.13",
     "@ai-sdk/openai": "^2.0.28",
     "@ai-sdk/openai-compatible": "^1.0.15",
-    "@huggingface/inference": "^4.7.1",
+    "@huggingface/inference": "^4.8.0",
     "@netlify/blobs": "^10.0.10",
     "ai": "^5.0.40",
     "hono": "^4.9.6",
-    "zod": "^4.1.7"
+    "zod": "^4.1.8"
   },
   "devDependencies": {
     "@types/node": "^24.3.1",
