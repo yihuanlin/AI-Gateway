@@ -320,7 +320,6 @@ const createCustomProvider = async (providerName: string, apiKey: string) => {
 }
 
 const buildDefaultProviderOptions = (args: {
-	providerOptionsHeader?: string | null,
 	thinking?: any,
 	reasoning_effort?: any,
 	extra_body?: any,
@@ -331,7 +330,7 @@ const buildDefaultProviderOptions = (args: {
 	model?: any,
 	search?: boolean,
 }) => {
-	const { providerOptionsHeader, thinking, reasoning_effort, extra_body, text_verbosity, service_tier, reasoning_summary, store, model, search } = args;
+	const { thinking, reasoning_effort, extra_body, text_verbosity, service_tier, reasoning_summary, store, model, search } = args;
 	if (model.startsWith('anthropic/')) {
 		return {
 			anthropic: {
@@ -420,14 +419,13 @@ const buildDefaultProviderOptions = (args: {
 			}
 		}
 	}
-	const providerOptions = providerOptionsHeader ? JSON.parse(providerOptionsHeader) : {
+	return {
 		custom: {
 			reasoning_effort: reasoning_effort || (isResearchMode ? 'high' : "medium"),
 			...(extra_body && { extra_body }),
 			...(thinking && { thinking }),
 		}
 	};
-	return providerOptions;
 }
 
 const getGatewayForAttempt = async (attempt: Attempt) => {
@@ -1504,9 +1502,7 @@ app.post('/v1/responses', async (c: Context) => {
 	}
 
 	const { providersToTry } = prepareProvidersToTry({ model: modelId, providerKeys });
-	const providerOptionsHeader = c.req.header('x-provider-options');
 	const providerOptions = buildDefaultProviderOptions({
-		providerOptionsHeader: providerOptionsHeader ?? null,
 		thinking,
 		reasoning_effort: reasoning?.effort || undefined,
 		extra_body,
@@ -2878,9 +2874,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 		search = true;
 	}
 	const { providersToTry } = prepareProvidersToTry({ model: modelId, providerKeys });
-	const providerOptionsHeader = c.req.header('x-provider-options');
 	const providerOptions = buildDefaultProviderOptions({
-		providerOptionsHeader: providerOptionsHeader ?? null,
 		thinking: thinkingConfig,
 		reasoning_effort,
 		extra_body,
@@ -3922,7 +3916,7 @@ app.post('/v1/messages', async (c: Context) => {
 										input_tokens: part.totalUsage?.inputTokens || 0,
 										output_tokens: part.totalUsage?.outputTokens || 0,
 										cache_read_input_tokens: part.totalUsage?.cachedInputTokens || 0,
-										service_tier: providerOptions.service_tier || 'standard'
+										service_tier: service_tier || 'standard'
 									};
 
 									const messageDelta = {
@@ -4084,7 +4078,7 @@ app.post('/v1/messages', async (c: Context) => {
 					input_tokens: result.usage?.inputTokens || 0,
 					output_tokens: result.usage?.outputTokens || 0,
 					cache_read_input_tokens: result.usage?.cachedInputTokens || 0,
-					service_tier: providerOptions.service_tier || 'standard'
+					service_tier: service_tier || 'standard'
 				}
 			});
 
