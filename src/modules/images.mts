@@ -14,13 +14,13 @@ const getHelpForModel = (model: string) => {
   if (model.startsWith('image/doubao')) {
     return 'Use **Doubao** t2i model *doubao-seedream-3-0-t2i-250415* or i2i *doubao-seededit-3-0-i2i-250628* (if has an input image).\nFlags: `--format url|b64_json`, `--size {WxH}|--ratio {e.g., 16:9}`, `--seed N`, `--guidance F`.\n`/upload` upload input images to storage .';
   }
-  if (model.endsWith('-vision') && !model.includes('doubao')) {
-    return '**Hugging Face** Image-to-Image models (requires input image).\nFlags: `--guidance F`, `--negative_prompt "text"`, `--steps N (1-100)"`, `--size WxH` or `--ratio A:B`.\n`/upload` upload input images to storage (output images are uploaded to storage).\nSpecial prompt trigger for Kontext models:\n`Make a shot in the same scene of...`\n`Remove ...`\n`redepthkontext ...`\n`Place it`\n`Fuse this image into background`\n`Convert this image into pencil drawing art style`\n`Turn this image into the Clay_Toy style.`';
+  if (model.startsWith('image/huggingface/')) {
+    return '**Hugging Face** Text-to-Image and Image-to-Image models.\nFlags: `--guidance F`, `--negative_prompt "text"`, `--steps N (1-100)"`, `--size WxH` or `--ratio A:B`, `--seed N`.\n`/upload` upload input images to storage (output images are uploaded to storage). Input images enable image-to-image mode.\nSpecial prompt trigger for Kontext models:\n`Make a shot in the same scene of...`\n`Remove ...`\n`redepthkontext ...`\n`Place it`\n`Fuse this image into background`\n`Convert this image into pencil drawing art style`\n`Turn this image into the Clay_Toy style.`';
   }
-  if (model.startsWith('image/')) {
-    return '**ModelScope** Text-to-Image models.\nFlags: `--negative_prompt "text"`, `--steps N (1-100)`, `--guidance F` (or derived from `top_p`/`temperature`), `--size WxH` or `--ratio A:B`, `--seed N`.\nFLUX.1 uses support any ratio. For Qwen models, supported ratios: 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3.\n`/upload` upload input images to storage.\nIf prompt contains `miratsu style` or `chibi` with Qwen/Qwen-Image, switches to **MTWLDFC/miratsu_style**.';
+  if (model.startsWith('image/modelscope/')) {
+    return '**ModelScope** Text-to-Image and Image-to-Image models.\nFlags: `--negative_prompt "text"`, `--steps N (1-100)`, `--guidance F` (or derived from `top_p`/`temperature`), `--size WxH` or `--ratio A:B`, `--seed N`.\nFLUX.1 uses support any ratio. For Qwen models, supported ratios: 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3.\n`/upload` upload input images to storage. Input images enable image-to-image mode.\nIf prompt contains `miratsu style` or `chibi` with Qwen/Qwen-Image, switches to **MTWLDFC/miratsu_style**.';
   }
-  return 'Unknown image model';
+  return 'Supported providers: **Doubao** `image/doubao` (t2i/i2i), **Hugging Face** `image/huggingface/huggingface-model-id` (t2i/i2i), **ModelScope** `image/modelscope/modelscope-model-id` (t2i/i2i).';
 }
 
 export const handleImageForChat = async (args: {
@@ -191,21 +191,6 @@ const ratioToSize = (r: string, model: string): string | null => {
   return null;
 }
 
-const getSizeString = (flags: Record<string, any>, effectiveModel: string): string | undefined => {
-  let sizeStr: string | undefined = undefined;
-  if (typeof flags['size'] === 'string') {
-    sizeStr = flags['size'] as string;
-  } else if (typeof flags['ratio'] === 'string') {
-    sizeStr = ratioToSize(flags['ratio'] as string, effectiveModel) || undefined;
-  } else {
-    // Default sizes based on model
-    if (/flux/i.test(effectiveModel)) sizeStr = '1440x1440';
-    else if (/(diffusion|high-res)/i.test(effectiveModel)) sizeStr = '2048x2048';
-    else if (/qwen/i.test(effectiveModel)) sizeStr = '1328x1328';
-  }
-  return sizeStr;
-}
-
 const buildImageGenerationWaiter = async (params: {
   model: string;
   prompt: string;
@@ -220,6 +205,13 @@ const buildImageGenerationWaiter = async (params: {
   const imgs = hasImageInMessages(contentParts || []);
   const hasUploadFlag = prompt.toLowerCase().includes('/upload');
   prompt = prompt.replace(/\/upload/gi, '').trim();
+
+  // Remove image URLs from prompt for all providers
+  if (links.length > 0) {
+    for (const link of links) {
+      prompt = prompt.replace(link + ' ', '').replace(link, '').trim();
+    }
+  }
 
   if (model.startsWith('image/doubao')) {
     let apiKey: string | null = null;
@@ -236,9 +228,8 @@ const buildImageGenerationWaiter = async (params: {
     if (imgs.has || links.length > 0) {
       // i2i model (seededit) - ignore size/ratio options but still clean prompt
       const firstUrl = imgs.first || links[0];
-      let cleanPrompt = prompt.replace(firstUrl || '', '').trim();
       // Remove size/ratio flags from prompt for i2i model
-      cleanPrompt = cleanPrompt.replace(/\s--(?:size|ratio)\s+[^\s]+/g, '').trim();
+      let cleanPrompt = prompt.replace(/\s--(?:size|ratio)\s+[^\s]+/g, '').trim();
       const guidance = typeof flags['guidance'] === 'number' ? flags['guidance'] : (typeof top_p === 'number' ? Math.max(1, Math.min(10, (1 - top_p) * 9 + 1)) : 5.5);
       payload = { model: 'doubao-seededit-3-0-i2i-250628', prompt: cleanPrompt, image: firstUrl, response_format, size: 'adaptive', seed: typeof flags['seed'] === 'number' ? flags['seed'] : 21, guidance_scale: guidance, watermark };
     } else {
@@ -298,7 +289,7 @@ const buildImageGenerationWaiter = async (params: {
     return { ok: true, wait, taskId };
   }
 
-  if (model.endsWith('-vision')) {
+  if (model.startsWith('image/huggingface/')) {
     let apiKey: string | null = null;
     try {
       const keys = String(process.env.HUGGINGFACE_API_KEY).split(',').map((k: string) => k.trim()) || [];
@@ -306,7 +297,7 @@ const buildImageGenerationWaiter = async (params: {
     } catch { }
     if (!apiKey) return { ok: false, error: { code: 'no_api_key', message: 'Missing Hugging Face API key' }, status: 401 };
 
-    let modelId = model.replace(/-vision$/, '').replace("image/", '');
+    let modelId = model.replace(/-vision$/, '').replace("image/huggingface/", '');
     if (/Kontext/i.test(modelId)) {
       if (prompt.toLowerCase().startsWith("remove")) {
         modelId = 'starsfriday/Kontext-Remover-General-LoRA';
@@ -327,42 +318,12 @@ const buildImageGenerationWaiter = async (params: {
     const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
     const taskId = `hf_${timestamp}`;
 
-    // Get input image data (must have an image for i2i)
-    if (!imgs.has && links.length === 0) {
-      return { ok: false, error: { code: 'missing_image', message: 'Image-to-image requires an input image' }, status: 400 };
-    }
+    const hasInputImage = imgs.has || links.length > 0;
 
     const wait = async (_signal: AbortSignal) => {
       try {
         const { InferenceClient } = await import('@huggingface/inference');
         const client = new InferenceClient(apiKey);
-
-        // Get image data
-        let imageData: Buffer;
-        let inputImageType = 'image/jpeg'; // default
-        const imageUrl = imgs.first || links[0] || '';
-
-        if (imageUrl.startsWith('data:')) {
-          // Base64 image - extract type from header
-          const base64Match = imageUrl.match(/^data:([^;]+);base64,(.+)$/);
-          if (!base64Match || !base64Match[2]) {
-            return { ok: false, error: { code: 'invalid_image', message: 'Invalid base64 image format' } } as const;
-          }
-          inputImageType = base64Match[1] || 'image/jpeg';
-          imageData = Buffer.from(base64Match[2], 'base64');
-        } else {
-          // Download from URL
-          const response = await fetch(imageUrl);
-          if (!response.ok) {
-            return { ok: false, error: { code: 'download_failed', message: 'Failed to download input image' } } as const;
-          }
-          imageData = Buffer.from(await response.arrayBuffer());
-          // Try to determine type from Content-Type header
-          const contentType = response.headers.get('content-type');
-          if (contentType && contentType.startsWith('image/')) {
-            inputImageType = contentType;
-          }
-        }
 
         // Prepare parameters
         const parameters: any = { prompt };
@@ -377,9 +338,50 @@ const buildImageGenerationWaiter = async (params: {
           parameters.num_inference_steps = Math.max(1, Math.min(100, Number(flags['steps'])));
         }
 
-        // Handle size/ratio
-        if (typeof flags['size'] === 'string' || typeof flags['ratio'] === 'string') {
-          const sizeStr = getSizeString(flags, modelId);
+        // Handle size/ratio (only if explicitly specified)
+        let sizeStr: string | undefined = undefined;
+        if (typeof flags['size'] === 'string') {
+          sizeStr = flags['size'] as string;
+        } else if (typeof flags['ratio'] === 'string') {
+          sizeStr = ratioToSize(flags['ratio'] as string, modelId) || undefined;
+        }
+
+        // Add seed parameter for t2i
+        if (typeof flags['seed'] === 'number') {
+          parameters.seed = Math.max(0, Number(flags['seed']));
+        }
+
+        let result: Blob;
+
+        if (hasInputImage) {
+          // Image-to-image mode
+          const imageUrl = imgs.first || links[0] || '';
+          let imageData: Buffer;
+          let inputImageType = 'image/jpeg'; // default
+
+          if (imageUrl.startsWith('data:')) {
+            // Base64 image - extract type from header
+            const base64Match = imageUrl.match(/^data:([^;]+);base64,(.+)$/);
+            if (!base64Match || !base64Match[2]) {
+              return { ok: false, error: { code: 'invalid_image', message: 'Invalid base64 image format' } } as const;
+            }
+            inputImageType = base64Match[1] || 'image/jpeg';
+            imageData = Buffer.from(base64Match[2], 'base64');
+          } else {
+            // Download from URL
+            const response = await fetch(imageUrl);
+            if (!response.ok) {
+              return { ok: false, error: { code: 'download_failed', message: 'Failed to download input image' } } as const;
+            }
+            imageData = Buffer.from(await response.arrayBuffer());
+            // Try to determine type from Content-Type header
+            const contentType = response.headers.get('content-type');
+            if (contentType && contentType.startsWith('image/')) {
+              inputImageType = contentType;
+            }
+          }
+
+          // For i2i, use target_size if size is specified
           if (sizeStr && sizeStr.includes('x')) {
             const sizeParts = sizeStr.split('x').map(n => parseInt(n));
             const width = sizeParts[0];
@@ -388,14 +390,32 @@ const buildImageGenerationWaiter = async (params: {
               parameters.target_size = { width, height };
             }
           }
-        }
 
-        const result = await client.imageToImage({
-          provider: "auto",
-          model: modelId,
-          inputs: new Blob([new Uint8Array(imageData)], { type: inputImageType }),
-          parameters
-        });
+          result = await client.imageToImage({
+            provider: "auto",
+            model: modelId,
+            inputs: new Blob([new Uint8Array(imageData)], { type: inputImageType }),
+            parameters
+          });
+        } else {
+          // Text-to-image mode - use width/height directly
+          if (sizeStr && sizeStr.includes('x')) {
+            const sizeParts = sizeStr.split('x').map(n => parseInt(n));
+            const width = sizeParts[0];
+            const height = sizeParts[1];
+            if (width && height && !isNaN(width) && !isNaN(height)) {
+              parameters.width = width;
+              parameters.height = height;
+            }
+          }
+
+          result = await client.textToImage({
+            provider: "auto",
+            model: modelId,
+            inputs: prompt,
+            parameters
+          }, { outputType: "blob" });
+        }
 
         // Upload to blob storage; fallback to base64 URL on error
         let finalUrl: string;
@@ -410,7 +430,7 @@ const buildImageGenerationWaiter = async (params: {
           const arrayBuffer = await result.arrayBuffer();
           const buffer = Buffer.from(arrayBuffer);
           const base64 = buffer.toString('base64');
-          const outputImageType = result.type || inputImageType || 'image/jpeg';
+          const outputImageType = result.type || 'image/jpeg';
           finalUrl = `data:${outputImageType};base64,${base64}`;
         }
 
@@ -424,8 +444,8 @@ const buildImageGenerationWaiter = async (params: {
     return { ok: true, wait, taskId };
   }
 
-  if (model.startsWith('image/')) {
-    const modelId = model.replace(/^image\//, '');
+  if (model.startsWith('image/modelscope/')) {
+    const modelId = model.replace(/-vision$/, '').replace("image/modelscope/", '');
     let apiKey: string | null = null;
     try {
       const keys = String(process.env.MODELSCOPE_API_KEY).split(',').map((k: string) => k.trim()) || [];
@@ -440,9 +460,15 @@ const buildImageGenerationWaiter = async (params: {
       effectiveModel = 'MTWLDFC/miratsu_style';
     }
 
-    let sizeStr: string | undefined = getSizeString(flags, effectiveModel);
+    // Handle size/ratio (only if explicitly specified)
+    let sizeStr: string | undefined = undefined;
+    if (typeof flags['size'] === 'string') {
+      sizeStr = flags['size'] as string;
+    } else if (typeof flags['ratio'] === 'string') {
+      sizeStr = ratioToSize(flags['ratio'] as string, effectiveModel) || undefined;
+    }
 
-    const guidance = typeof flags['guidance'] === 'number' ? Number(flags['guidance']) : guidanceFromTopP(top_p, temperature) ?? 3.5;
+    const guidance = typeof flags['guidance'] === 'number' ? Number(flags['guidance']) : guidanceFromTopP(top_p, temperature);
     const negative_prompt = typeof flags['negative_prompt'] === 'string' ? (flags['negative_prompt'] as string) : undefined;
     const steps = typeof flags['steps'] === 'number' ? Math.max(1, Math.min(100, Number(flags['steps']))) : undefined;
     const seedVal = typeof flags['seed'] === 'number' ? Math.max(0, Number(flags['seed'])) : undefined;
@@ -453,6 +479,29 @@ const buildImageGenerationWaiter = async (params: {
     if (negative_prompt) payload.negative_prompt = negative_prompt.replace(/"/g, '').trim();
     if (steps !== undefined) payload.steps = steps;
     if (seedVal !== undefined) payload.seed = seedVal;
+
+    // Handle image-to-image if input image is present
+    if (imgs.has || links.length > 0) {
+      const imageUrl = imgs.first || links[0] || '';
+
+      // If it's a base64 image, upload to storage first (requires process.env.URL)
+      if (imageUrl.startsWith('data:')) {
+        if (!process.env.URL) {
+          return { ok: false, error: { code: 'no_storage_url', message: 'process.env.URL is required for base64 image upload in ModelScope i2i' }, status: 400 };
+        }
+        try {
+          const { uploadBase64ToStorage } = await import('../shared/bucket.mts');
+          const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
+          const uploadedUrl = await uploadBase64ToStorage(imageUrl, timestamp);
+          payload.image_url = uploadedUrl;
+        } catch (uploadError: any) {
+          return { ok: false, error: { code: 'upload_failed', message: uploadError?.message || 'Failed to upload base64 image to storage' }, status: 500 };
+        }
+      } else {
+        // Direct URL, use as-is
+        payload.image_url = imageUrl;
+      }
+    }
 
     // Create the task first to get the ID immediately
     try {

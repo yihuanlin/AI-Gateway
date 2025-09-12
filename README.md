@@ -68,9 +68,10 @@ GET /v1/files/:file                # Serve a file from Netlify Blobs
 - **Direct Providers**: Vercel AI Gateway (Gateway), OpenAI (ChatGPT), Google Generative AI (Gemini), Groq, Cerebras, OpenRouter, Poe, Volcengine (Doubao), ModelScope, Infini, Nvidia, Mistral, Poixe, Cohere, Morph, GitHub Models (GitHub), GitHub Copilot (Copilot), Cloudflare Gateway (Cloudflare), Meituan (LongCat), and any custom OpenAI chat/completions compatible providers.
 
 ### Multimedia Generation  
-- **Doubao (ByteDance)**: i2i, t2i, i2v, and t2v
-- **ModelScope**: Community models for t2i
-- **Hugging Face**: Community models for i2i, t2v, and i2v
+- **Gemini 2.5 Flash Image (Nano Banana)**: Gemini native image generation: t2i and i2i
+- **Doubao (ByteDance)**: t2i (Seedream), i2i (SeedEdit), i2v (Seedance), and t2v (Seedance)
+- **ModelScope**: Community models for t2i and i2i (i2i requires Netlify Blobs)
+- **Hugging Face**: Community models for t2i, i2i, t2v, and i2v
 
 ### Tools & Extensions
 **If required environment variables are set, the following tools are enabled by adding tools in request body (except for when Anthropic format client tools are provided), even an empty array (in [Cherry Studio](https://www.cherry-ai.com), this is triggered by enabling model build-in search):**
@@ -138,8 +139,8 @@ LMSTUDIO_API_KEY=each-custom-provider-must-have-at-least-a-key
 
 ### Image Models  
 - **Doubao (ByteDance)**: `image/doubao` - i2i and t2i.
-- **Hugging Face**: `image/Qwen/Qwen-Image-Edit-vision`, `image/black-forest-labs/FLUX.1-Kontext-dev-vision` etc. (Add a `-vision` suffix to any Hugging Face Inference model, i2i only)
-- **ModelScope**: `image/black-forest-labs/FLUX.1-dev`, `image/Qwen/Qwen-Image` etc. (Any ModelScope model, t2i only)
+- **Hugging Face**: `image/huggingface/black-forest-labs/FLUX.1-Kontext-dev` etc. (`image/huggingface/` + any Hugging Face internal model ID)
+- **ModelScope**: `image/modelscope/Qwen/Qwen-Image` etc. (`image/modelscope/` + any ModelScope internal model ID; i2i requires Netlify Blobs)
 - **Flags**: `--size WxH`, `--ratio A:B`, `--guidance N`, `--steps N`, `--seed N` etc. (Send `/help` for help)
 
 ### Video Models

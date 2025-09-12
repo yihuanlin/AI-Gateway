@@ -4317,13 +4317,16 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 	const curated = [
 		{ id: 'admin/magic-vision', name: 'Responses Management', object: 'model', created: 0, owned_by: 'admin' },
 		{ id: 'image/doubao-vision', name: 'Seed Image', object: 'model', created: 0, owned_by: 'doubao' },
-		{ id: 'image/MusePublic/14_ckpt_SD_XL', name: 'Anything XL', object: 'model', created: 0, owned_by: 'modelscope' },
-		{ id: 'image/MusePublic/489_ckpt_FLUX_1', name: 'FLUX.1 [dev]', object: 'model', created: 0, owned_by: 'modelscope' },
-		{ id: 'image/MusePublic/flux-high-res', name: 'FLUX.1 [dev] High-Res', object: 'model', created: 0, owned_by: 'modelscope' },
-		{ id: 'image/black-forest-labs/FLUX.1-Krea-dev', name: 'FLUX.1 Krea [dev]', object: 'model', created: 0, owned_by: 'modelscope' },
-		{ id: 'image/black-forest-labs/FLUX.1-Kontext-dev-vision', name: 'FLUX.1 Kontext [dev]', object: 'model', created: 0, owned_by: 'huggingface' },
-		{ id: 'image/Qwen/Qwen-Image', name: 'Qwen-Image', object: 'model', created: 0, owned_by: 'modelscope' },
-		{ id: 'image/Qwen/Qwen-Image-Edit-vision', name: 'Qwen-Image-Edit', object: 'model', created: 0, owned_by: 'huggingface' },
+		{ id: 'image/modelscope/MusePublic/14_ckpt_SD_XL', name: 'Anything XL (ModelScope)', object: 'model', created: 0, owned_by: 'modelscope' },
+		{ id: 'image/modelscope/MusePublic/489_ckpt_FLUX_1', name: 'FLUX.1 [dev] (ModelScope)', object: 'model', created: 0, owned_by: 'modelscope' },
+		{ id: 'image/modelscope/MusePublic/flux-high-res', name: 'FLUX.1 [dev] High-Res (ModelScope)', object: 'model', created: 0, owned_by: 'modelscope' },
+		{ id: 'image/modelscope/black-forest-labs/FLUX.1-Krea-dev', name: 'FLUX.1 Krea [dev] (ModelScope)', object: 'model', created: 0, owned_by: 'modelscope' },
+		{ id: 'image/modelscope/Qwen/Qwen-Image', name: 'Qwen-Image (ModelScope)', object: 'model', created: 0, owned_by: 'modelscope' },
+		{ id: 'image/modelscope/Qwen/Qwen-Image-Edit-vision', name: 'Qwen-Image-Edit (ModelScope)', object: 'model', created: 0, owned_by: 'modelscope' },
+		{ id: 'image/modelscope/MusePublic/FLUX.1-Kontext-Dev-vision', name: 'FLUX.1 Kontext [dev] (ModelScope)', object: 'model', created: 0, owned_by: 'modelscope' },
+		{ id: 'image/huggingface/tencent/HunyuanImage-2.1', name: 'HunyuanImage 2.1 (Hugging Face)', object: 'model', created: 0, owned_by: 'huggingface' },
+		{ id: 'image/huggingface/black-forest-labs/FLUX.1-Kontext-dev-vision', name: 'FLUX.1 Kontext [dev] (Hugging Face)', object: 'model', created: 0, owned_by: 'huggingface' },
+		{ id: 'image/huggingface/Qwen/Qwen-Image-Edit-vision', name: 'Qwen-Image-Edit (Hugging Face)', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'video/doubao-seedance-pro-vision', name: 'Seedance 1.0 Pro', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'video/doubao-seedance-lite-vision', name: 'Seedance 1.0 Lite', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'video/Wan-AI/Qwen-Wan2.2-I2V-A14B-vision', name: 'Qwen Wan2.2 I2V', object: 'model', created: 0, owned_by: 'huggingface' },
@@ -4331,10 +4334,7 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 		{ id: 'video/Wan-AI/Qwen-Wan2.2-TI2V-5B', name: 'Qwen Wan2.2 T2V 5B', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'video/Lightricks/LTX-Video-vision', name: 'LTX Video TI2V', object: 'model', created: 0, owned_by: 'huggingface' },
 	];
-	const existingIds = new Set(allModels.map((m) => m.id));
-	for (const m of curated) if (!existingIds.has(m.id)) allModels.push(m);
-
-	if (allModels.length > 0) return { object: 'list', data: allModels };
+	if (allModels.length > 0) return { object: 'list', data: [...allModels, ...curated] };
 	throw new Error('All provider(s) failed to return models');
 }
 
