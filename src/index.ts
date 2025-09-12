@@ -22,10 +22,10 @@ const MAX_ATTEMPTS = 3;
 type Attempt = { type: 'gateway' | 'custom', name?: string, apiKey: string, model: string };
 
 let accumulatedSources: Array<{ title: string, url: string, type: string, start_index: number, end_index: number }> = [];
-let tavilyApiKey: string | null = null;
-let pythonApiKey: string | null = null;
-let pythonUrl: string | null = null;
-let semanticScholarApiKey: string | null = null;
+const tavilyApiKey: string | null = process.env.TAVILY_API_KEY || null;
+const pythonApiKey: string | null = process.env.PYTHON_API_KEY || null;
+const pythonUrl: string | null = process.env.PYTHON_URL || null;
+const semanticScholarApiKey: string | null = process.env.SEMANTIC_SCHOLAR_API_KEY || null;
 let geo: {
 	city?: string;
 	country?: { code: string; name: string };
@@ -444,55 +444,23 @@ const getGatewayForAttempt = async (attempt: Attempt) => {
 const prepareProvidersToTry = (args: {
 	model: string,
 	providerKeys: Record<string, string[]>,
-	isPasswordAuth: boolean,
-	authApiKey?: string | null,
 }) => {
-	const { model, providerKeys, isPasswordAuth, authApiKey } = args;
+	const { model, providerKeys } = args;
 	const modelInfo = parseModelName(model);
 	const providersToTry: Array<Attempt> = [];
 
 	if (modelInfo.useCustomProvider && modelInfo.provider) {
-		let keys: string[] = providerKeys[modelInfo.provider] || [];
-		if (keys.length === 0) {
-			if (!isPasswordAuth && authApiKey) {
-				keys = authApiKey.split(',').map((k: string) => k.trim()).filter(Boolean);
-			} else if (isPasswordAuth) {
-				const envKeyName = `${modelInfo.provider.toUpperCase()}_API_KEY`;
-				const envVal = process.env[envKeyName];
-				if (envVal) keys = envVal.split(',').map((k: string) => k.trim()).filter(Boolean);
-			}
-		}
-
+		const keys: string[] = providerKeys[modelInfo.provider] || [];
 		if (keys.length > 0) {
 			const shuffledKeys = keys.slice().sort(() => Math.random() - 0.5);
 			for (const key of shuffledKeys) {
 				providersToTry.push({ type: 'custom', name: modelInfo.provider, apiKey: key, model: modelInfo.model });
 			}
-		} else {
-			let gatewayKeys: string[] = [];
-			if (isPasswordAuth) {
-				const gatewayKey = process.env.GATEWAY_API_KEY;
-				if (gatewayKey) gatewayKeys = gatewayKey.split(',').map(k => k.trim()).filter(Boolean);
-			} else if (authApiKey) {
-				gatewayKeys = authApiKey.split(',').map((k: string) => k.trim()).filter(Boolean);
-			}
-
-			if (gatewayKeys.length > 0) {
-				const start = Math.floor(Math.random() * gatewayKeys.length);
-				for (let idx = 0; idx < gatewayKeys.length; idx++) {
-					const k = gatewayKeys[(start + idx) % gatewayKeys.length];
-					if (k) providersToTry.push({ type: 'gateway', apiKey: k, model: modelInfo.model });
-				}
-			}
 		}
 	} else {
 		let gatewayKeys: string[] = [];
-		if (isPasswordAuth) {
-			const gatewayKey = process.env.GATEWAY_API_KEY;
-			if (gatewayKey) gatewayKeys = gatewayKey.split(',').map(k => k.trim()).filter(Boolean);
-		} else if (authApiKey) {
-			gatewayKeys = authApiKey.split(',').map((k: string) => k.trim()).filter(Boolean);
-		}
+		const gatewayKey = process.env.GATEWAY_API_KEY;
+		if (gatewayKey) gatewayKeys = gatewayKey.split(',').map(k => k.trim()).filter(Boolean);
 
 		if (gatewayKeys.length > 0) {
 			const start = Math.floor(Math.random() * gatewayKeys.length);
@@ -1425,8 +1393,7 @@ app.use('*', cors({
 app.post('/v1/responses', async (c: Context) => {
 	const authHeader = c.req.header('Authorization')?.split(' ')[1] || null;
 	const envPassword = process.env.PASSWORD;
-	const isPasswordAuth = !!(envPassword && authHeader && envPassword.trim() === authHeader.trim());
-	if (!authHeader) return c.text('Unauthorized', 401);
+	if (!(envPassword && authHeader && envPassword.trim() === authHeader.trim())) return c.text('Unauthorized', 401);
 
 	const abortController = new AbortController();
 	if (c.req.raw?.signal) {
@@ -1460,31 +1427,25 @@ app.post('/v1/responses', async (c: Context) => {
 		store = true,
 	} = body || {};
 	const now = Date.now();
-	const headers = c.req.raw.headers;
 	const responseId = request_id || 'resp_' + new Date(now).toISOString().slice(0, 16).replace(/[-:T]/g, '');
 	if (typeof model === 'string' && (model.startsWith('image/') || model.startsWith('video/') || model.startsWith('admin/'))) {
 		// Build AI SDK-style messages from Responses input (streamlined for modules)
 		const mapped = responsesInputToAiSdkMessages(input);
 		if (model.startsWith('image/')) {
 			const { handleImageForResponses } = await import('./modules/images.mts');
-			return await handleImageForResponses({ model, messages: mapped, headers, stream: !!stream, temperature, top_p, request_id: responseId, authHeader: authHeader || null, isPasswordAuth });
+			return await handleImageForResponses({ model, messages: mapped, stream: !!stream, temperature, top_p, request_id: responseId || null });
 		}
 		if (model.startsWith('video/')) {
 			const { handleVideoForResponses } = await import('./modules/videos.mts');
-			return await handleVideoForResponses({ model, messages: mapped, headers, stream: !!stream, request_id: responseId, authHeader: authHeader || null, isPasswordAuth });
+			return await handleVideoForResponses({ model, messages: mapped, stream: !!stream, request_id: responseId });
 		}
 		if (model.startsWith('admin/')) {
 			const { handleAdminForResponses } = await import('./modules/management.mts');
-			return await handleAdminForResponses({ messages: mapped, headers, model, request_id: responseId, stream: !!stream, isPasswordAuth });
+			return await handleAdminForResponses({ messages: mapped, model, request_id: responseId, stream: !!stream });
 		}
 	}
-	// Headers and aux keys
-	tavilyApiKey = c.req.header('x-tavily-api-key') || (isPasswordAuth ? process.env.TAVILY_API_KEY || null : null);
-	pythonApiKey = c.req.header('x-python-api-key') || (isPasswordAuth ? process.env.PYTHON_API_KEY || null : null);
-	pythonUrl = c.req.header('x-python-url') || (isPasswordAuth ? process.env.PYTHON_URL || null : null);
-	semanticScholarApiKey = c.req.header('x-semantic-scholar-api-key') || (isPasswordAuth ? process.env.SEMANTIC_SCHOLAR_API_KEY || null : null);
 	// Provider keys and headers map
-	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
+	const providerKeys = await getProviderKeys();
 	const getResponsesMessages = async (): Promise<any[]> => {
 		// Seed from previous stored conversation if provided
 		let history: any[] = [];
@@ -1542,7 +1503,7 @@ app.post('/v1/responses', async (c: Context) => {
 		search = true;
 	}
 
-	const { providersToTry } = prepareProvidersToTry({ model: modelId, providerKeys, isPasswordAuth, authApiKey: authHeader });
+	const { providersToTry } = prepareProvidersToTry({ model: modelId, providerKeys });
 	const providerOptionsHeader = c.req.header('x-provider-options');
 	const providerOptions = buildDefaultProviderOptions({
 		providerOptionsHeader: providerOptionsHeader ?? null,
@@ -2834,13 +2795,8 @@ app.post('/v1/responses', async (c: Context) => {
 
 app.post('/v1/chat/completions', async (c: Context) => {
 	const authHeader = c.req.header('Authorization')?.split(' ')[1] || null;
-
 	const envPassword = process.env.PASSWORD;
-	const isPasswordAuth = !!(envPassword && authHeader && envPassword.trim() === authHeader.trim());
-
-	if (!authHeader) {
-		return c.text('Unauthorized', 401);
-	}
+	if (!(envPassword && authHeader && envPassword.trim() === authHeader.trim())) return c.text('Unauthorized', 401);
 
 	const abortController = new AbortController();
 	if (c.req.raw?.signal) {
@@ -2852,14 +2808,6 @@ app.post('/v1/chat/completions', async (c: Context) => {
 			abortController.abort();
 		}
 	}
-
-	let gateway;
-
-	// Get headers
-	tavilyApiKey = c.req.header('x-tavily-api-key') || (isPasswordAuth ? process.env.TAVILY_API_KEY || null : null);
-	pythonApiKey = c.req.header('x-python-api-key') || (isPasswordAuth ? process.env.PYTHON_API_KEY || null : null);
-	pythonUrl = c.req.header('x-python-url') || (isPasswordAuth ? process.env.PYTHON_URL || null : null);
-	semanticScholarApiKey = c.req.header('x-semantic-scholar-api-key') || (isPasswordAuth ? process.env.SEMANTIC_SCHOLAR_API_KEY || null : null);
 
 	const body = await c.req.json();
 	const {
@@ -2885,20 +2833,19 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	} = body;
 	const contextMessages = (typeof model === 'string' && model.toLowerCase().includes('image')) ? messages : addContextMessages(messages, c);
 	const processedMessages = await processChatMessages(contextMessages, model);
-	const headers = c.req.raw.headers;
 	if (typeof model === 'string' && model.startsWith('image/')) {
 		const { handleImageForChat } = await import('./modules/images.mts');
-		return await handleImageForChat({ model, messages: processedMessages, headers, stream: !!stream, temperature, top_p, authHeader: authHeader || null, isPasswordAuth });
+		return await handleImageForChat({ model, messages: processedMessages, stream: !!stream, temperature, top_p });
 	}
 	if (typeof model === 'string' && model.startsWith('video/')) {
 		const { handleVideoForChat } = await import('./modules/videos.mts');
-		return await handleVideoForChat({ model, messages: processedMessages, headers, stream: !!stream, authHeader: authHeader || null, isPasswordAuth });
+		return await handleVideoForChat({ model, messages: processedMessages, stream: !!stream });
 	}
 	if (typeof model === 'string' && model.startsWith('admin/')) {
 		const { handleAdminForChat } = await import('./modules/management.mts');
-		return await handleAdminForChat({ messages: processedMessages, headers, model, stream: !!stream, isPasswordAuth });
+		return await handleAdminForChat({ messages: processedMessages, stream: !!stream, model });
 	}
-	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
+	const providerKeys = await getProviderKeys();
 	let modelId: string = model;
 	let thinkingConfig: Record<string, any> = thinking;
 	let search: boolean = false;
@@ -2930,7 +2877,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	} else {
 		search = true;
 	}
-	const { providersToTry } = prepareProvidersToTry({ model: modelId, providerKeys, isPasswordAuth, authApiKey: authHeader });
+	const { providersToTry } = prepareProvidersToTry({ model: modelId, providerKeys });
 	const providerOptionsHeader = c.req.header('x-provider-options');
 	const providerOptions = buildDefaultProviderOptions({
 		providerOptionsHeader: providerOptionsHeader ?? null,
@@ -3622,14 +3569,9 @@ const processAnthropicMessages = async (contextMessages: any[]): Promise<any[]> 
 }
 
 app.post('/v1/messages', async (c: Context) => {
-	const authHeader = c.req.header('x-api-key') || c.req.header('Authorization')?.split(' ')[1] || null;
-
+	const authHeader = c.req.header('Authorization')?.split(' ')[1] || null;
 	const envPassword = process.env.PASSWORD;
-	const isPasswordAuth = !!(envPassword && authHeader && envPassword.trim() === authHeader.trim());
-
-	if (!authHeader) {
-		return c.text('Unauthorized', 401);
-	}
+	if (!(envPassword && authHeader && envPassword.trim() === authHeader.trim())) return c.text('Unauthorized', 401);
 
 	const abortController = new AbortController();
 	if (c.req.raw?.signal) {
@@ -3640,12 +3582,6 @@ app.post('/v1/messages', async (c: Context) => {
 			abortController.abort();
 		}
 	}
-
-	// Get headers for auxiliary services
-	tavilyApiKey = c.req.header('x-tavily-api-key') || (isPasswordAuth ? process.env.TAVILY_API_KEY || null : null);
-	pythonApiKey = c.req.header('x-python-api-key') || (isPasswordAuth ? process.env.PYTHON_API_KEY || null : null);
-	pythonUrl = c.req.header('x-python-url') || (isPasswordAuth ? process.env.PYTHON_URL || null : null);
-	semanticScholarApiKey = c.req.header('x-semantic-scholar-api-key') || (isPasswordAuth ? process.env.SEMANTIC_SCHOLAR_API_KEY || null : null);
 
 	const body = await c.req.json();
 	const {
@@ -3678,14 +3614,11 @@ app.post('/v1/messages', async (c: Context) => {
 	})();
 
 	const processedMessages = await processAnthropicMessages(contextMessages);
-
-	const headers = c.req.raw.headers;
-	const providerKeys = await getProviderKeys(headers, authHeader || null, isPasswordAuth);
-
+	const providerKeys = await getProviderKeys();
 
 	// Use existing shared function for tools
 	const aiSdkTools: Record<string, any> = buildAiSdkTools(model, tools);
-	const { providersToTry } = prepareProvidersToTry({ model, providerKeys, isPasswordAuth, authApiKey: authHeader });
+	const { providersToTry } = prepareProvidersToTry({ model, providerKeys });
 	const providerOptions = buildDefaultProviderOptions({
 		thinking,
 		service_tier,
@@ -4224,7 +4157,7 @@ const CUSTOM_MODEL_LISTS = {
 	],
 };
 
-const isSupportedProvider = (name: string): name is keyof typeof SUPPORTED_PROVIDERS => {
+const isSupportedProvider = (name: string): name is string & keyof typeof SUPPORTED_PROVIDERS => {
 	return Object.prototype.hasOwnProperty.call(SUPPORTED_PROVIDERS, name);
 }
 
@@ -4285,14 +4218,8 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 	return data;
 }
 
-const getModelsResponse = async (apiKey: string, providerKeys: Record<string, string[]>, isPasswordAuth: boolean = false) => {
-	let gatewayApiKeys: string[] = [];
-	if (isPasswordAuth) {
-		const gatewayKey = process.env.GATEWAY_API_KEY;
-		if (gatewayKey) gatewayApiKeys = gatewayKey.split(',').map((k) => k.trim());
-	} else {
-		gatewayApiKeys = apiKey.split(',').map((k) => k.trim());
-	}
+const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
+	const gatewayApiKeys = String(process.env.GATEWAY_API_KEY).split(',').map((k: string) => k.trim()) || [];
 
 	// Helper to enforce 5s timeout, returning [] on timeout or error
 	const withTimeout = <T>(p: Promise<T>, provider: string): Promise<T> =>
@@ -4453,17 +4380,16 @@ const parseModelName = (model: string) => {
 app.get('/v1/models', async (c: Context) => {
 	const authHeader = c.req.header('Authorization')?.split(' ')[1] || null;
 	const envPassword = process.env.PASSWORD;
-	const isPasswordAuth = !!(envPassword && authHeader && envPassword.trim() === authHeader.trim());
-	if (!authHeader) return c.text('Unauthorized', 401);
+	if (!(envPassword && authHeader && envPassword.trim() === authHeader.trim())) return c.text('Unauthorized', 401);
 
 	const headers: Record<string, string> = {};
 	c.req.raw.headers.forEach((value: string, key: string) => {
 		headers[key.toLowerCase().replace(/-/g, '_')] = value;
 	});
-	const providerKeys = await getProviderKeys(headers as any, authHeader || null, isPasswordAuth);
+	const providerKeys = await getProviderKeys();
 
 	try {
-		const modelsResponse = await getModelsResponse(authHeader, providerKeys, isPasswordAuth);
+		const modelsResponse = await getModelsResponse(providerKeys);
 		c.header('Cache-Control', 'private, max-age=7200');
 		return c.json(modelsResponse);
 	} catch (error: any) {

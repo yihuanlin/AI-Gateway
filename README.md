@@ -65,7 +65,7 @@ GET /v1/files/:file                # Serve a file from Netlify Blobs
 
 ### Text Generation
 - **Gateway**: Vercel AI Gateway
-- **Direct Providers**: Vercel AI Gateway (Gateway), OpenAI (ChatGPT), Google Generative AI (Gemini), Groq, Cerebras, OpenRouter, Poe, Volcengine (Doubao), ModelScope, Infini, Nvidia, Mistral, Poixe, Cohere, Morph, GitHub Models (GitHub), GitHub Copilot (Copilot), Cloudflare Gateway (Cloudflare), Meituan (LongCat), etc.
+- **Direct Providers**: Vercel AI Gateway (Gateway), OpenAI (ChatGPT), Google Generative AI (Gemini), Groq, Cerebras, OpenRouter, Poe, Volcengine (Doubao), ModelScope, Infini, Nvidia, Mistral, Poixe, Cohere, Morph, GitHub Models (GitHub), GitHub Copilot (Copilot), Cloudflare Gateway (Cloudflare), Meituan (LongCat), and any custom OpenAI chat/completions compatible providers.
 
 ### Multimedia Generation  
 - **Doubao (ByteDance)**: i2i, t2i, i2v, and t2v
@@ -123,6 +123,11 @@ LONGCAT_API_KEY=ak_...
 CLOUDFLARE_API_KEY=your-cloudflare-api-key
 CLOUDFLARE_ACCOUNT_ID=your-cloudflare-account-id
 CLOUDFLARE_GATEWAY=your-cloudflare-gateway-name
+
+#Custom OpenAI chat/completions format providers
+CUSTOM_API_ENDPOINTS={"internai":{"baseURL":"https://chat.intern-ai.org.cn/api/v1"},"lmstudio":{"baseURL":"http://localhost:1234/v1"}}
+INTERNAI_API_KEY=each-custom-provider-must-have-at-least-a-key
+LMSTUDIO_API_KEY=each-custom-provider-must-have-at-least-a-key
 ```
 
 ## 🎨 Model Categories
@@ -190,7 +195,6 @@ curl -X POST "$HOSTNAME/v1/messages" \
 curl -X POST "$HOSTNAME/v1/messages" \
   -H "Content-Type: application/json" \
   -H "x-api-key: $PASSWORD" \
-  -H "x-tavily-api-key: tvly-dev-..." \
   -d '{
     "model": "anthropic/claude-sonnet-4",
     "messages": [
@@ -261,7 +265,6 @@ curl -X POST "$HOSTNAME/v1/chat/completions" \
 curl -X POST "$HOSTNAME/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer gsk_...,gsk_..." \
-  -H "x-tavily-api-key: tvly-dev-..." \
   -d '{
     "model": "groq/moonshotai/kimi-k2-instruct",
     "messages": [
@@ -334,10 +337,7 @@ curl -X POST "$HOSTNAME/v1/responses" \
 ```bash
 # Get all available models including text, image, video, and admin models
 curl -X GET "$HOSTNAME/v1/models" \
-  -H "Authorization: Bearer your-vercel-ai-gateway-key" \
-  -H "x-chatgpt-api-key: sk-proj-..." \
-  -H "x-groq-api-key: gsk_..." \
-  -H "x-gemini-api-key: AIzaSy..."
+  -H "Authorization: Bearer $PASSWORD" \
 ```
 
 ```bash

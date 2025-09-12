@@ -1,5 +1,5 @@
 import { type WaitResult, lastUserPromptFromMessages, responsesBase, streamChatSingleText, streamResponsesSingleText, streamResponsesGenerationElapsed, streamChatGenerationElapsed, findLinks, hasImageInMessages, sleep } from './utils.mts';
-import { SUPPORTED_PROVIDERS, getProviderKeys } from '../shared/providers.mts';
+import { SUPPORTED_PROVIDERS } from '../shared/providers.mts';
 
 export const toMarkdownVideo = (url: string): string => {
     return `[Generated Video](${url})`;
@@ -21,12 +21,9 @@ const helpForVideo = (model: string) => {
 const buildVideoGenerationWaiter = async (params: {
     model: string;
     prompt: string;
-    headers: Headers;
-    authHeader: string | null;
-    isPasswordAuth: boolean;
     contentParts: any[];
 }): Promise<{ ok: true; wait: (signal: AbortSignal) => Promise<WaitResult>; taskId: string } | { ok: false; error: any; status?: number }> => {
-    const { model, prompt: rawPrompt, headers, authHeader, isPasswordAuth, contentParts } = params;
+    const { model, prompt: rawPrompt, contentParts } = params;
     const links = findLinks(rawPrompt || '');
     const imgs = hasImageInMessages(contentParts || []);
     let prompt = rawPrompt || '';
@@ -35,8 +32,7 @@ const buildVideoGenerationWaiter = async (params: {
     if (!model.includes('doubao')) {
         let apiKey: string | null = null;
         try {
-            const pk = await getProviderKeys(headers as any, authHeader, isPasswordAuth);
-            const keys = pk['huggingface'] || [];
+            const keys = String(process.env.HUGGINGFACE_API_KEY).split(',').map((k: string) => k.trim()) || [];
             if (keys.length > 0) { const idx = Math.floor(Math.random() * keys.length); apiKey = keys[idx] || null; }
         } catch { }
         if (!apiKey) return { ok: false, error: { code: 'no_api_key', message: 'Missing Hugging Face API key' }, status: 401 };
@@ -163,8 +159,7 @@ const buildVideoGenerationWaiter = async (params: {
     // Doubao Seedance support
     let apiKey: string | null = null;
     try {
-        const pk = await getProviderKeys(headers as any, authHeader, isPasswordAuth);
-        const keys = pk['doubao'] || [];
+        const keys = String(process.env.DOUBAO_API_KEY).split(',').map((k: string) => k.trim()) || [];
         if (keys.length > 0) { const idx = Math.floor(Math.random() * keys.length); apiKey = keys[idx] || null; }
     } catch { }
     if (!apiKey) return { ok: false, error: { code: 'no_api_key', message: 'Missing Doubao API key' }, status: 401 };
@@ -278,8 +273,8 @@ const buildVideoGenerationWaiter = async (params: {
     }
 }
 
-export const handleVideoForChat = async (args: { model: string; messages: any[]; headers: Headers; stream?: boolean; authHeader: string | null; isPasswordAuth: boolean; }): Promise<Response> => {
-    const { model, messages, headers, stream = false, authHeader, isPasswordAuth } = args;
+export const handleVideoForChat = async (args: { model: string; messages: any[]; stream?: boolean; }): Promise<Response> => {
+    const { model, messages, stream = false } = args;
     const now = Date.now();
     const last = lastUserPromptFromMessages(messages);
     let prompt = last.text || '';
@@ -292,7 +287,7 @@ export const handleVideoForChat = async (args: { model: string; messages: any[];
         return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
     }
 
-    const waiter = await buildVideoGenerationWaiter({ model, prompt, headers, authHeader, isPasswordAuth, contentParts: last.content || [] });
+    const waiter = await buildVideoGenerationWaiter({ model, prompt, contentParts: last.content || [] });
     if (!waiter.ok) {
         return new Response(JSON.stringify({ error: waiter.error }), { status: waiter.status || 400, headers: { 'Content-Type': 'application/json' } });
     }
@@ -310,8 +305,8 @@ export const handleVideoForChat = async (args: { model: string; messages: any[];
     return new Response(JSON.stringify(payload), { headers: { 'Content-Type': 'application/json' } });
 }
 
-export const handleVideoForResponses = async (args: { model: string; messages: any[]; headers: Headers; stream?: boolean; request_id: string; authHeader: string | null; isPasswordAuth: boolean; }): Promise<Response> => {
-    const { model, messages, headers, stream = false, request_id, authHeader, isPasswordAuth } = args;
+export const handleVideoForResponses = async (args: { model: string; messages: any[]; stream?: boolean; request_id: string; }): Promise<Response> => {
+    const { model, messages, stream = false, request_id } = args;
     const now = Date.now();
     const last = lastUserPromptFromMessages(messages);
     let prompt = last.text || '';
@@ -324,13 +319,13 @@ export const handleVideoForResponses = async (args: { model: string; messages: a
         return new Response(JSON.stringify(response), { headers: { 'Content-Type': 'application/json' } });
     }
 
-    const waiter = await buildVideoGenerationWaiter({ model, prompt, headers, authHeader, isPasswordAuth, contentParts: last.content || [] });
+    const waiter = await buildVideoGenerationWaiter({ model, prompt, contentParts: last.content || [] });
     if (!waiter.ok) {
         return new Response(JSON.stringify({ error: waiter.error }), { status: waiter.status || 400, headers: { 'Content-Type': 'application/json' } });
     }
     if (stream) {
         const baseObj = responsesBase(now, request_id, model, null, null, true, undefined, undefined, undefined, undefined);
-        return streamResponsesGenerationElapsed({ baseObj, requestId: request_id, waitForResult: waiter.wait, taskId: waiter.taskId, headers });
+        return streamResponsesGenerationElapsed({ baseObj, requestId: request_id, waitForResult: waiter.wait, taskId: waiter.taskId });
     }
     // Non-stream: wait for completion
     const res = await waiter.wait(new AbortController().signal);

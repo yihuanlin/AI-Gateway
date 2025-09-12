@@ -1,5 +1,5 @@
 import { type WaitResult, lastUserPromptFromMessages, responsesBase, streamChatSingleText, streamResponsesSingleText, streamChatGenerationElapsed, streamResponsesGenerationElapsed, findLinks, hasImageInMessages, sleep } from './utils.mts';
-import { SUPPORTED_PROVIDERS, getProviderKeys } from '../shared/providers.mts';
+import { SUPPORTED_PROVIDERS } from '../shared/providers.mts';
 
 export type ImageResult = {
   usage: { input_tokens: number; output_tokens: number; total_tokens: number } | null;
@@ -26,14 +26,11 @@ const getHelpForModel = (model: string) => {
 export const handleImageForChat = async (args: {
   model: string;
   messages: any[];
-  headers: Headers;
   stream?: boolean;
   temperature?: number;
   top_p?: number;
-  authHeader: string | null;
-  isPasswordAuth: boolean;
 }): Promise<Response> => {
-  const { model, messages, headers, stream = false, temperature, top_p, authHeader, isPasswordAuth } = args;
+  const { model, messages, stream = false, temperature, top_p } = args;
 
   const now = Date.now();
   const last = lastUserPromptFromMessages(messages);
@@ -54,9 +51,6 @@ export const handleImageForChat = async (args: {
       model,
       prompt,
       flags,
-      headers,
-      authHeader,
-      isPasswordAuth,
       contentParts: last.content || [],
       ...(typeof temperature === 'number' ? { temperature } : {}),
       ...(typeof top_p === 'number' ? { top_p } : {}),
@@ -84,15 +78,12 @@ export const handleImageForChat = async (args: {
 export const handleImageForResponses = async (args: {
   model: string;
   messages: any[];
-  headers: Headers;
   stream?: boolean;
   temperature?: number;
   top_p?: number;
   request_id: string;
-  authHeader: string | null;
-  isPasswordAuth: boolean;
 }): Promise<Response> => {
-  const { model, messages, headers, stream = false, temperature, top_p, request_id, authHeader, isPasswordAuth } = args;
+  const { model, messages, stream = false, temperature, top_p, request_id } = args;
   const now = Date.now();
   const last = lastUserPromptFromMessages(messages);
   let prompt = last.text || '';
@@ -114,9 +105,6 @@ export const handleImageForResponses = async (args: {
       model,
       prompt,
       flags,
-      headers,
-      authHeader,
-      isPasswordAuth,
       contentParts: last.content || [],
       ...(typeof temperature === 'number' ? { temperature } : {}),
       ...(typeof top_p === 'number' ? { top_p } : {}),
@@ -124,7 +112,7 @@ export const handleImageForResponses = async (args: {
     if (!waiter.ok) {
       return new Response(JSON.stringify({ error: waiter.error }), { status: waiter.status || 400, headers: { 'Content-Type': 'application/json' } });
     }
-    if (stream) return streamResponsesGenerationElapsed({ baseObj, requestId: request_id, waitForResult: waiter.wait, taskId: waiter.taskId, headers });
+    if (stream) return streamResponsesGenerationElapsed({ baseObj, requestId: request_id, waitForResult: waiter.wait, taskId: waiter.taskId });
     const res = await waiter.wait(new AbortController().signal);
     if (!res.ok) return new Response(JSON.stringify({ error: res.error }), { status: 500, headers: { 'Content-Type': 'application/json' } });
     // For Responses endpoint, usage format is already correct: { input_tokens, output_tokens, total_tokens }
@@ -222,14 +210,11 @@ const buildImageGenerationWaiter = async (params: {
   model: string;
   prompt: string;
   flags: Record<string, any>;
-  headers: Headers;
-  authHeader: string | null;
-  isPasswordAuth: boolean;
   contentParts: any[];
   temperature?: number;
   top_p?: number;
 }): Promise<{ ok: true; wait: (signal: AbortSignal) => Promise<WaitResult>; taskId: string } | { ok: false; error: any; status?: number }> => {
-  const { model, headers, authHeader, isPasswordAuth, contentParts, flags, temperature, top_p } = params;
+  const { model, contentParts, flags, temperature, top_p } = params;
   let prompt = params.prompt || '';
   const links = findLinks(prompt);
   const imgs = hasImageInMessages(contentParts || []);
@@ -239,8 +224,7 @@ const buildImageGenerationWaiter = async (params: {
   if (model.startsWith('image/doubao')) {
     let apiKey: string | null = null;
     try {
-      const pk = await getProviderKeys(headers as any, authHeader, isPasswordAuth);
-      const keys = pk['doubao'] || [];
+      const keys = String(process.env.DOUBAO_API_KEY).split(',').map((k: string) => k.trim()) || [];
       if (keys.length > 0) { const idx = Math.floor(Math.random() * keys.length); apiKey = keys[idx] || null; }
     } catch { }
     if (!apiKey) return { ok: false, error: { code: 'no_api_key', message: 'Missing Doubao API key' }, status: 401 };
@@ -317,8 +301,7 @@ const buildImageGenerationWaiter = async (params: {
   if (model.endsWith('-vision')) {
     let apiKey: string | null = null;
     try {
-      const pk = await getProviderKeys(headers as any, authHeader, isPasswordAuth);
-      const keys = pk['huggingface'] || [];
+      const keys = String(process.env.HUGGINGFACE_API_KEY).split(',').map((k: string) => k.trim()) || [];
       if (keys.length > 0) { const idx = Math.floor(Math.random() * keys.length); apiKey = keys[idx] || null; }
     } catch { }
     if (!apiKey) return { ok: false, error: { code: 'no_api_key', message: 'Missing Hugging Face API key' }, status: 401 };
@@ -445,8 +428,7 @@ const buildImageGenerationWaiter = async (params: {
     const modelId = model.replace(/^image\//, '');
     let apiKey: string | null = null;
     try {
-      const pk = await getProviderKeys(headers as any, authHeader, isPasswordAuth);
-      const keys = pk['modelscope'] || [];
+      const keys = String(process.env.MODELSCOPE_API_KEY).split(',').map((k: string) => k.trim()) || [];
       if (keys.length > 0) { const idx = Math.floor(Math.random() * keys.length); apiKey = keys[idx] || null; }
     } catch { }
     if (!apiKey) return { ok: false, error: { code: 'no_api_key', message: 'Missing ModelScope API key' }, status: 401 };

@@ -134,9 +134,8 @@ export const streamResponsesGenerationElapsed = (params: {
   textItemId?: string;
   startOutputIndex?: number;
   taskId?: string;
-  headers?: Headers;
 }): Response => {
-  const { baseObj, requestId, waitForResult, headers } = params;
+  const { baseObj, requestId, waitForResult } = params;
   const now = Date.now();
   const enc = new TextEncoder();
   let sequenceNumber = 0;
@@ -183,7 +182,7 @@ export const streamResponsesGenerationElapsed = (params: {
         }
 
         // Save to blob store if taskId and link are available
-        if (taskId && result.downloadLink && headers) {
+        if (taskId && result.downloadLink) {
           try {
             const { getStoreWithConfig } = await import('../shared/store.mts');
             const store = getStoreWithConfig('responses');
