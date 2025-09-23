@@ -16,7 +16,7 @@ export const sleep = (ms: number) => {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-export const hasImageInMessages = (content: any): { has: boolean; first?: string | undefined; second?: string | undefined } => {
+export const hasImageInMessages = (content: any): { has: boolean; first?: string; second?: string; urls?: string[] } => {
   if (!Array.isArray(content)) return { has: false };
   const urls: string[] = [];
   for (const part of content) {
@@ -26,7 +26,11 @@ export const hasImageInMessages = (content: any): { has: boolean; first?: string
       if (u) urls.push(u);
     }
   }
-  return { has: urls.length > 0, first: urls[0], second: urls[1] };
+  const result: { has: boolean; first?: string; second?: string; urls?: string[] } = { has: urls.length > 0 };
+  if (urls.length > 0) result.first = urls[0]!;
+  if (urls.length > 1) result.second = urls[1]!;
+  if (urls.length > 0) result.urls = urls;
+  return result;
 }
 
 export const lastUserPromptFromMessages = (messages: any[]): { text: string; content?: any[] } => {

@@ -12,7 +12,7 @@ const toMarkdownImage = (url: string): string => {
 
 const getHelpForModel = (model: string) => {
   if (model.startsWith('image/doubao')) {
-    return 'Use **Doubao** t2i model *doubao-seedream-3-0-t2i-250415* or i2i *doubao-seededit-3-0-i2i-250628* (if has an input image).\nFlags: `--format url|b64_json`, `--size {WxH}|--ratio {e.g., 16:9}`, `--seed N`, `--guidance F`.\n`/upload` upload input images to storage .';
+    return 'Use **Doubao** unified t2i / i2i model *doubao-seedream-4-0-250828* (multiple reference images supported).\nFlags: `--format url|b64_json`, `--size {WxH}|--ratio {e.g., 16:9}`, `--seed N`, `--guidance F`.\n`/upload` uploads output to storage when base64 is returned.';
   }
   if (model.startsWith('image/huggingface/')) {
     return '**Hugging Face** Text-to-Image and Image-to-Image models.\nFlags: `--guidance F`, `--negative_prompt "text"`, `--steps N (1-100)"`, `--size WxH` or `--ratio A:B`, `--seed N`.\n`/upload` upload input images to storage (output images are uploaded to storage). Input images enable image-to-image mode.\nSpecial prompt trigger for Kontext models:\n`Make a shot in the same scene of...`\n`Remove ...`\n`redepthkontext ...`\n`Place it`\n`Fuse this image into background`\n`Convert this image into pencil drawing art style`\n`Turn this image into the Clay_Toy style.`';
@@ -224,35 +224,63 @@ const buildImageGenerationWaiter = async (params: {
     const url = `${base}/images/generations`;
     const response_format = (flags['format'] as string) || 'url';
     const watermark = false;
+    const model = 'doubao-seedream-4-0-250828';
+
+    // Collect all potential reference images (uploaded message images + inline links)
+    const referenceImages: string[] = [];
+    if (imgs.has && Array.isArray((imgs as any).urls)) {
+      for (const u of (imgs as any).urls as string[]) {
+        if (u && !referenceImages.includes(u)) referenceImages.push(u);
+      }
+    }
+    for (const l of links) {
+      if (!referenceImages.includes(l)) referenceImages.push(l);
+    }
+
     let payload: any;
-    if (imgs.has || links.length > 0) {
-      // i2i model (seededit) - ignore size/ratio options but still clean prompt
-      const firstUrl = imgs.first || links[0];
-      // Remove size/ratio flags from prompt for i2i model
+    if (referenceImages.length > 0) {
+      // i2i (single or multi reference). For multi, send array. Remove size/ratio flags (model handles adaptively)
       let cleanPrompt = prompt.replace(/\s--(?:size|ratio)\s+[^\s]+/g, '').trim();
       const guidance = typeof flags['guidance'] === 'number' ? flags['guidance'] : (typeof top_p === 'number' ? Math.max(1, Math.min(10, (1 - top_p) * 9 + 1)) : 5.5);
-      payload = { model: 'doubao-seededit-3-0-i2i-250628', prompt: cleanPrompt, image: firstUrl, response_format, size: 'adaptive', seed: typeof flags['seed'] === 'number' ? flags['seed'] : 21, guidance_scale: guidance, watermark };
+      payload = {
+        model,
+        prompt: cleanPrompt,
+        image: referenceImages.length === 1 ? referenceImages[0] : referenceImages,
+        response_format,
+        seed: typeof flags['seed'] === 'number' ? flags['seed'] : 21,
+        guidance_scale: guidance,
+        watermark
+      };
     } else {
+      // pure t2i
       const size = (() => {
         if (typeof flags['size'] === 'string') return flags['size'];
         if (typeof flags['ratio'] === 'string') {
           const ratio = flags['ratio'] as string;
           const ratioMap: Record<string, string> = {
-            '1:1': '1024x1024',
-            '3:4': '864x1152',
-            '4:3': '1152x864',
-            '16:9': '1280x720',
-            '9:16': '720x1280',
-            '2:3': '832x1248',
-            '3:2': '1248x832',
-            '21:9': '1512x648'
+            '1:1': '2048x2048',
+            '4:3': '2304x1728',
+            '3:4': '1728x2304',
+            '16:9': '2560x1440',
+            '9:16': '1440x2560',
+            '3:2': '2496x1664',
+            '2:3': '1664x2496',
+            '21:9': '3024x1296'
           };
           return ratioMap[ratio] || '1280x720';
         }
         return '1280x720';
       })();
       const g = typeof flags['guidance'] === 'number' ? flags['guidance'] : guidanceFromTopP(top_p, temperature) ?? 2.5;
-      payload = { model: 'doubao-seedream-3-0-t2i-250415', prompt, response_format, size, seed: typeof flags['seed'] === 'number' ? flags['seed'] : -1, guidance_scale: g, watermark };
+      payload = {
+        model,
+        prompt,
+        response_format,
+        size,
+        seed: typeof flags['seed'] === 'number' ? flags['seed'] : -1,
+        guidance_scale: g,
+        watermark
+      };
     }
     // Generate a synthetic task ID for Doubao since it's synchronous
     const taskId = `doubao_${Date.now()}_${Math.random().toString(36).slice(2)}`;

@@ -4316,7 +4316,7 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 
 	const curated = [
 		{ id: 'admin/magic-vision', name: 'Management', description: '', object: 'model', created: 0, owned_by: 'internal' },
-		{ id: 'image/doubao-vision', name: 'Seed Image', description: '¥0.3 per image-to-image generation, ¥0.259 per text-to-image generation', object: 'model', created: 0, owned_by: 'doubao' },
+		{ id: 'image/doubao-vision', name: 'Seed Image', description: '¥0.2 per image', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'image/modelscope/MusePublic/14_ckpt_SD_XL', name: 'Anything XL (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/modelscope/MusePublic/489_ckpt_FLUX_1', name: 'FLUX.1 [dev] (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/modelscope/MusePublic/flux-high-res', name: 'FLUX.1 [dev] High-Res (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
