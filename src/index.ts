@@ -303,10 +303,10 @@ const createCustomProvider = async (providerName: string, apiKey: string) => {
 				baseURL: config.baseURL,
 				includeUsage: true,
 				headers: {
-					"editor-version": "vscode/1.103.1",
+					"editor-version": "vscode/1.104.2",
 					"copilot-vision-request": "true",
-					"editor-plugin-version": "copilot-chat/0.30.1",
-					"user-agent": "GitHubCopilotChat/0.30.1"
+					"editor-plugin-version": "copilot-chat/0.31.3",
+					"user-agent": "GitHubCopilotChat/0.31.3"
 				},
 			});
 		default:
@@ -4134,9 +4134,9 @@ const CUSTOM_MODEL_LISTS = {
 	doubao: [
 		{ id: 'doubao-seed-1-6-flash-250715', name: 'Doubao Seed 1.6 Flash' },
 		{ id: 'doubao-seed-1-6-thinking-250715', name: 'Doubao Seed 1.6 Thinking' },
-		{ id: 'deepseek-v3-1-terminus', name: 'DeepSeek V3.1 Terminus' },
-		{ id: 'deepseek-r1-250528', name: 'DeepSeek R1' },
-		{ id: 'kimi-k2-250905', name: 'Kimi K2' },
+		{ id: 'deepseek-v3-1-terminus', name: 'DeepSeek V3.1 Terminus (Volcengine)' },
+		{ id: 'deepseek-r1-250528', name: 'DeepSeek R1 (Volcengine)' },
+		{ id: 'kimi-k2-250905', name: 'Kimi K2 (Volcengine)' },
 	],
 	cohere: [
 		{ id: 'command-a-03-2025', name: 'Command A' },
@@ -4145,8 +4145,8 @@ const CUSTOM_MODEL_LISTS = {
 		{ id: 'command-a-translate-08-2025', name: 'Command A Translation' },
 	],
 	longcat: [
-		{ id: 'longcat-flash-chat', name: 'LongCat Flash Chat' },
-		{ id: 'longcat-flash-thinking', name: 'LongCat Flash Thinking' },
+		{ id: 'longcat-flash-chat', name: 'LongCat Flash Chat (Meituan)' },
+		{ id: 'longcat-flash-thinking', name: 'LongCat Flash Thinking (Meituan)' },
 	],
 	cloudflare: [
 		{ id: '@cf/meta/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout' },
@@ -4195,10 +4195,9 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 			headers: {
 				'Authorization': `Bearer ${copilotToken}`,
 				'Content-Type': 'application/json',
-				"editor-version": "vscode/1.103.1",
-				"copilot-vision-request": "true",
-				"editor-plugin-version": "copilot-chat/0.30.1",
-				"user-agent": "GitHubCopilotChat/0.30.1"
+				"editor-version": "vscode/1.104.2",
+				"editor-plugin-version": "copilot-chat/0.31.3",
+				"user-agent": "GitHubCopilotChat/0.31.3"
 			},
 		});
 	} else {
