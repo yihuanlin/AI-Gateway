@@ -4124,6 +4124,7 @@ app.post('/v1/messages', async (c: Context) => {
 const CUSTOM_MODEL_LISTS = {
 	poixe: [
 		{ id: 'gpt-5:free', name: 'GPT-5 4K/2K' },
+		{ id: 'gpt-5-chat-latest:free', name: 'GPT-5 Chat 4K/2K' },
 		{ id: 'gpt-5-mini:free', name: 'GPT-5 Mini 4K' },
 		{ id: 'grok-3-mini:free', name: 'Grok 3 Mini 4K' },
 		{ id: 'grok-4:free', name: 'Grok 4 4K/2K' },
@@ -4133,7 +4134,7 @@ const CUSTOM_MODEL_LISTS = {
 	doubao: [
 		{ id: 'doubao-seed-1-6-flash-250715', name: 'Doubao Seed 1.6 Flash' },
 		{ id: 'doubao-seed-1-6-thinking-250715', name: 'Doubao Seed 1.6 Thinking' },
-		{ id: 'deepseek-v3-1-250821', name: 'DeepSeek V3.1' },
+		{ id: 'deepseek-v3-1-terminus', name: 'DeepSeek V3.1 Terminus' },
 		{ id: 'deepseek-r1-250528', name: 'DeepSeek R1' },
 		{ id: 'kimi-k2-250905', name: 'Kimi K2' },
 	],
@@ -4145,6 +4146,7 @@ const CUSTOM_MODEL_LISTS = {
 	],
 	longcat: [
 		{ id: 'longcat-flash-chat', name: 'LongCat Flash Chat' },
+		{ id: 'longcat-flash-thinking', name: 'LongCat Flash Thinking' },
 	],
 	cloudflare: [
 		{ id: '@cf/meta/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout' },
@@ -4326,7 +4328,7 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 		{ id: 'image/modelscope/MusePublic/FLUX.1-Kontext-Dev-vision', name: 'FLUX.1 Kontext [dev] (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/huggingface/tencent/HunyuanImage-2.1', name: 'HunyuanImage 2.1 (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'image/huggingface/black-forest-labs/FLUX.1-Kontext-dev-vision', name: 'FLUX.1 Kontext [dev] (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
-		{ id: 'image/huggingface/Qwen/Qwen-Image-Edit-vision', name: 'Qwen-Image-Edit (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
+		{ id: 'image/huggingface/Qwen/Qwen-Image-Edit-2509-vision', name: 'Qwen-Image-Edit 2509 (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'video/doubao-seedance-pro-vision', name: 'Seedance 1.0 Pro', description: '¥15 per million output tokens', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'video/doubao-seedance-lite-vision', name: 'Seedance 1.0 Lite', description: '¥10 per million output tokens', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'video/Wan-AI/Qwen-Wan2.2-I2V-A14B-vision', name: 'Qwen Wan2.2 I2V', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
