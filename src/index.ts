@@ -5,6 +5,7 @@ import { createGateway } from '@ai-sdk/gateway'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { openai, createOpenAI } from '@ai-sdk/openai'
 import { google, createGoogleGenerativeAI } from '@ai-sdk/google'
+import { createGeminiProvider } from 'ai-sdk-provider-gemini-cli'
 import { uploadBlobToStorage, getFileWithMetadata } from './shared/bucket.mts';
 import { anthropic } from '@ai-sdk/anthropic';
 import { SUPPORTED_PROVIDERS, getProviderKeys } from './shared/providers.mts'
@@ -295,6 +296,11 @@ const createCustomProvider = async (providerName: string, apiKey: string) => {
 				apiKey: apiKey,
 				baseURL: config.baseURL,
 			});
+		case 'geminicli':
+			return createGeminiProvider({
+				authType: config.baseURL,
+				apiKey: apiKey,
+			});
 		case 'copilot':
 			const copilotToken = await fetchCopilotToken(apiKey);
 			return createOpenAICompatible({
@@ -448,7 +454,9 @@ const prepareProvidersToTry = (args: {
 	const providersToTry: Array<Attempt> = [];
 
 	if (modelInfo.useCustomProvider && modelInfo.provider) {
-		const keys: string[] = providerKeys[modelInfo.provider] || [];
+		const keys: string[] = modelInfo.provider === 'geminicli'
+			? (providerKeys.gemini || [])
+			: (providerKeys[modelInfo.provider] || []);
 		if (keys.length > 0) {
 			const shuffledKeys = keys.slice().sort(() => Math.random() - 0.5);
 			for (const key of shuffledKeys) {

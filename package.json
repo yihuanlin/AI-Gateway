@@ -8,15 +8,16 @@
     "build": "mkdir -p netlify/edge-functions && cp src/index.ts netlify/edge-functions/index.ts && cp -R src/modules netlify/edge-functions/ && cp -R src/shared netlify/edge-functions/"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^2.0.19",
+    "@ai-sdk/anthropic": "^2.0.20",
     "@ai-sdk/gateway": "^1.0.30",
     "@ai-sdk/google": "^2.0.17",
-    "@ai-sdk/openai": "^2.0.36",
+    "@ai-sdk/openai": "^2.0.38",
     "@ai-sdk/openai-compatible": "^1.0.19",
-    "@huggingface/inference": "^4.8.0",
+    "@huggingface/inference": "^4.9.0",
     "@netlify/blobs": "^10.0.11",
-    "ai": "^5.0.54",
-    "hono": "^4.9.8",
+    "ai": "^5.0.56",
+    "ai-sdk-provider-gemini-cli": "^1.1.1",
+    "hono": "^4.9.9",
     "zod": "^4.1.11"
   },
   "devDependencies": {

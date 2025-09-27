@@ -17,6 +17,7 @@ export const SUPPORTED_PROVIDERS = {
   huggingface: { baseURL: 'https://router.huggingface.co/v1' },
   longcat: { baseURL: 'https://api.longcat.chat/openai/v1' },
   cloudflare: { baseURL: `https://gateway.ai.cloudflare.com/v1/${process.env.CLOUDFLARE_GATEWAY}/workers-ai/v1` },
+  geminicli: { baseURL: 'api-key' },
   ...(process.env.CUSTOM_API_ENDPOINTS ? JSON.parse(process.env.CUSTOM_API_ENDPOINTS) : {}),
 };
 
