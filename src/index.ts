@@ -4325,7 +4325,7 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 		{ id: 'image/modelscope/Qwen/Qwen-Image', name: 'Qwen-Image (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/modelscope/Qwen/Qwen-Image-Edit-vision', name: 'Qwen-Image-Edit (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/modelscope/MusePublic/FLUX.1-Kontext-Dev-vision', name: 'FLUX.1 Kontext [dev] (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
-		{ id: 'image/huggingface/tencent/HunyuanImage-2.1', name: 'HunyuanImage 2.1 (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
+		{ id: 'image/huggingface/tencent/HunyuanImage-3.0', name: 'HunyuanImage 3.0 (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'image/huggingface/black-forest-labs/FLUX.1-Kontext-dev-vision', name: 'FLUX.1 Kontext [dev] (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'image/huggingface/Qwen/Qwen-Image-Edit-2509-vision', name: 'Qwen-Image-Edit 2509 (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'video/doubao-seedance-pro-vision', name: 'Seedance 1.0 Pro', description: '¥15 per million output tokens', object: 'model', created: 0, owned_by: 'doubao' },
@@ -4346,16 +4346,15 @@ const parseModelDisplayName = (model: string) => {
 		const lowerWord = word.toLowerCase();
 		if (lowerWord === 'deepseek') return 'DeepSeek';
 		if (lowerWord === 'ernie') return 'ERNIE';
-		if (['mai', 'ds', 'r1'].includes(lowerWord)) return word.toUpperCase();
 		if (lowerWord === 'gpt') return 'GPT';
 		if (lowerWord === 'oss') return 'OSS';
 		if (lowerWord === 'glm') return 'GLM';
+		if (lowerWord === 'vl') return 'VL';
 		if (lowerWord.startsWith('o') && lowerWord.length > 1 && /^\d/.test(lowerWord.slice(1))) return word.toLowerCase();
 		if (/^a?\d+[bkmae]$/.test(lowerWord)) return word.toUpperCase();
 		return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
 	}).join(' ');
-	if (displayName === 'MAI DS R1') displayName = 'MAI-DS-R1';
-	else if (displayName.startsWith('GPT ')) displayName = displayName.replace(/^GPT /, 'GPT-');
+	if (displayName.startsWith('GPT ')) displayName = displayName.replace(/^GPT /, 'GPT-');
 	return displayName;
 }
 
