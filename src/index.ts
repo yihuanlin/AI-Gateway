@@ -4196,8 +4196,8 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 				'Authorization': `Bearer ${copilotToken}`,
 				'Content-Type': 'application/json',
 				"editor-version": "vscode/1.104.2",
-				"editor-plugin-version": "copilot-chat/0.31.3",
-				"user-agent": "GitHubCopilotChat/0.31.3"
+				"editor-plugin-version": "copilot-chat/0.31.4",
+				"user-agent": "GitHubCopilotChat/0.31.4"
 			},
 		});
 	} else {
