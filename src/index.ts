@@ -4132,8 +4132,8 @@ const CUSTOM_MODEL_LISTS = {
 		{ id: 'doubao-seed-1-6-thinking-250615:free', name: 'Doubao Seed 1.6 Thinking 4K/2K' },
 	],
 	doubao: [
-		{ id: 'doubao-seed-1-6-flash-250715', name: 'Doubao Seed 1.6 Flash' },
-		{ id: 'doubao-seed-1-6-thinking-250715', name: 'Doubao Seed 1.6 Thinking' },
+		{ id: 'doubao-seed-1-6-251015', name: 'Doubao Seed 1.6' },
+		{ id: 'doubao-seed-1-6-lite-251015', name: 'Doubao Seed 1.6 Lite' },
 		{ id: 'deepseek-v3-1-terminus', name: 'DeepSeek V3.1 Terminus (Volcengine)' },
 		{ id: 'deepseek-r1-250528', name: 'DeepSeek R1 (Volcengine)' },
 		{ id: 'kimi-k2-250905', name: 'Kimi K2 (Volcengine)' },
