@@ -13,9 +13,9 @@ import { string, number, boolean, array, object, optional, int, enum as zenum } 
 
 const app = new Hono()
 const TEXT_ENCODER = new TextEncoder();
-const SEARCH_TOOLS = new Set(['web_search', 'fetch', 'google_search', 'web_search_preview', 'url_context', 'scholar_search', 'paper_recommendations', 'ensembl_api']);
+const SEARCH_TOOLS = new Set(['web_search', 'fetch', 'google_search', 'url_context', 'scholar_search', 'paper_recommendations', 'ensembl_api']);
 const CODE_TOOLS = new Set(['code_execution', 'python_executor', 'code_interpreter']);
-const EXCLUDED_TOOLS = new Set([...SEARCH_TOOLS, ...CODE_TOOLS]);
+const EXCLUDED_TOOLS = new Set([...SEARCH_TOOLS, ...CODE_TOOLS, 'image_generation']);
 const RESEARCH_KEYWORDS = ['research', 'paper'];
 const MAX_ATTEMPTS = 3;
 
@@ -603,6 +603,9 @@ const responsesInputToAiSdkMessages = (input: any): any[] => {
 const buildAiSdkTools = (model: string, userTools: any[] | undefined): Record<string, any> => {
 	let isAnthropic: boolean = false;
 	let aiSdkTools: Record<string, any> = {};
+	if (model.toLowerCase().includes('image') && model.startsWith('openai')) {
+		aiSdkTools.image_generation = openai.tools.imageGeneration({ quality: 'high' });
+	}
 	const buildResearchTools = () => {
 		if (isResearchMode) {
 			aiSdkTools.ensembl_api = ensemblApiTool;
@@ -671,7 +674,7 @@ const buildAiSdkTools = (model: string, userTools: any[] | undefined): Record<st
 		const googleIncompatible = (!['google', 'gemini'].some(prefix => model.startsWith(prefix)) || Object.keys(aiSdkTools).length > 0);
 
 		if (model.startsWith('openai')) {
-			aiSdkTools.web_search_preview = openai.tools.webSearchPreview({
+			aiSdkTools.web_search = openai.tools.webSearch({
 				searchContextSize: isResearchMode ? 'high' : 'medium',
 				...(!isResearchMode && geo ? {
 					userLocation: {
@@ -1500,7 +1503,9 @@ app.post('/v1/responses', async (c: Context) => {
 	} else {
 		search = true;
 	}
-
+	if (modelId.startsWith('openai/')) {
+		modelId = modelId.replace('-image', '');
+	}
 	const { providersToTry } = prepareProvidersToTry({ model: modelId, providerKeys });
 	const providerOptions = buildDefaultProviderOptions({
 		thinking,
@@ -1590,6 +1595,8 @@ app.post('/v1/responses', async (c: Context) => {
 				let reasoningItemId: string | null = null;
 				let reasoningText = '';
 				let reasoningSummaryIndex = 0;
+				let imageOutputIndex = 0;
+				let imageItemId = '';
 				let functionCallItems: Map<string, { id: string, name: string, call_id: string, args: string, outputIndex: number }> = new Map();
 
 				// Poe-specific reasoning detection state
@@ -1619,6 +1626,7 @@ app.post('/v1/responses', async (c: Context) => {
 
 						for await (const part of (result as any).fullStream) {
 							if (abortController.signal.aborted) throw new Error('aborted');
+							if (!part.type.includes('delta')) { console.log(part); }
 
 							switch (part.type) {
 								case 'source': {
@@ -2130,8 +2138,8 @@ app.post('/v1/responses', async (c: Context) => {
 								case 'file': {
 									// Stream image file as image_generation_call output item/events
 									try {
-										const imageItemId = randomId('img');
-										const imageOutputIndex = outputIndex + 1;
+										imageItemId = randomId('ig');
+										imageOutputIndex = outputIndex + 1;
 										const base64Data: string | null = (part as any)?.file?.base64Data || null;
 										const mediaType: string = (part as any)?.file?.mediaType || 'image/png';
 
@@ -2211,7 +2219,7 @@ app.post('/v1/responses', async (c: Context) => {
 												const bytes = new Uint8Array(bin.length);
 												for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
 												const blob = new Blob([bytes], { type: mediaType });
-												const url = await uploadBlobToStorage(blob);
+												const url = await uploadBlobToStorage(blob, imageItemId);
 												const md = `![Generated Image](${url})`;
 												storedImageMarkdown += '\n\n' + md;
 											} catch { }
@@ -2222,6 +2230,9 @@ app.post('/v1/responses', async (c: Context) => {
 									break;
 								}
 								case 'tool-input-start': {
+									if (part.toolName === 'image_generation' && part.providerExecuted) {
+										break;
+									}
 									const trackingKey = part.id;
 									const funcItemId = randomId('fc');
 									const currentOutputIndex = outputIndex + 1;
@@ -2304,6 +2315,40 @@ app.post('/v1/responses', async (c: Context) => {
 									break;
 								}
 								case 'tool-call': {
+									if (part.toolName === 'image_generation' && part.providerExecuted) {
+										imageItemId = part.toolCallId;
+										imageOutputIndex = outputIndex + 1;
+										const imageItem = {
+											id: imageItemId,
+											type: 'image_generation_call',
+											status: 'in_progress',
+											result: null,
+										};
+										outputItems.push(imageItem);
+
+										// Announce the new output item
+										emit({
+											type: 'response.output_item.added',
+											sequence_number: sequenceNumber++,
+											output_index: imageOutputIndex,
+											item: imageItem,
+										});
+
+										// Emit in_progress and generating signals
+										emit({
+											type: 'response.image_generation_call.in_progress',
+											output_index: imageOutputIndex,
+											item_id: imageItemId,
+											sequence_number: sequenceNumber++,
+										});
+										emit({
+											type: 'response.image_generation_call.generating',
+											output_index: imageOutputIndex,
+											item_id: imageItemId,
+											sequence_number: sequenceNumber++,
+										});
+										break;
+									}
 									const trackingKey = part.toolCallId;
 									const funcCall = functionCallItems.get(trackingKey);
 									if (funcCall) {
@@ -2378,6 +2423,64 @@ app.post('/v1/responses', async (c: Context) => {
 									break;
 								}
 								case 'tool-result': {
+									if (!part.dynamic && part.toolName === 'image_generation' && part.providerExecuted) {
+										try {
+											const base64Data: string | null = (part as any)?.output?.result || null;
+											const mediaType: string = 'image/png';
+
+											if (base64Data) {
+												emit({
+													type: 'response.image_generation_call.partial_image',
+													output_index: imageOutputIndex,
+													item_id: imageItemId,
+													sequence_number: sequenceNumber++,
+													partial_image_index: 0,
+													partial_image_b64: base64Data,
+												});
+											}
+
+											// Complete the image generation call
+											emit({
+												type: 'response.image_generation_call.completed',
+												output_index: imageOutputIndex,
+												item_id: imageItemId,
+												sequence_number: sequenceNumber++,
+											});
+
+											const completedImageItem = {
+												id: imageItemId,
+												type: 'image_generation_call',
+												status: 'completed',
+												result: base64Data || null,
+											};
+											const imgItemIdx = outputItems.findIndex((it) => it.id === imageItemId);
+											if (imgItemIdx >= 0) outputItems[imgItemIdx] = completedImageItem; else outputItems.push(completedImageItem);
+
+											emit({
+												type: 'response.output_item.done',
+												sequence_number: sequenceNumber++,
+												output_index: imageOutputIndex,
+												item: completedImageItem,
+											});
+
+											// Advance output index past the image item
+											outputIndex = imageOutputIndex;
+
+											// If storing, upload to blob store and accumulate markdown to store (not to response)
+											if (store && base64Data && process.env.URL) {
+												try {
+													const bin = atob(base64Data);
+													const bytes = new Uint8Array(bin.length);
+													for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+													const blob = new Blob([bytes], { type: mediaType });
+													const url = await uploadBlobToStorage(blob, imageItemId);
+													const md = `![Generated Image](${url})`;
+													storedImageMarkdown += '\n\n' + md;
+												} catch { }
+											}
+										} catch (e) { }
+										break;
+									}
 									// Find the function call by tool call ID or tool name
 									const trackingKey = part.toolCallId;
 									const funcCall = functionCallItems.get(trackingKey);
@@ -2674,6 +2777,16 @@ app.post('/v1/responses', async (c: Context) => {
 							});
 							continue;
 						}
+						if (name === 'image_generation') {
+							const base64Data: string | null = (msg as any)?.output?.result || null;
+							output.push({
+								type: 'image_generation_call',
+								id: msg.toolCallId,
+								status: 'completed',
+								result: base64Data || null,
+							});
+							continue;
+						}
 					}
 				}
 			}
@@ -2688,15 +2801,17 @@ app.post('/v1/responses', async (c: Context) => {
 					});
 				}
 			}
+			let imageItemId = '';
 
 			// Add image_generation_call items for any generated files
 			if (Array.isArray((result as any).files) && (result as any).files.length > 0) {
 				for (const f of (result as any).files) {
 					try {
+						imageItemId = randomId('ig');
 						const fileObj = (f as any)?.file;
 						const base64 = fileObj?.base64Data as string | undefined;
 						// We only need to return base64 result per your spec
-						output.push({ id: randomId('img'), type: 'image_generation_call', status: 'completed', result: base64 || null });
+						output.push({ id: imageItemId, type: 'image_generation_call', status: 'completed', result: base64 || null });
 					} catch { }
 				}
 			}
@@ -2750,7 +2865,7 @@ app.post('/v1/responses', async (c: Context) => {
 									const bytes = new Uint8Array(bin.length);
 									for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
 									const blob = new Blob([bytes], { type: mt });
-									const url = await uploadBlobToStorage(blob);
+									const url = await uploadBlobToStorage(blob, imageItemId);
 									extraMd += (extraMd ? '\n\n' : '') + `![Generated Image](${url})`;
 								}
 							} catch { }
@@ -2872,6 +2987,9 @@ app.post('/v1/chat/completions', async (c: Context) => {
 		}
 	} else {
 		search = true;
+	}
+	if (modelId.startsWith('openai/')) {
+		modelId = modelId.replace('-image', '');
 	}
 	const { providersToTry } = prepareProvidersToTry({ model: modelId, providerKeys });
 	const providerOptions = buildDefaultProviderOptions({
@@ -3131,6 +3249,41 @@ app.post('/v1/chat/completions', async (c: Context) => {
 									if (!EXCLUDED_TOOLS.has(part.toolName)) {
 										chunk = { ...baseChunk, choices: [{ index: 0, delta: { role: 'tool', content: [{ type: 'tool_call_output', call_id: part.toolCallId, output: typeof part.result === 'string' ? part.result : JSON.stringify(part.result) }] }, finish_reason: null }] };
 										controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+									} else if (!part.dynamic && part.toolName === 'image_generation' && part.providerExecuted) {
+										try {
+											const b64 = part.output.result as string | undefined;
+											const mt = 'image/png';
+											if (b64) {
+												const url = `data:${mt};base64,${b64}`;
+												const chunk = {
+													...baseChunk,
+													choices: [{
+														index: 0,
+														delta: {
+															images: [
+																{ type: 'image_url', image_url: { url } }
+															]
+														},
+														finish_reason: null
+													}]
+												};
+												controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+												// Also upload and stream markdown if storing
+												if (store && process.env.URL) {
+													try {
+														const bin = atob(b64);
+														const bytes = new Uint8Array(bin.length);
+														for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+														const blob = new Blob([bytes], { type: mt });
+														const publicUrl = await uploadBlobToStorage(blob);
+														const md = `![Generated Image](${publicUrl})`;
+														const mdChunk = { ...baseChunk, choices: [{ index: 0, delta: { content: (accumulatedText ? '\n\n' : '') + md }, finish_reason: null }] };
+														controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(mdChunk)}\n\n`));
+														accumulatedText += (accumulatedText ? '\n\n' : '') + md;
+													} catch { }
+												}
+											}
+										} catch { }
 									}
 									break;
 								case 'finish':
@@ -3271,6 +3424,12 @@ app.post('/v1/chat/completions', async (c: Context) => {
 							imagesExt.push({ type: 'image_url', image_url: { url: `data:${mt};base64,${b64}` } });
 						}
 					} catch { }
+				}
+			}
+			for (const toolResult of result.staticToolResults) {
+				if (toolResult.toolName === 'image_generation') {
+					if (!imagesExt) imagesExt = [];
+					imagesExt.push({ type: 'image_url', image_url: { url: `data:image/png;base64,${toolResult.output.result}` } });
 				}
 			}
 
@@ -4195,9 +4354,9 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 			headers: {
 				'Authorization': `Bearer ${copilotToken}`,
 				'Content-Type': 'application/json',
-				"editor-version": "vscode/1.104.2",
-				"editor-plugin-version": "copilot-chat/0.31.4",
-				"user-agent": "GitHubCopilotChat/0.31.4"
+				"editor-version": "vscode/1.105.1",
+				"editor-plugin-version": "copilot-chat/0.32.4",
+				"user-agent": "GitHubCopilotChat/0.32.4"
 			},
 		});
 	} else {
@@ -4317,7 +4476,9 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 
 	const curated = [
 		{ id: 'admin/magic-vision', name: 'Management', description: '', object: 'model', created: 0, owned_by: 'internal' },
-		{ id: 'image/doubao-vision', name: 'Seed Image', description: '¥0.2 per image', object: 'model', created: 0, owned_by: 'doubao' },
+		{ id: 'openai/gpt-5-image', name: 'GPT-5 Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
+		{ id: 'openai/gpt-5-pro-image', name: 'GPT-5 Pro Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
+		{ id: 'image/doubao-vision', name: 'Seedream 4.0', description: '¥0.2 per image', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'image/modelscope/MusePublic/14_ckpt_SD_XL', name: 'Anything XL (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/modelscope/MusePublic/489_ckpt_FLUX_1', name: 'FLUX.1 [dev] (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/modelscope/MusePublic/flux-high-res', name: 'FLUX.1 [dev] High-Res (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },

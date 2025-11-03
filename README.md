@@ -69,6 +69,7 @@ GET /v1/files/:file                # Serve a file from Netlify Blobs
 
 ### Multimedia Generation  
 - **Gemini 2.5 Flash Image (Nano Banana)**: Gemini native image generation: t2i and i2i
+- **GPT Image 1**: GPT-5 series native image generation: t2i and i2i
 - **Doubao (ByteDance)**: t2i/i2i (Seedream)and t2v/i2v (Seedance)
 - **ModelScope**: Community models for t2i and i2i (i2i requires Netlify Blobs)
 - **Hugging Face**: Community models for t2i, i2i, t2v, and i2v
@@ -135,7 +136,8 @@ LMSTUDIO_API_KEY=each-custom-provider-must-have-at-least-a-key
 
 ### Text Models
 - **LLM Providers**: `provider`/`model` for custom providers, `model` for Vercel AI Gateway, e.g.:
-- For **Gemini native image generation**: `openrouter/google/gemini-2.5-flash-image-preview` (OpenRouter), `google/gemini-2.5-flash-image-preview` (Vercel AI Gateway), `gemini/gemini-2.5-flash-image-preview` (Google Generative AI)
+- For **Gemini native image generation**: `openrouter/google/gemini-2.5-flash-image` (OpenRouter), `google/gemini-2.5-flash-image` (Vercel AI Gateway), `gemini/gemini-2.5-flash-image` (Google Generative AI)
+- For **ChatGPT native image generation**: add `-image` suffix to model ID, e.g. `openai/gpt-5-image` (Vercel AI Gateway)
 
 ### Image Models  
 - **Doubao (ByteDance)**: `image/doubao` - i2i and t2i.
