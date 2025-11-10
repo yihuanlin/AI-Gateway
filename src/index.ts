@@ -473,7 +473,7 @@ const prepareProvidersToTry = (args: {
 }
 
 // Convert OpenAI Responses API input format to AI SDK messages
-const responsesInputToAiSdkMessages = (input: any): any[] => {
+const responsesInputToAiSdkMessages = async (input: any, model?: string): Promise<any[]> => {
 	if (!input) return [];
 
 	// Simple string => user text
@@ -486,9 +486,59 @@ const responsesInputToAiSdkMessages = (input: any): any[] => {
 		return [{ role: 'user', content: input.text }];
 	}
 
+	// Helper to extract images from markdown
+	const extractImagesFromMarkdown = async (text: string): Promise<{ cleaned: string; files: any[] }> => {
+		const imgRegex = /!\[Generated Image\]\(([^\)]+)\)/g;
+		let match: RegExpExecArray | null;
+		let cleaned = text;
+		const files: any[] = [];
+		while ((match = imgRegex.exec(text)) !== null) {
+			const urlStr = String(match[1] || '').trim();
+			if (!urlStr) continue;
+			let mediaType: string = 'image/png';
+			let image: Uint8Array | null = null;
+			if (urlStr.startsWith('data:')) {
+				const dm = urlStr.match(/^data:([^;]+);base64,(.+)$/);
+				if (dm && dm[1] && dm[2]) {
+					mediaType = String(dm[1]);
+					const b64 = dm[2];
+					const bin = atob(b64);
+					const bytes = new Uint8Array(bin.length);
+					for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+					image = bytes;
+				}
+			} else if (urlStr.startsWith('http://') || urlStr.startsWith('https://')) {
+				try {
+					const resp = await fetch(urlStr);
+					const ct = resp.headers.get('content-type');
+					if (ct) mediaType = ct.split(';')[0] as string;
+					const ab = await resp.arrayBuffer();
+					image = new Uint8Array(ab);
+				} catch { }
+			}
+			if (image) {
+				files.push({ type: 'image', image, mediaType });
+				cleaned = cleaned.replace(match[0], '').trim();
+			}
+		}
+		return { cleaned, files };
+	};
+
 	// Array of role/content objects
 	if (Array.isArray(input)) {
 		const messages: any[] = [];
+
+		// First pass: check if any user message contains images
+		let userHasImage = false;
+		for (const item of input) {
+			if (item?.role === 'user' && Array.isArray(item?.content)) {
+				userHasImage = item.content.some((p: any) =>
+					p?.type?.includes('image') || p?.type === 'input_file'
+				);
+				if (userHasImage) break;
+			}
+		}
+
 		for (const item of input) {
 			// Handle function_call_output messages (responses format)
 			const role = item?.role;
@@ -520,7 +570,21 @@ const responsesInputToAiSdkMessages = (input: any): any[] => {
 				continue;
 			}
 			if (typeof item?.content === 'string') {
-				if (role === 'assistant' || role === 'user') {
+				if (role === 'assistant') {
+					// Extract images from markdown if model supports images and user doesn't have images
+					if (model && model.includes('image') && !userHasImage) {
+						const { cleaned, files } = await extractImagesFromMarkdown(item.content);
+						if (files.length > 0) {
+							const parts: any[] = [];
+							if (cleaned) parts.push({ type: 'text', text: cleaned });
+							parts.push(...files);
+							messages.push({ role, content: parts });
+							continue;
+						}
+					}
+					messages.push({ role, content: { type: 'text', text: item.content } });
+					continue;
+				} else if (role === 'user') {
 					messages.push({ role, content: { type: 'text', text: item.content } });
 					continue;
 				} else if (role === 'system') {
@@ -554,7 +618,14 @@ const responsesInputToAiSdkMessages = (input: any): any[] => {
 			for (const part of contentArr) {
 				if (!part) continue;
 				if (part.type.includes('text') && typeof part.text === 'string') {
-					parts.push({ type: 'text', text: part.text });
+					// Extract images from text if assistant role, model supports images, and user doesn't have images
+					if (role === 'assistant' && model && model.includes('image') && !userHasImage) {
+						const { cleaned, files } = await extractImagesFromMarkdown(part.text);
+						parts.push({ type: 'text', text: cleaned });
+						if (files.length > 0) parts.push(...files);
+					} else {
+						parts.push({ type: 'text', text: part.text });
+					}
 				} else if (part.type.includes('image')) {
 					const image = part?.image_url?.url || part?.url || part?.image || part?.data || (typeof part?.image_url === 'string' ? part.image_url : undefined);
 					if (image) {
@@ -1431,7 +1502,7 @@ app.post('/v1/responses', async (c: Context) => {
 	const responseId = request_id || 'resp_' + new Date(now).toISOString().slice(0, 16).replace(/[-:T]/g, '');
 	if (typeof model === 'string' && (model.startsWith('image/') || model.startsWith('video/') || model.startsWith('admin/'))) {
 		// Build AI SDK-style messages from Responses input (streamlined for modules)
-		const mapped = responsesInputToAiSdkMessages(input);
+		const mapped = await responsesInputToAiSdkMessages(input, model);
 		if (model.startsWith('image/')) {
 			const { handleImageForResponses } = await import('./modules/images.mts');
 			return await handleImageForResponses({ model, messages: mapped, stream: !!stream, temperature, top_p, request_id: responseId || null });
@@ -1451,7 +1522,7 @@ app.post('/v1/responses', async (c: Context) => {
 		// Seed from previous stored conversation if provided
 		let history: any[] = [];
 
-		const messages = responsesInputToAiSdkMessages(input);
+		const messages = await responsesInputToAiSdkMessages(input, model);
 
 		if (previous_response_id) {
 			try {
@@ -1626,7 +1697,7 @@ app.post('/v1/responses', async (c: Context) => {
 
 						for await (const part of (result as any).fullStream) {
 							if (abortController.signal.aborted) throw new Error('aborted');
-							if (!part.type.includes('delta')) { console.log(part); }
+							if (!part.type.includes('delta')) console.log(part.type);
 
 							switch (part.type) {
 								case 'source': {
@@ -2140,8 +2211,101 @@ app.post('/v1/responses', async (c: Context) => {
 									try {
 										imageItemId = randomId('ig');
 										imageOutputIndex = outputIndex + 1;
-										const base64Data: string | null = (part as any)?.file?.base64Data || null;
+										const base64Data: string = (part as any)?.file?.base64Data || undefined;
 										const mediaType: string = (part as any)?.file?.mediaType || 'image/png';
+
+										if (store && process.env.URL) {
+											if (!textItemId) {
+												textItemId = randomId('msg');
+												const textOutputIndex = outputIndex + 1;
+												const textItem = {
+													id: textItemId,
+													type: 'message',
+													status: 'in_progress',
+													role: 'assistant',
+													content: []
+												};
+												outputItems.push(textItem);
+												emit({
+													type: 'response.output_item.added',
+													sequence_number: sequenceNumber++,
+													output_index: textOutputIndex,
+													item: textItem
+												});
+
+												// Emit content_part.added for output_text
+												emit({
+													type: 'response.content_part.added',
+													sequence_number: sequenceNumber++,
+													item_id: textItemId,
+													output_index: textOutputIndex,
+													content_index: 0,
+													part: {
+														type: 'output_text',
+														text: '',
+													}
+												});
+
+												outputIndex = textOutputIndex;
+											}
+											const bin = atob(base64Data);
+											const bytes = new Uint8Array(bin.length);
+											for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+											const blob = new Blob([bytes], { type: mediaType });
+											const publicUrl = await uploadBlobToStorage(blob);
+											const text = `![Generated Image](${publicUrl})`;
+											collectedText += text;
+											emit({
+												type: 'response.output_text.delta',
+												sequence_number: sequenceNumber++,
+												item_id: textItemId,
+												output_index: outputIndex,
+												content_index: 0,
+												delta: text
+											});
+											emit({
+												type: 'response.output_text.done',
+												sequence_number: sequenceNumber++,
+												item_id: textItemId,
+												output_index: outputIndex,
+												content_index: 0,
+												text: collectedText
+											});
+
+											emit({
+												type: 'response.content_part.done',
+												sequence_number: sequenceNumber++,
+												item_id: textItemId,
+												output_index: outputIndex,
+												content_index: 0,
+												part: {
+													type: 'output_text',
+													text: collectedText
+												}
+											});
+
+											const completedTextItem = {
+												id: textItemId,
+												type: 'message',
+												status: 'completed',
+												role: 'assistant',
+												content: [{ type: 'output_text', text: collectedText }]
+											};
+
+											// Update the item in outputItems
+											const itemIndex = outputItems.findIndex(item => item.id === textItemId);
+											if (itemIndex >= 0) outputItems[itemIndex] = completedTextItem;
+
+											emit({
+												type: 'response.output_item.done',
+												sequence_number: sequenceNumber++,
+												output_index: outputIndex,
+												item: completedTextItem
+											});
+											savedTextContent += collectedText;
+											collectedText = '';
+											textItemId = null;
+										}
 
 										const imageItem = {
 											id: imageItemId,
@@ -2474,8 +2638,93 @@ app.post('/v1/responses', async (c: Context) => {
 													for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
 													const blob = new Blob([bytes], { type: mediaType });
 													const url = await uploadBlobToStorage(blob, imageItemId);
-													const md = `![Generated Image](${url})`;
-													storedImageMarkdown += '\n\n' + md;
+													const text = `![Generated Image](${url})`;
+													storedImageMarkdown += '\n\n' + text;
+
+													if (!textItemId) {
+														textItemId = randomId('msg');
+														const textOutputIndex = outputIndex + 1;
+														const textItem = {
+															id: textItemId,
+															type: 'message',
+															status: 'in_progress',
+															role: 'assistant',
+															content: []
+														};
+														outputItems.push(textItem);
+														emit({
+															type: 'response.output_item.added',
+															sequence_number: sequenceNumber++,
+															output_index: textOutputIndex,
+															item: textItem
+														});
+
+														// Emit content_part.added for output_text
+														emit({
+															type: 'response.content_part.added',
+															sequence_number: sequenceNumber++,
+															item_id: textItemId,
+															output_index: textOutputIndex,
+															content_index: 0,
+															part: {
+																type: 'output_text',
+																text: '',
+															}
+														});
+
+														outputIndex = textOutputIndex;
+													}
+													collectedText += text;
+													emit({
+														type: 'response.output_text.delta',
+														sequence_number: sequenceNumber++,
+														item_id: textItemId,
+														output_index: outputIndex,
+														content_index: 0,
+														delta: text
+													});
+													emit({
+														type: 'response.output_text.done',
+														sequence_number: sequenceNumber++,
+														item_id: textItemId,
+														output_index: outputIndex,
+														content_index: 0,
+														text: collectedText
+													});
+
+													emit({
+														type: 'response.content_part.done',
+														sequence_number: sequenceNumber++,
+														item_id: textItemId,
+														output_index: outputIndex,
+														content_index: 0,
+														part: {
+															type: 'output_text',
+															text: collectedText
+														}
+													});
+
+													const completedTextItem = {
+														id: textItemId,
+														type: 'message',
+														status: 'completed',
+														role: 'assistant',
+														content: [{ type: 'output_text', text: collectedText }]
+													};
+
+													// Update the item in outputItems
+													const itemIndex = outputItems.findIndex(item => item.id === textItemId);
+													if (itemIndex >= 0) outputItems[itemIndex] = completedTextItem;
+
+													emit({
+														type: 'response.output_item.done',
+														sequence_number: sequenceNumber++,
+														output_index: outputIndex,
+														item: completedTextItem
+													});
+													savedTextContent += collectedText;
+													collectedText = '';
+													textItemId = null;
 												} catch { }
 											}
 										} catch (e) { }
