@@ -303,10 +303,10 @@ const createCustomProvider = async (providerName: string, apiKey: string) => {
 				baseURL: config.baseURL,
 				includeUsage: true,
 				headers: {
-					"editor-version": "vscode/1.104.2",
+					"editor-version": "vscode/1.106.1",
 					"copilot-vision-request": "true",
-					"editor-plugin-version": "copilot-chat/0.31.3",
-					"user-agent": "GitHubCopilotChat/0.31.3"
+					"editor-plugin-version": "copilot-chat/0.32.5",
+					"user-agent": "GitHubCopilotChat/0.32.5"
 				},
 			});
 		default:
@@ -4540,6 +4540,7 @@ const CUSTOM_MODEL_LISTS = {
 		{ id: 'doubao-seed-1-6-thinking-250615:free', name: 'Doubao Seed 1.6 Thinking 4K/2K' },
 	],
 	doubao: [
+		{ id: 'doubao-seed-code-preview-251028', name: 'Doubao Seed Code' },
 		{ id: 'doubao-seed-1-6-251015', name: 'Doubao Seed 1.6' },
 		{ id: 'doubao-seed-1-6-lite-251015', name: 'Doubao Seed 1.6 Lite' },
 		{ id: 'deepseek-v3-1-terminus', name: 'DeepSeek V3.1 Terminus (Volcengine)' },
@@ -4603,9 +4604,9 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 			headers: {
 				'Authorization': `Bearer ${copilotToken}`,
 				'Content-Type': 'application/json',
-				"editor-version": "vscode/1.105.1",
-				"editor-plugin-version": "copilot-chat/0.32.4",
-				"user-agent": "GitHubCopilotChat/0.32.4"
+				"editor-version": "vscode/1.106.1",
+				"editor-plugin-version": "copilot-chat/0.32.5",
+				"user-agent": "GitHubCopilotChat/0.32.5"
 			},
 		});
 	} else {
@@ -4725,9 +4726,8 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 
 	const curated = [
 		{ id: 'admin/magic-vision', name: 'Management', description: '', object: 'model', created: 0, owned_by: 'internal' },
-		{ id: 'openai/gpt-5-image', name: 'GPT-5 Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
-		{ id: 'openai/gpt-5-pro-image', name: 'GPT-5 Pro Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
-		{ id: 'image/doubao-vision', name: 'Seedream 4.0', description: '¥0.2 per image', object: 'model', created: 0, owned_by: 'doubao' },
+		{ id: 'openai/gpt-5.1-thinking-image', name: 'GPT-5.1 Thinking Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
+		{ id: 'image/doubao-vision', name: 'Seedream 4.0', description: 'First 20 free daily, ¥0.2 per image', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'image/modelscope/MusePublic/14_ckpt_SD_XL', name: 'Anything XL (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/modelscope/MusePublic/489_ckpt_FLUX_1', name: 'FLUX.1 [dev] (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/modelscope/MusePublic/flux-high-res', name: 'FLUX.1 [dev] High-Res (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
