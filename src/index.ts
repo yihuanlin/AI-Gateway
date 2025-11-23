@@ -303,10 +303,10 @@ const createCustomProvider = async (providerName: string, apiKey: string) => {
 				baseURL: config.baseURL,
 				includeUsage: true,
 				headers: {
-					"editor-version": "vscode/1.106.1",
+					"editor-version": "vscode/1.106.2",
 					"copilot-vision-request": "true",
-					"editor-plugin-version": "copilot-chat/0.32.5",
-					"user-agent": "GitHubCopilotChat/0.32.5"
+					"editor-plugin-version": "copilot-chat/0.33.2",
+					"user-agent": "GitHubCopilotChat/0.33.2"
 				},
 			});
 		default:
@@ -4604,9 +4604,9 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 			headers: {
 				'Authorization': `Bearer ${copilotToken}`,
 				'Content-Type': 'application/json',
-				"editor-version": "vscode/1.106.1",
-				"editor-plugin-version": "copilot-chat/0.32.5",
-				"user-agent": "GitHubCopilotChat/0.32.5"
+				"editor-version": "vscode/1.106.2",
+				"editor-plugin-version": "copilot-chat/0.33.2",
+				"user-agent": "GitHubCopilotChat/0.33.2"
 			},
 		});
 	} else {

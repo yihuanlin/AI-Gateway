@@ -14,7 +14,7 @@ const handleAdminRequest = async (args: {
 
   // Help
   if (/^\/help$/i.test(text)) {
-    return 'Commands: `refresh` (Copilot token) | `list` (responses) | `list [prefix]` (`-r`/`r` responses, `-m`/`m` media, `-c`/`c` chat, `-f`/`f`/`file` files) | `ls` (== `list all`) | `delete all` | `delete [id]` | `rm -f [fileKey]` (delete file in storage) | `upload` (from last user files) | `[id]` to view.';
+    return 'Commands: `refresh` (Copilot token) | `list` (responses) | `list [prefix]` (`-r`/`r` responses, `-m`/`m` media, `-c`/`c` chat, `-f`/`f`/`file` files) | `ls` (== `list all`) | `delete all` | `delete [id]` | `rm -f [fileKey]` (delete single file) | `rm -f` (delete all files) | `upload [url?]` (from last user files or URL) | `[id]` to view.';
   }
 
   // Refresh Copilot token
@@ -34,15 +34,27 @@ const handleAdminRequest = async (args: {
     return `Deleted ${blobs.length} item(s).`;
   }
 
-  // Delete a file: rm -f <key> or delete file <key>
+  // Delete files: rm -f <key>, delete file <key>, or rm -f (all files)
   {
-    const m = text.match(/^(?:delete|rm)\s+(?:-f|file)\s+(\S+)$/i);
-    if (m && m[1]) {
+    const m = text.match(/^(?:delete|rm)\s+(?:-f|file)(?:\s+(\S+))?$/i);
+    if (m) {
       const key = m[1];
-      const existing = await (filesStore as any).getWithMetadata(key, { type: 'blob' });
-      if (!existing) return `File not found: ${key}`;
-      await (filesStore as any).delete(key);
-      return `Deleted file: ${key}.`;
+      if (key) {
+        const existing = await (filesStore as any).getWithMetadata(key, { type: 'blob' });
+        if (!existing) return `File not found: ${key}`;
+        await (filesStore as any).delete(key);
+        return `Deleted file: ${key}.`;
+      }
+
+      // Delete all files when no key provided
+      const listResult: any = await (filesStore as any).list({});
+      let blobs: any[] = [];
+      if (listResult && 'blobs' in listResult && Array.isArray(listResult.blobs)) blobs = listResult.blobs; else {
+        for await (const item of listResult) { if (item.blobs) blobs.push(...item.blobs); }
+      }
+      if (blobs.length === 0) return 'No files found to delete.';
+      await Promise.all(blobs.map((b: any) => (filesStore as any).delete(b.key)));
+      return `Deleted ${blobs.length} file(s).`;
     }
   }
 
@@ -92,8 +104,10 @@ const handleAdminRequest = async (args: {
     return ids.length > 0 ? ids.map((id: string) => `- ${id}`).join('\n') : 'No items found.';
   }
 
-  // Upload files from last user message
-  if (/^upload$|^\/upload$/i.test(text)) {
+  // Upload files from last user message or via URL
+  const uploadMatch = text.match(/^\/?upload(?:\s+(https?:\/\/\S+))?$/i);
+  if (uploadMatch) {
+    const urlFromCommand = uploadMatch[1]?.trim();
     // Find last user message with file parts
     const lastUser = (() => {
       for (let i = messages.length - 1; i >= 0; i--) {
@@ -102,24 +116,47 @@ const handleAdminRequest = async (args: {
       }
       return null;
     })();
-    if (!lastUser) return 'No file found in your message.';
+    if (!lastUser && !urlFromCommand) return 'No file found in your message.';
     const uploads: string[] = [];
     try {
-      const { uploadBase64ToStorage, uploadBlobToStorage } = await import('../shared/bucket.mts');
-      for (const part of lastUser.content) {
-        if (part?.type === 'file') {
-          try {
-            const mediaType = part.mediaType || 'application/pdf';
-            if (typeof part.data === 'string') {
-              const url = await uploadBase64ToStorage(part.data);
-              uploads.push(url);
-            } else if (part.data && typeof Blob !== 'undefined') {
-              const data = part.data as ArrayBuffer | Uint8Array;
-              const blob = new Blob([data as any], { type: mediaType });
-              const url = await uploadBlobToStorage(blob);
-              uploads.push(url);
-            }
-          } catch { }
+      const { uploadBase64ToStorage, uploadBlobToStorage, buildPublicUrlForKey } = await import('../shared/bucket.mts');
+      if (lastUser) {
+        for (const part of lastUser.content) {
+          if (part?.type === 'file') {
+            try {
+              const mediaType = part.mediaType || 'application/pdf';
+              if (typeof part.data === 'string') {
+                const url = await uploadBase64ToStorage(part.data);
+                uploads.push(url);
+              } else if (part.data && typeof Blob !== 'undefined') {
+                const data = part.data as ArrayBuffer | Uint8Array;
+                const blob = new Blob([data as any], { type: mediaType });
+                const url = await uploadBlobToStorage(blob);
+                uploads.push(url);
+              }
+            } catch { }
+          }
+        }
+      }
+
+      if (uploads.length === 0 && urlFromCommand) {
+        const remoteUrl = urlFromCommand;
+        try {
+          const response = await fetch(remoteUrl);
+          if (!response.ok) {
+            const bodyText = await response.text().catch(() => '');
+            throw new Error(`Download failed: ${response.status} ${response.statusText}${bodyText ? ` - ${bodyText}` : ''}`);
+          }
+          const contentType = response.headers.get('content-type') || 'application/octet-stream';
+          if (typeof Blob === 'undefined') throw new Error('Blob is not available in this runtime.');
+          const buffer = await response.arrayBuffer();
+          const blob = new Blob([buffer], { type: contentType });
+          const fileKey = deriveFilenameFromLink(remoteUrl, extensionFromContentType(contentType));
+          await (filesStore as any).set(fileKey, blob, { metadata: { contentType, sourceUrl: remoteUrl } });
+          const url = buildPublicUrlForKey(fileKey);
+          uploads.push(url);
+        } catch (err: any) {
+          return `Upload failed: ${err?.message || 'Unable to download provided URL.'}`;
         }
       }
     } catch (e: any) {
@@ -231,6 +268,34 @@ const lastUserTextFromMessages = (messages: any[]): string => {
     }
   }
   return '';
+}
+
+const extensionFromContentType = (contentType?: string): string => {
+  if (!contentType) return 'bin';
+  const main = contentType.split(';')[0]?.trim() || '';
+  if (!main.includes('/')) return main || 'bin';
+  let subtype = main.split('/')[1] || '';
+  if (!subtype && main.startsWith('text/')) return 'txt';
+  if (subtype === 'plain') return 'txt';
+  if (subtype.includes('+')) subtype = subtype.split('+').pop() || subtype;
+  if (subtype.includes('.')) subtype = subtype.split('.').pop() || subtype;
+  return subtype || 'bin';
+}
+
+const deriveFilenameFromLink = (link: string, fallbackExt: string = 'bin'): string => {
+  const safeFallback = `downloaded_${Date.now()}`;
+  try {
+    const urlObj = new URL(link);
+    const segments = urlObj.pathname.split('/').filter(Boolean);
+    let candidate = segments.pop() || safeFallback;
+    candidate = decodeURIComponent(candidate);
+    candidate = candidate.replace(/[^a-zA-Z0-9._-]/g, '_');
+    if (!candidate) candidate = safeFallback;
+    if (!/\.[A-Za-z0-9]+$/.test(candidate)) candidate = `${candidate}.${fallbackExt}`;
+    return candidate;
+  } catch {
+    return `${safeFallback}.${fallbackExt}`;
+  }
 }
 
 export const handleAdminForChat = async (args: { messages: any[]; stream?: boolean; model: string }): Promise<Response> => {
