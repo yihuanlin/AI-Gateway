@@ -5,11 +5,11 @@ import { createGateway } from '@ai-sdk/gateway'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { openai, createOpenAI } from '@ai-sdk/openai'
 import { google, createGoogleGenerativeAI } from '@ai-sdk/google'
-import { uploadBlobToStorage, getFileWithMetadata } from './shared/bucket.mts';
 import { anthropic } from '@ai-sdk/anthropic';
+import { string, number, boolean, array, object, optional, int, enum as zenum } from 'zod/mini'
+import { uploadBlobToStorage, getFileWithMetadata } from './shared/bucket.mts';
 import { SUPPORTED_PROVIDERS, getProviderKeys } from './shared/providers.mts'
 import { getStoreWithConfig } from './shared/store.mts'
-import { string, number, boolean, array, object, optional, int, enum as zenum } from 'zod/mini'
 
 const app = new Hono()
 const TEXT_ENCODER = new TextEncoder();
@@ -402,6 +402,7 @@ const buildDefaultProviderOptions = (args: {
 				serviceTier: service_tier || "auto",
 				store: model.startsWith('chatgpt/') ? store : false,
 				promptCacheKey: 'ai-gateway',
+				...(model.includes('5.1') && { promptCacheRetention: '24h' }),
 			}
 		}
 	}
@@ -410,7 +411,8 @@ const buildDefaultProviderOptions = (args: {
 			google: {
 				...(!model.toLowerCase().includes('image') ? {
 					thinkingConfig: {
-						thinkingBudget: extra_body?.google?.thinking_config?.thinking_budget || -1,
+						...(extra_body?.google?.thinking_config?.thinking_budget && { thinkingBudget: extra_body?.google?.thinking_config?.thinking_budget }),
+						...(extra_body?.google?.thinking_config?.thinking_level && { thinkingLevel: extra_body?.google?.thinking_config?.thinking_level }),
 						includeThoughts: true,
 					}
 				} : {
@@ -771,12 +773,13 @@ const buildAiSdkTools = (model: string, userTools: any[] | undefined): Record<st
 					}
 				} : {})
 			});
-			aiSdkTools.code_execution = anthropic.tools.codeExecution_20250522()
+			aiSdkTools.web_fetch = anthropic.tools.webFetch_20250910({ maxUses: isResearchMode ? 5 : 1 });
+			aiSdkTools.code_execution = anthropic.tools.codeExecution_20250825()
 		} else if (googleIncompatible && !model.startsWith('xai')) {
 			if (tavilyApiKey) aiSdkTools.web_search = tavilySearchTool;
 		}
 		if (googleIncompatible) {
-			aiSdkTools.fetch = jinaReaderTool;
+			if (!model.startsWith('anthropic')) aiSdkTools.fetch = jinaReaderTool;
 			if (!isResearchMode && !model.startsWith('openai') && !model.startsWith('anthropic') && pythonApiKey && pythonUrl) {
 				aiSdkTools.python_executor = pythonExecutorTool;
 			}
@@ -4726,6 +4729,7 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 	const curated = [
 		{ id: 'admin/magic-vision', name: 'Management', description: '', object: 'model', created: 0, owned_by: 'internal' },
 		{ id: 'openai/gpt-5.1-thinking-image', name: 'GPT-5.1 Thinking Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
+		{ id: 'openai/gpt-5.1-instant-image', name: 'GPT-5.1 Instant Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
 		{ id: 'image/doubao-vision', name: 'Seedream 4.0', description: 'First 20 free daily, ¥0.2 per image', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'image/modelscope/MusePublic/14_ckpt_SD_XL', name: 'Anything XL (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/modelscope/MusePublic/489_ckpt_FLUX_1', name: 'FLUX.1 [dev] (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
