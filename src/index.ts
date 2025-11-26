@@ -1697,7 +1697,6 @@ app.post('/v1/responses', async (c: Context) => {
 
 						for await (const part of (result as any).fullStream) {
 							if (abortController.signal.aborted) throw new Error('aborted');
-							if (!part.type.includes('delta')) console.log(part.type);
 
 							switch (part.type) {
 								case 'source': {
