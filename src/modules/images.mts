@@ -1,5 +1,6 @@
 import { type WaitResult, lastUserPromptFromMessages, responsesBase, streamChatSingleText, streamResponsesSingleText, streamChatGenerationElapsed, streamResponsesGenerationElapsed, findLinks, hasImageInMessages, sleep } from './utils.mts';
 import { SUPPORTED_PROVIDERS } from '../shared/providers.mts';
+import { experimental_generateImage as generateImage } from 'ai';
 
 export type ImageResult = {
   usage: { input_tokens: number; output_tokens: number; total_tokens: number } | null;
@@ -20,7 +21,10 @@ const getHelpForModel = (model: string) => {
   if (model.startsWith('image/modelscope/')) {
     return '**ModelScope** Text-to-Image and Image-to-Image models.\nFlags: `--negative_prompt "text"`, `--steps N (1-100)`, `--guidance F` (or derived from `top_p`/`temperature`), `--size WxH` or `--ratio A:B`, `--seed N`.\nFLUX.1 uses support any ratio. For Qwen models, supported ratios: 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3.\n`/upload` upload input images to storage. Input images enable image-to-image mode.\nIf prompt contains `miratsu style` or `chibi` with Qwen/Qwen-Image, switches to **MTWLDFC/miratsu_style**.';
   }
-  return 'Supported providers: **Doubao** `image/doubao` (t2i/i2i), **Hugging Face** `image/huggingface/huggingface-model-id` (t2i/i2i), **ModelScope** `image/modelscope/modelscope-model-id` (t2i/i2i).';
+  if (model.startsWith('image/bfl/')) {
+    return '**Black Forest Labs** FLUX models via AI SDK Gateway.\nMultiple input images supported.\nFlags:\n`--imagePrompt` Base64-encoded image for additional visual context\n`--imagePromptStrength F` (0.0-1.0) Strength of image prompt influence\n`--promptUpsampling` Enable prompt upsampling\n`--raw` Enable raw mode for natural aesthetics\n`--size WxH` Output dimensions (width and height must be multiples of 16)\n`--steps N` Inference steps (flex models only)\n`--guidance F` Guidance scale (flex models only)';
+  }
+  return 'Supported providers: **Doubao** `image/doubao` (t2i/i2i), **Hugging Face** `image/huggingface/huggingface-model-id` (t2i/i2i), **ModelScope** `image/modelscope/modelscope-model-id` (t2i/i2i), **Black Forest Labs** `image/bfl/model-id` (t2i/i2i).';
 }
 
 export const handleImageForChat = async (args: {
@@ -561,6 +565,164 @@ const buildImageGenerationWaiter = async (params: {
     } catch (e: any) {
       return { ok: false, error: { code: 'network_error', message: e?.message || 'fetch failed' } };
     }
+  }
+
+  if (model.startsWith('image/bfl/')) {
+    // Black Forest Labs via AI SDK Gateway
+    let apiKey: string | null = null;
+    try {
+      const gatewayKey = process.env.GATEWAY_API_KEY;
+      if (gatewayKey) {
+        const keys = gatewayKey.split(',').map((k: string) => k.trim()).filter(Boolean);
+        if (keys.length > 0) {
+          const idx = Math.floor(Math.random() * keys.length);
+          apiKey = keys[idx] || null;
+        }
+      }
+    } catch { }
+    if (!apiKey) return { ok: false, error: { code: 'no_api_key', message: 'Missing Gateway API key' }, status: 401 };
+
+    const bflModelId = model.replace('image/bfl/', 'bfl/').replace(/-vision$/, '');
+    const isFlexModel = /flex/i.test(bflModelId);
+    const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
+    const taskId = `bfl_${timestamp}`;
+
+    // Collect input images from message content and links
+    const inputImages: string[] = [];
+    if (imgs.has && Array.isArray((imgs as any).urls)) {
+      for (const u of (imgs as any).urls as string[]) {
+        if (u && !inputImages.includes(u)) inputImages.push(u);
+      }
+    }
+    for (const l of links) {
+      if (!inputImages.includes(l)) inputImages.push(l);
+    }
+
+    // Build providerOptions for Black Forest Labs
+    const providerOptions: Record<string, any> = {
+      blackForestLabs: {
+        outputFormat: 'png',
+        safetyTolerance: 5,
+      }
+    };
+
+    // Add input images to providerOptions (inputImage, inputImage2, inputImage3, etc.)
+    if (inputImages.length > 0) {
+      providerOptions.blackForestLabs.inputImage = inputImages[0];
+      for (let i = 1; i < Math.min(inputImages.length, 10); i++) {
+        providerOptions.blackForestLabs[`inputImage${i + 1}`] = inputImages[i];
+      }
+    }
+
+    // Handle optional flags
+    if (typeof flags['imageprompt'] === 'string') {
+      providerOptions.blackForestLabs.imagePrompt = flags['imageprompt'];
+    }
+    if (typeof flags['imagepromptstrength'] === 'number') {
+      providerOptions.blackForestLabs.imagePromptStrength = Math.max(0, Math.min(1, flags['imagepromptstrength']));
+    }
+    if (flags['promptupsampling'] === true) {
+      providerOptions.blackForestLabs.promptUpsampling = true;
+    }
+    if (flags['raw'] === true) {
+      providerOptions.blackForestLabs.raw = true;
+    }
+    // Handle --size WxH flag
+    if (typeof flags['size'] === 'string') {
+      const sizeParts = (flags['size'] as string).split('x').map(n => parseInt(n));
+      const width = sizeParts[0];
+      const height = sizeParts[1];
+      if (width && height && !isNaN(width) && !isNaN(height)) {
+        // Width and height must be multiples of 16
+        providerOptions.blackForestLabs.width = Math.round(width / 16) * 16;
+        providerOptions.blackForestLabs.height = Math.round(height / 16) * 16;
+      }
+    }
+
+    // Flex model specific options
+    if (isFlexModel) {
+      if (typeof flags['steps'] === 'number') {
+        providerOptions.blackForestLabs.steps = flags['steps'];
+      }
+      if (typeof flags['guidance'] === 'number') {
+        providerOptions.blackForestLabs.guidance = flags['guidance'];
+      }
+    }
+
+    const wait = async (_signal: AbortSignal) => {
+      try {
+        // const { createGateway } = await import('@ai-sdk/gateway');
+        // const gateway = createGateway({ apiKey });
+        globalThis.process.env.AI_GATEWAY_API_KEY = apiKey;
+        // console.log(`Using BFL model: ${bflModelId} with prompt "${prompt}" and options:`, providerOptions);
+        const result = await generateImage({
+          // model: gateway.imageModel(bflModelId),
+          model: bflModelId,
+          prompt,
+          providerOptions,
+        });
+
+        // Get the first generated image
+        const image = result.image;
+        if (!image || !image.base64) {
+          return { ok: false, error: { code: 'no_image', message: 'No image generated' } } as const;
+        }
+
+        const mediaType = image.mediaType || 'image/png';
+        let finalUrl: string;
+
+        // Upload to blob storage if available; fallback to base64 URL
+        try {
+          if (!process.env.URL) throw new Error('No process.env.URL configured');
+          const { uploadBase64ToStorage } = await import('../shared/bucket.mts');
+          const dataUrl = `data:${mediaType};base64,${image.base64}`;
+          finalUrl = await uploadBase64ToStorage(dataUrl, timestamp);
+        } catch (blobError) {
+          console.warn('Failed to upload to storage, using base64:', blobError);
+          finalUrl = `data:${mediaType};base64,${image.base64}`;
+        }
+
+        const usage = { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
+        return { ok: true, text: toMarkdownImage(finalUrl), usage, downloadLink: finalUrl, taskId } as const;
+      } catch (e: any) {
+        // Handle case where error might be wrapped in a Promise
+        let actualError = e;
+        if (e instanceof Promise || (e && typeof e.then === 'function')) {
+          try {
+            actualError = await e;
+          } catch (awaitedErr) {
+            actualError = awaitedErr;
+          }
+        }
+
+        // Extract error message from Gateway errors
+        // Gateway errors stringify as: "GatewayInternalServerError: [JSON details]\n    at ..."
+        let errorMessage = 'BFL API failed';
+        try {
+          const errorString = actualError?.toString?.() || String(actualError);
+          // Try to extract message between "ErrorName: " and first newline
+          const colonIndex = errorString.indexOf(':');
+          if (colonIndex !== -1) {
+            const afterColon = errorString.substring(colonIndex + 1);
+            const newlineIndex = afterColon.indexOf('\n');
+            if (newlineIndex !== -1) {
+              errorMessage = afterColon.substring(0, newlineIndex).trim();
+            } else {
+              errorMessage = afterColon.trim();
+            }
+          }
+          // If still default or empty, try other properties
+          if (!errorMessage || errorMessage === 'BFL API failed') {
+            errorMessage = actualError?.message || actualError?.name || errorString.substring(0, 200) || 'BFL API failed';
+          }
+        } catch {
+          errorMessage = 'BFL API failed';
+        }
+        return { ok: false, error: { code: actualError?.statusCode || 'network_error', message: errorMessage } } as const;
+      }
+    };
+
+    return { ok: true, wait, taskId };
   }
 
   return { ok: false, error: { code: 'unsupported_model', message: 'Unsupported image model' }, status: 400 };

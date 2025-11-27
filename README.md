@@ -68,8 +68,9 @@ GET /v1/files/:file                # Serve a file from Netlify Blobs
 - **Direct Providers**: Vercel AI Gateway (Gateway), OpenAI (ChatGPT), Google Generative AI (Gemini), Groq, Cerebras, OpenRouter, Poe, Volcengine (Doubao), ModelScope, Infini, Nvidia, Mistral, Poixe, Cohere, Morph, GitHub Models (GitHub), GitHub Copilot (Copilot), Cloudflare Gateway (Cloudflare), Meituan (LongCat), and any custom OpenAI chat/completions compatible providers.
 
 ### Multimedia Generation  
-- **Gemini 2.5 Flash Image (Nano Banana)**: Gemini native image generation: t2i and i2i
+- **Gemini Image (Nano Banana)**: Gemini native image generation: t2i and i2i
 - **GPT Image 1**: GPT-5 series native image generation: t2i and i2i
+- **Black Forest Labs**: FLUX models via Vercel AI Gateway: t2i and i2i
 - **Doubao (ByteDance)**: t2i/i2i (Seedream)and t2v/i2v (Seedance)
 - **ModelScope**: Community models for t2i and i2i (i2i requires Netlify Blobs)
 - **Hugging Face**: Community models for t2i, i2i, t2v, and i2v
@@ -136,10 +137,11 @@ LMSTUDIO_API_KEY=each-custom-provider-must-have-at-least-a-key
 
 ### Text Models
 - **LLM Providers**: `provider`/`model` for custom providers, `model` for Vercel AI Gateway, e.g.:
-- For **Gemini native image generation**: `openrouter/google/gemini-2.5-flash-image` (OpenRouter), `google/gemini-2.5-flash-image` (Vercel AI Gateway), `gemini/gemini-2.5-flash-image` (Google Generative AI)
+- For **Gemini native image generation**: `google/gemini-2.5-flash-image` (Vercel AI Gateway), `gemini/gemini-2.5-flash-image` (Google Generative AI)
 - For **ChatGPT native image generation**: add `-image` suffix to model ID, e.g. `openai/gpt-5-image` (Vercel AI Gateway)
 
 ### Image Models  
+- **Black Forest Labs**: `image/bfl/flux-2-pro`, `image/bfl/flux-kontext-pro` etc. (`image/bfl/` + BFL model ID via Vercel AI Gateway)
 - **Doubao (ByteDance)**: `image/doubao` - i2i and t2i.
 - **Hugging Face**: `image/huggingface/black-forest-labs/FLUX.1-Kontext-dev` etc. (`image/huggingface/` + any Hugging Face internal model ID)
 - **ModelScope**: `image/modelscope/Qwen/Qwen-Image` etc. (`image/modelscope/` + any ModelScope internal model ID; i2i requires Netlify Blobs)
