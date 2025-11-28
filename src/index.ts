@@ -433,7 +433,7 @@ const buildDefaultProviderOptions = (args: {
 const getGatewayForAttempt = async (attempt: Attempt) => {
 	if (attempt.type === 'gateway') {
 		const gatewayOptions: any = { apiKey: attempt.apiKey };
-		if (attempt.model === 'anthropic/claude-sonnet-4') {
+		if (attempt.model.startsWith('anthropic/claude-sonnet-4')) {
 			gatewayOptions.headers = { 'anthropic-beta': 'context-1m-2025-08-07' };
 		}
 		return createGateway(gatewayOptions);
@@ -4540,6 +4540,7 @@ const CUSTOM_MODEL_LISTS = {
 		{ id: 'grok-4:free', name: 'Grok 4 4K/2K' },
 		{ id: 'claude-sonnet-4-20250514:free', name: 'Claude Sonnet 4 4K/2K' },
 		{ id: 'doubao-seed-1-6-thinking-250615:free', name: 'Doubao Seed 1.6 Thinking 4K/2K' },
+		{ id: 'gemini-3-pro-preview:free', name: 'Gemini 3 Pro 4K/2K' },
 	],
 	doubao: [
 		{ id: 'doubao-seed-code-preview-251028', name: 'Doubao Seed Code' },
