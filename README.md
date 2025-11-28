@@ -69,7 +69,7 @@ GET /v1/files/:file                # Serve a file from Netlify Blobs
 
 ### Multimedia Generation  
 - **Gemini Image (Nano Banana)**: Gemini native image generation: t2i and i2i
-- **GPT Image 1**: GPT-5 series native image generation: t2i and i2i
+- **GPT Image (`image_generation` tool)**: GPT-5 series native image generation: t2i and i2i
 - **Black Forest Labs**: FLUX models via Vercel AI Gateway: t2i and i2i
 - **Doubao (ByteDance)**: t2i/i2i (Seedream)and t2v/i2v (Seedance)
 - **ModelScope**: Community models for t2i and i2i (i2i requires Netlify Blobs)
@@ -137,8 +137,8 @@ LMSTUDIO_API_KEY=each-custom-provider-must-have-at-least-a-key
 
 ### Text Models
 - **LLM Providers**: `provider`/`model` for custom providers, `model` for Vercel AI Gateway, e.g.:
-- For **Gemini native image generation**: `google/gemini-2.5-flash-image` (Vercel AI Gateway), `gemini/gemini-2.5-flash-image` (Google Generative AI)
-- For **ChatGPT native image generation**: add `-image` suffix to model ID, e.g. `openai/gpt-5-image` (Vercel AI Gateway)
+- For **Gemini native image generation**: `google/gemini-3-pro-image` (Vercel AI Gateway), `gemini/gemini-2.5-flash-image` (Google Generative AI)
+- For **ChatGPT native image generation**: add `-image` suffix to model ID, e.g. `openai/gpt-5.1-image` (Vercel AI Gateway)
 
 ### Image Models  
 - **Black Forest Labs**: `image/bfl/flux-2-pro`, `image/bfl/flux-kontext-pro` etc. (`image/bfl/` + BFL model ID via Vercel AI Gateway)
@@ -201,7 +201,7 @@ curl -X POST "$HOSTNAME/v1/messages" \
   -H "Content-Type: application/json" \
   -H "x-api-key: $PASSWORD" \
   -d '{
-    "model": "anthropic/claude-sonnet-4",
+    "model": "anthropic/claude-opus-4.5",
     "messages": [
       {"role": "user", "content": "Search for the latest developments in AI research"}
     ],
