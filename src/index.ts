@@ -4621,7 +4621,14 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 		return { data: data.models.map((m: any) => ({ id: m.name, name: m.displayName, description: m.description || '' })) };
 	} else if (providerName === 'github') {
 		return {
-			data: data.filter((model: any) =>
+			data: data.map((model: any) => ({
+				...model,
+				description: `${model.rate_limit_tier.charAt(0).toUpperCase() + model.rate_limit_tier.slice(1)} tier, ${Math.round((model.limits?.max_input_tokens || 0) / 1000)}K context. ${model.summary || ''}`
+			}))
+		};
+	} else if (providerName === 'copilot') {
+		return {
+			data: data.data.filter((model: any) =>
 				!model.supported_endpoints ||
 				(Array.isArray(model.supported_endpoints) && model.supported_endpoints.includes('/chat/completions'))
 			).map((model: any) => ({
