@@ -4733,8 +4733,8 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 		{ id: 'openai/gpt-5.1-instant-image', name: 'GPT-5.1 Instant Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
 		{ id: 'image/huggingface/Qwen/Qwen-Image-Edit-2509-vision', name: 'Qwen-Image-Edit 2509 (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'image/doubao-vision', name: 'Seedream 4.0', description: 'First 20 images free daily, then ¥0.2/image', object: 'model', created: 0, owned_by: 'doubao' },
-		{ id: 'image/bfl/flux-2-pro-vision', name: 'FLUX.2 [pro] (Gateway)', description: 'I: $0.015/MP, O: First MP $0.03, then $0.015/MP', object: 'model', created: 0, owned_by: 'modelscope' },
-		{ id: 'image/bfl/flux-2-flex-vision', name: 'FLUX.2 [flex] (Gateway)', description: 'I/O: $0.06/MP', object: 'model', created: 0, owned_by: 'modelscope' },
+		{ id: 'image/bfl/flux-2-pro-vision', name: 'FLUX.2 [pro] (Gateway)', description: 'I: $0.015/MP, O: First MP $0.03, then $0.015/MP', object: 'model', created: 0, owned_by: 'gateway' },
+		{ id: 'image/bfl/flux-2-flex-vision', name: 'FLUX.2 [flex] (Gateway)', description: 'I/O: $0.06/MP', object: 'model', created: 0, owned_by: 'gateway' },
 		{ id: 'image/modelscope/MusePublic/14_ckpt_SD_XL', name: 'Anything XL (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/modelscope/MusePublic/489_ckpt_FLUX_1', name: 'FLUX.1 [dev] (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/modelscope/MusePublic/flux-high-res', name: 'FLUX.1 [dev] High-Res (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
@@ -4748,9 +4748,10 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 		{ id: 'image/huggingface/Qwen/Qwen-Image-Edit-2509-vision', name: 'Qwen-Image-Edit 2509 (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'video/doubao-seedance-pro-vision', name: 'Seedance 1.0 Pro', description: '¥15 per million output tokens', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'video/doubao-seedance-lite-vision', name: 'Seedance 1.0 Lite', description: '¥10 per million output tokens', object: 'model', created: 0, owned_by: 'doubao' },
+		{ id: 'video/tencent/HunyuanVideo-1.5-vision', name: 'Hunyuan Video 1.5', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'video/Wan-AI/Qwen-Wan2.2-I2V-A14B-vision', name: 'Qwen Wan2.2 I2V', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'video/Wan-AI/Qwen-Wan2.2-T2V-A14B', name: 'Qwen Wan2.2 T2V', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
-		{ id: 'video/Lightricks/LTX-Video-vision', name: 'LTX Video TI2V', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
+		{ id: 'video/meituan-longcat/LongCat-Video', name: 'LongCat Video', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 	];
 	if (allModels.length > 0) return { object: 'list', data: [...allModels, ...curated] };
 	throw new Error('All provider(s) failed to return models');
