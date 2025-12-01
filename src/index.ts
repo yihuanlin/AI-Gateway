@@ -4623,6 +4623,7 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 		return {
 			data: data.map((model: any) => ({
 				...model,
+				name: parseModelDisplayName(model.name.replace(' (preview)', '')),
 				description: `${model.rate_limit_tier.charAt(0).toUpperCase() + model.rate_limit_tier.slice(1)} tier, ${Math.round((model.limits?.max_input_tokens || 0) / 1000)}K context. ${model.summary || ''}`
 			}))
 		};
@@ -4631,10 +4632,15 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 			data: data.data.filter((model: any) =>
 				!model.supported_endpoints ||
 				(Array.isArray(model.supported_endpoints) && model.supported_endpoints.includes('/chat/completions'))
-			).map((model: any) => ({
-				...model,
-				description: `${Math.round((model.capabilities?.limits?.max_context_window_tokens || 0) / 1000)}K context${model.capabilities?.limits?.vision?.max_prompt_images ? `, ${model.capabilities.limits.vision.max_prompt_images} images` : ''}. ${model.policy?.terms || ''}`
-			}))
+			).map((model: any) => {
+				const maxImages = model.capabilities?.limits?.vision?.max_prompt_images;
+				const imageText = maxImages ? `, ${maxImages} image${maxImages > 1 ? 's' : ''}` : '';
+				return {
+					...model,
+					name: model.name.replace(' (Preview)', ''),
+					description: `${Math.round((model.capabilities?.limits?.max_context_window_tokens || 0) / 1000)}K context${imageText}. ${model.policy?.terms || ''}`
+				};
+			})
 		};
 	}
 	return data;
