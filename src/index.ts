@@ -4626,7 +4626,7 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 				(Array.isArray(model.supported_endpoints) && model.supported_endpoints.includes('/chat/completions'))
 			).map((model: any) => ({
 				...model,
-				description: `${Math.round((model.limits?.max_context_window_tokens || 0) / 1000)}K context. ${model.policy?.terms || ''}`
+				description: `${Math.round((model.capabilities?.limits?.max_context_window_tokens || 0) / 1000)}K context${model.capabilities?.vision?.max_prompt_images ? `, ${model.capabilities.vision.max_prompt_images} images` : ''}. ${model.policy?.terms || ''}`
 			}))
 		};
 	}
