@@ -303,10 +303,10 @@ const createCustomProvider = async (providerName: string, apiKey: string) => {
 				baseURL: config.baseURL,
 				includeUsage: true,
 				headers: {
-					"editor-version": "vscode/1.106.2",
+					"editor-version": "vscode/1.106.3",
 					"copilot-vision-request": "true",
-					"editor-plugin-version": "copilot-chat/0.33.2",
-					"user-agent": "GitHubCopilotChat/0.33.2"
+					"editor-plugin-version": "copilot-chat/0.33.3",
+					"user-agent": "GitHubCopilotChat/0.33.3"
 				},
 			});
 		default:
@@ -4572,7 +4572,7 @@ const isSupportedProvider = (name: string): name is string & keyof typeof SUPPOR
 const shouldIncludeModel = (model: any, providerName?: string) => {
 	const modelId = String(model.id || '').toLowerCase();
 	const commonExclusions = [
-		'gemma', 'rerank', 'distill', 'parse', 'embed', 'bge-', 'tts', 'phi', 'live', 'audio', 'lite', 'ctc',
+		'gemma', 'rerank', 'distill', 'parse', 'embed', 'bge-', 'tts', 'phi', 'live', 'audio', 'lite', 'ctc', 'image',
 		'qwen2', 'qwen-2', 'qwen1', 'qwq', 'qvq', 'gemini-1', 'gemini-2.0', 'learnlm', 'gemini-exp', 'gpt-4', 'gpt-3',
 		'turbo', 'claude-3', 'voxtral', 'pixtral', 'mixtral', 'ministral', '-24', 'moderation', 'saba', '-ocr-',
 		'transcribe', 'dall', 'davinci', 'babbage', 'hailuo', 'kling', 'wan', 'ideogram', 'background', 'voyage'
@@ -4607,9 +4607,9 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 			headers: {
 				'Authorization': `Bearer ${copilotToken}`,
 				'Content-Type': 'application/json',
-				"editor-version": "vscode/1.106.2",
-				"editor-plugin-version": "copilot-chat/0.33.2",
-				"user-agent": "GitHubCopilotChat/0.33.2"
+				"editor-version": "vscode/1.106.3",
+				"editor-plugin-version": "copilot-chat/0.33.3",
+				"user-agent": "GitHubCopilotChat/0.33.3"
 			},
 		});
 	} else {
@@ -4620,7 +4620,15 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 	if (providerName === 'gemini') {
 		return { data: data.models.map((m: any) => ({ id: m.name, name: m.displayName, description: m.description || '' })) };
 	} else if (providerName === 'github') {
-		return { data };
+		return {
+			data: data.filter((model: any) =>
+				!model.supported_endpoints ||
+				(Array.isArray(model.supported_endpoints) && model.supported_endpoints.includes('/chat/completions'))
+			).map((model: any) => ({
+				...model,
+				description: `${Math.round((model.limits?.max_context_window_tokens || 0) / 1000)}K context. ${model.policy?.terms || ''}`
+			}))
+		};
 	}
 	return data;
 }
@@ -4696,7 +4704,7 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 						object: 'model',
 						created: 0,
 						owned_by: providerName,
-					})).filter(model => shouldIncludeModel(model, providerName));
+					}));
 				} else {
 					// Use regular API call for providers that support /models endpoint
 					const providerModels = await fetchProviderModels(providerName, providerApiKey);
@@ -4731,26 +4739,22 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 		{ id: 'admin/magic-vision', name: 'Management', description: '', object: 'model', created: 0, owned_by: 'internal' },
 		{ id: 'openai/gpt-5.1-thinking-image', name: 'GPT-5.1 Thinking Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
 		{ id: 'openai/gpt-5.1-instant-image', name: 'GPT-5.1 Instant Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
-		{ id: 'image/huggingface/Qwen/Qwen-Image-Edit-2509-vision', name: 'Qwen-Image-Edit 2509 (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'image/doubao-vision', name: 'Seedream 4.0', description: 'First 20 images free daily, then ¥0.2/image', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'image/bfl/flux-2-pro-vision', name: 'FLUX.2 [pro] (Gateway)', description: 'I: $0.015/MP, O: First MP $0.03, then $0.015/MP', object: 'model', created: 0, owned_by: 'gateway' },
 		{ id: 'image/bfl/flux-2-flex-vision', name: 'FLUX.2 [flex] (Gateway)', description: 'I/O: $0.06/MP', object: 'model', created: 0, owned_by: 'gateway' },
 		{ id: 'image/modelscope/MusePublic/14_ckpt_SD_XL', name: 'Anything XL (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
-		{ id: 'image/modelscope/MusePublic/489_ckpt_FLUX_1', name: 'FLUX.1 [dev] (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
-		{ id: 'image/modelscope/MusePublic/flux-high-res', name: 'FLUX.1 [dev] High-Res (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
-		{ id: 'image/modelscope/black-forest-labs/FLUX.1-Krea-dev', name: 'FLUX.1 Krea [dev] (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
-		{ id: 'image/modelscope/Qwen/Qwen-Image', name: 'Qwen-Image (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
-		{ id: 'image/modelscope/Qwen/Qwen-Image-Edit-vision', name: 'Qwen-Image-Edit (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
-		{ id: 'image/modelscope/MusePublic/FLUX.1-Kontext-Dev-vision', name: 'FLUX.1 Kontext [dev] (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
+		{ id: 'image/modelscope/Tongyi-MAI/Z-Image-Turbo', name: 'Z-Image-Turbo (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
+		{ id: 'image/modelscope/black-forest-labs/FLUX.2-dev-vision', name: 'FLUX.2 [dev] (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
+		{ id: 'image/modelscope/Qwen/Qwen-Image-Edit-2509-vision', name: 'Qwen-Image-Edit (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/huggingface/tencent/HunyuanImage-3.0', name: 'HunyuanImage 3.0 (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
-		{ id: 'image/huggingface/black-forest-labs/FLUX.1-Kontext-dev-vision', name: 'FLUX.1 Kontext [dev] (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
+		{ id: 'image/huggingface/Tongyi-MAI/Z-Image-Turbo', name: 'Z-Image-Turbo (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'image/huggingface/black-forest-labs/FLUX.2-dev-vision', name: 'FLUX.2 [dev] (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
-		{ id: 'image/huggingface/Qwen/Qwen-Image-Edit-2509-vision', name: 'Qwen-Image-Edit 2509 (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
+		{ id: 'image/huggingface/Qwen/Qwen-Image-Edit-2509-vision', name: 'Qwen-Image-Edit (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'video/doubao-seedance-pro-vision', name: 'Seedance 1.0 Pro', description: '¥15 per million output tokens', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'video/doubao-seedance-lite-vision', name: 'Seedance 1.0 Lite', description: '¥10 per million output tokens', object: 'model', created: 0, owned_by: 'doubao' },
-		{ id: 'video/tencent/HunyuanVideo-1.5-vision', name: 'Hunyuan Video 1.5', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
-		{ id: 'video/Wan-AI/Qwen-Wan2.2-I2V-A14B-vision', name: 'Qwen Wan2.2 I2V', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
-		{ id: 'video/Wan-AI/Qwen-Wan2.2-T2V-A14B', name: 'Qwen Wan2.2 T2V', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
+		{ id: 'video/tencent/HunyuanVideo-1.5', name: 'Hunyuan Video 1.5', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
+		{ id: 'video/Wan-AI/Wan2.2-I2V-A14B-Diffusers-vision', name: 'Qwen Wan2.2 I2V', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
+		{ id: 'video/Wan-AI/Wan2.2-T2V-A14B-Diffusers', name: 'Qwen Wan2.2 T2V', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'video/meituan-longcat/LongCat-Video', name: 'LongCat Video', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 	];
 	if (allModels.length > 0) return { object: 'list', data: [...allModels, ...curated] };
