@@ -6,6 +6,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { openai, createOpenAI } from '@ai-sdk/openai'
 import { google, createGoogleGenerativeAI } from '@ai-sdk/google'
 import { anthropic } from '@ai-sdk/anthropic';
+import { xai } from '@ai-sdk/xai';
 import { string, number, boolean, array, object, optional, int, enum as zenum } from 'zod/mini'
 import { uploadBlobToStorage, getFileWithMetadata } from './shared/bucket.mts';
 import { SUPPORTED_PROVIDERS, getProviderKeys } from './shared/providers.mts'
@@ -345,28 +346,6 @@ const buildDefaultProviderOptions = (args: {
 	if (model.startsWith('xai/')) {
 		return {
 			xai: {
-				...(search && {
-					searchParameters: {
-						mode: 'on',
-						returnCitations: true,
-						maxSearchResults: isResearchMode ? 30 : 15,
-						sources: [
-							{
-								type: 'web',
-								...(!isResearchMode && geo?.country?.code ?
-									{ country: geo.country.code } : {})
-							},
-							...(!isResearchMode ? [{
-								type: 'x'
-							},
-							{
-								type: 'news',
-								...(!isResearchMode && geo?.country?.code ?
-									{ country: geo.country.code } : {})
-							}] : []),
-						]
-					}
-				}),
 				...((model.startsWith('xai/grok-3') && (reasoning_effort || isResearchMode)) && { reasoningEffort: reasoning_effort || (isResearchMode ? 'high' : 'low') }),
 			}
 		};
@@ -748,7 +727,7 @@ const buildAiSdkTools = (model: string, userTools: any[] | undefined): Record<st
 
 		if (model.startsWith('openai')) {
 			aiSdkTools.web_search = openai.tools.webSearch({
-				searchContextSize: isResearchMode ? 'high' : 'medium',
+				searchContextSize: isResearchMode ? 'high' : 'low',
 				...(!isResearchMode && geo ? {
 					userLocation: {
 						type: 'approximate',
@@ -775,12 +754,21 @@ const buildAiSdkTools = (model: string, userTools: any[] | undefined): Record<st
 			});
 			aiSdkTools.web_fetch = anthropic.tools.webFetch_20250910({ maxUses: isResearchMode ? 5 : 1 });
 			aiSdkTools.code_execution = anthropic.tools.codeExecution_20250825()
-		} else if (googleIncompatible && !model.startsWith('xai')) {
+		} else if (model.startsWith('xai')) {
+			aiSdkTools.web_search = xai.tools.webSearch({
+				enableImageUnderstanding: isResearchMode,
+			});
+			aiSdkTools.code_execution = xai.tools.codeExecution({});
+			if (!isResearchMode) {
+				aiSdkTools.x_search = xai.tools.xSearch({});
+			}
+		} else if (googleIncompatible) {
 			if (tavilyApiKey) aiSdkTools.web_search = tavilySearchTool;
 		}
 		if (googleIncompatible) {
-			if (!model.startsWith('anthropic')) aiSdkTools.fetch = jinaReaderTool;
-			if (!isResearchMode && !model.startsWith('openai') && !model.startsWith('anthropic') && pythonApiKey && pythonUrl) {
+			if (!model.startsWith('anthropic') && !model.startsWith('xai')) aiSdkTools.fetch = jinaReaderTool;
+			if (!isResearchMode && !model.startsWith('openai') && !model.startsWith('anthropic')
+				&& !model.startsWith('xai') && pythonApiKey && pythonUrl) {
 				aiSdkTools.python_executor = pythonExecutorTool;
 			}
 		} else {
