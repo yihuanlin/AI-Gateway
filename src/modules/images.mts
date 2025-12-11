@@ -1,6 +1,7 @@
 import { type WaitResult, lastUserPromptFromMessages, responsesBase, streamChatSingleText, streamResponsesSingleText, streamChatGenerationElapsed, streamResponsesGenerationElapsed, findLinks, hasImageInMessages, sleep } from './utils.mts';
 import { SUPPORTED_PROVIDERS } from '../shared/providers.mts';
 import { experimental_generateImage as generateImage } from 'ai';
+import { size } from 'zod';
 
 export type ImageResult = {
   usage: { input_tokens: number; output_tokens: number; total_tokens: number } | null;
@@ -12,8 +13,8 @@ const toMarkdownImage = (url: string): string => {
 }
 
 const getHelpForModel = (model: string) => {
-  if (model.startsWith('image/doubao')) {
-    return 'Use **Doubao** unified t2i / i2i model *doubao-seedream-4-0-250828* (multiple reference images supported).\nFlags: `--format url|b64_json`, `--size {WxH}|--ratio {e.g., 16:9}`, `--seed N`, `--guidance F`.\n`/upload` uploads output to storage when base64 is returned.';
+  if (model.startsWith('image/doubao') || model.startsWith('image/seedream')) {
+    return 'Use **Seedream** unified t2i / i2i model *doubao-seedream-4-5-251128* (multiple reference images supported).\nFlags: `--format url|b64_json`, `--size {WxH}|--ratio {e.g., 16:9}`, `--seed N`, `--guidance F`.\n`/upload` uploads output to storage when base64 is returned.';
   }
   if (model.startsWith('image/huggingface/')) {
     return '**Hugging Face** Text-to-Image and Image-to-Image models.\nFlags: `--guidance F`, `--negative_prompt "text"`, `--steps N (1-100)"`, `--size WxH` or `--ratio A:B`, `--seed N`.\n`/upload` upload input images to storage (output images are uploaded to storage). Input images enable image-to-image mode.\nSpecial prompt trigger for Kontext models:\n`Make a shot in the same scene of...`\n`Remove ...`\n`redepthkontext ...`\n`Place it`\n`Fuse this image into background`\n`Convert this image into pencil drawing art style`\n`Turn this image into the Clay_Toy style.`';
@@ -24,7 +25,7 @@ const getHelpForModel = (model: string) => {
   if (model.startsWith('image/bfl/')) {
     return '**Black Forest Labs** FLUX models via AI SDK Gateway.\nMultiple input images supported.\nFlags:\n`--imagePrompt` Base64-encoded image for additional visual context\n`--imagePromptStrength F` (0.0-1.0) Strength of image prompt influence\n`--promptUpsampling` Enable prompt upsampling\n`--raw` Enable raw mode for natural aesthetics\n`--size WxH` Output dimensions (width and height must be multiples of 16)\n`--steps N` Inference steps (flex models only)\n`--guidance F` Guidance scale (flex models only)';
   }
-  return 'Supported providers: **Doubao** `image/doubao` (t2i/i2i), **Hugging Face** `image/huggingface/huggingface-model-id` (t2i/i2i), **ModelScope** `image/modelscope/modelscope-model-id` (t2i/i2i), **Black Forest Labs** `image/bfl/model-id` (t2i/i2i).';
+  return 'Supported providers: **Seedream** `image/doubao` (t2i/i2i), **Hugging Face** `image/huggingface/huggingface-model-id` (t2i/i2i), **ModelScope** `image/modelscope/modelscope-model-id` (t2i/i2i), **Black Forest Labs** `image/bfl/model-id` (t2i/i2i).';
 }
 
 export const handleImageForChat = async (args: {
@@ -217,7 +218,7 @@ const buildImageGenerationWaiter = async (params: {
     }
   }
 
-  if (model.startsWith('image/doubao')) {
+  if (model.startsWith('image/seedream') || model === 'image/doubao') {
     let apiKey: string | null = null;
     try {
       const keys = String(process.env.DOUBAO_API_KEY).split(',').map((k: string) => k.trim()) || [];
@@ -228,7 +229,7 @@ const buildImageGenerationWaiter = async (params: {
     const url = `${base}/images/generations`;
     const response_format = (flags['format'] as string) || 'url';
     const watermark = false;
-    const model = 'doubao-seedream-4-0-250828';
+    const model = 'doubao-seedream-4-5-251128';
 
     // Collect all potential reference images (uploaded message images + inline links)
     const referenceImages: string[] = [];
@@ -249,6 +250,7 @@ const buildImageGenerationWaiter = async (params: {
       payload = {
         model,
         prompt: cleanPrompt,
+        size: '4K',
         image: referenceImages.length === 1 ? referenceImages[0] : referenceImages,
         response_format,
         seed: typeof flags['seed'] === 'number' ? flags['seed'] : 21,
@@ -262,18 +264,18 @@ const buildImageGenerationWaiter = async (params: {
         if (typeof flags['ratio'] === 'string') {
           const ratio = flags['ratio'] as string;
           const ratioMap: Record<string, string> = {
-            '1:1': '2048x2048',
-            '4:3': '2304x1728',
-            '3:4': '1728x2304',
-            '16:9': '2560x1440',
-            '9:16': '1440x2560',
-            '3:2': '2496x1664',
-            '2:3': '1664x2496',
-            '21:9': '3024x1296'
+            '1:1': '4096x4096',
+            '4:3': '4704x3520',
+            '3:4': '3520x4704',
+            '16:9': '5504x3040',
+            '9:16': '3040x5504',
+            '3:2': '4992x3328',
+            '2:3': '3328x4992',
+            '21:9': '6240x2656'
           };
-          return ratioMap[ratio] || '1280x720';
+          return ratioMap[ratio] || '4096x4096';
         }
-        return '1280x720';
+        return '4K';
       })();
       const g = typeof flags['guidance'] === 'number' ? flags['guidance'] : guidanceFromTopP(top_p, temperature) ?? 2.5;
       payload = {

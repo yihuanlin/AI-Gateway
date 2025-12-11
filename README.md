@@ -71,7 +71,7 @@ GET /v1/files/:file                # Serve a file from Netlify Blobs
 - **Gemini Image (Nano Banana)**: Gemini native image generation: t2i and i2i
 - **GPT Image (`image_generation` tool)**: GPT-5 series native image generation: t2i and i2i
 - **Black Forest Labs**: FLUX models via Vercel AI Gateway: t2i and i2i
-- **Doubao (ByteDance)**: t2i/i2i (Seedream)and t2v/i2v (Seedance)
+- **Doubao (ByteDance)**: t2i/i2i (Seedream) and t2v/i2v (Seedance)
 - **ModelScope**: Community models for t2i and i2i (i2i requires Netlify Blobs)
 - **Hugging Face**: Community models for t2i, i2i, t2v, and i2v
 

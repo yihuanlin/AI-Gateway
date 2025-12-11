@@ -4740,7 +4740,7 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 		{ id: 'admin/magic-vision', name: 'Management', description: '', object: 'model', created: 0, owned_by: 'internal' },
 		{ id: 'openai/gpt-5.1-thinking-image', name: 'GPT-5.1 Thinking Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
 		{ id: 'openai/gpt-5.1-instant-image', name: 'GPT-5.1 Instant Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
-		{ id: 'image/doubao-vision', name: 'Seedream 4.0', description: 'First 20 images free daily, then ¥0.2/image', object: 'model', created: 0, owned_by: 'doubao' },
+		{ id: 'image/doubao-vision', name: 'Seedream 4.5', description: 'First 20 images free daily, then ¥0.25/image', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'image/bfl/flux-2-pro-vision', name: 'FLUX.2 [pro] (Gateway)', description: 'I: $0.015/MP, O: First MP $0.03, then $0.015/MP', object: 'model', created: 0, owned_by: 'gateway' },
 		{ id: 'image/bfl/flux-2-flex-vision', name: 'FLUX.2 [flex] (Gateway)', description: 'I/O: $0.06/MP', object: 'model', created: 0, owned_by: 'gateway' },
 		{ id: 'image/modelscope/MusePublic/14_ckpt_SD_XL', name: 'Anything XL (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
