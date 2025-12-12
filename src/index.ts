@@ -304,10 +304,10 @@ const createCustomProvider = async (providerName: string, apiKey: string) => {
 				baseURL: config.baseURL,
 				includeUsage: true,
 				headers: {
-					"editor-version": "vscode/1.106.3",
+					"editor-version": "vscode/1.107.0",
 					"copilot-vision-request": "true",
-					"editor-plugin-version": "copilot-chat/0.33.3",
-					"user-agent": "GitHubCopilotChat/0.33.3"
+					"editor-plugin-version": "copilot-chat/0.35.0",
+					"user-agent": "GitHubCopilotChat/0.35.0"
 				},
 			});
 		default:
@@ -375,13 +375,13 @@ const buildDefaultProviderOptions = (args: {
 	if (model.startsWith('openai/') || model.startsWith('chatgpt/')) {
 		return {
 			openai: {
-				reasoningEffort: reasoning_effort || (isResearchMode ? 'high' : "medium"),
+				reasoningEffort: reasoning_effort || (isResearchMode && (model.includes('5.2') || model.includes('max')) ? 'xhigh' : (isResearchMode ? 'high' : "medium")),
 				reasoningSummary: reasoning_summary || "auto",
 				textVerbosity: text_verbosity || "medium",
 				serviceTier: service_tier || "auto",
 				store: model.startsWith('chatgpt/') ? store : false,
 				promptCacheKey: 'ai-gateway',
-				...(model.includes('5.1') && { promptCacheRetention: '24h' }),
+				...(model.includes('5.') && { promptCacheRetention: '24h' }),
 			}
 		}
 	}
@@ -4595,9 +4595,9 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 			headers: {
 				'Authorization': `Bearer ${copilotToken}`,
 				'Content-Type': 'application/json',
-				"editor-version": "vscode/1.106.3",
-				"editor-plugin-version": "copilot-chat/0.33.3",
-				"user-agent": "GitHubCopilotChat/0.33.3"
+				"editor-version": "vscode/1.107.0",
+				"editor-plugin-version": "copilot-chat/0.35.0",
+				"user-agent": "GitHubCopilotChat/0.35.0"
 			},
 		});
 	} else {
@@ -4738,8 +4738,8 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 
 	const curated = [
 		{ id: 'admin/magic-vision', name: 'Management', description: '', object: 'model', created: 0, owned_by: 'internal' },
-		{ id: 'openai/gpt-5.1-thinking-image', name: 'GPT-5.1 Thinking Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
-		{ id: 'openai/gpt-5.1-instant-image', name: 'GPT-5.1 Instant Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
+		{ id: 'openai/gpt-5.2-thinking-image', name: 'GPT-5.2 Thinking Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
+		{ id: 'openai/gpt-5.2-instant-image', name: 'GPT-5.2 Instant Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
 		{ id: 'image/doubao-vision', name: 'Seedream 4.5', description: 'First 20 images free daily, then ¥0.25/image', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'image/bfl/flux-2-pro-vision', name: 'FLUX.2 [pro] (Gateway)', description: 'I: $0.015/MP, O: First MP $0.03, then $0.015/MP', object: 'model', created: 0, owned_by: 'gateway' },
 		{ id: 'image/bfl/flux-2-flex-vision', name: 'FLUX.2 [flex] (Gateway)', description: 'I/O: $0.06/MP', object: 'model', created: 0, owned_by: 'gateway' },
