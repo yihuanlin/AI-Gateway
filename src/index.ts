@@ -304,10 +304,10 @@ const createCustomProvider = async (providerName: string, apiKey: string) => {
 				baseURL: config.baseURL,
 				includeUsage: true,
 				headers: {
-					"editor-version": "vscode/1.107.0",
+					"editor-version": "vscode/1.107.1",
 					"copilot-vision-request": "true",
-					"editor-plugin-version": "copilot-chat/0.35.0",
-					"user-agent": "GitHubCopilotChat/0.35.0"
+					"editor-plugin-version": "copilot-chat/0.35.1",
+					"user-agent": "GitHubCopilotChat/0.35.1"
 				},
 			});
 		default:
@@ -1537,16 +1537,6 @@ app.post('/v1/responses', async (c: Context) => {
 	let modelId: string = model;
 	let thinking: Record<string, any> | undefined = undefined;
 	let search: boolean = false;
-	if (modelId.startsWith('doubao/')) {
-		if (Array.isArray(messages) && messages.length > 0) {
-			const lastMsg = messages[messages.length - 1];
-			const parts = Array.isArray(lastMsg?.content) ? lastMsg.content : [];
-			const hasImage = parts.some((p: any) => p?.type === 'image' || p?.type === 'file');
-			if (hasImage) {
-				modelId = 'doubao/doubao-seed-1-6-vision-250815';
-			}
-		}
-	}
 	const messageText = messages.map((msg: any) =>
 		typeof msg.content === 'string'
 			? msg.content.toLowerCase()
@@ -1557,7 +1547,7 @@ app.post('/v1/responses', async (c: Context) => {
 	isResearchMode = RESEARCH_KEYWORDS.some(keyword => messageText.includes(keyword));
 	const aiSdkTools: Record<string, any> = buildAiSdkTools(modelId, tools);
 	if (Object.keys(aiSdkTools).length === 0) {
-		if (modelId.startsWith('doubao/deepseek-v3-1')) {
+		if (modelId.startsWith('doubao/deepseek-v3')) {
 			thinking = {
 				type: 'enabled',
 			};
@@ -3199,16 +3189,6 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	let modelId: string = model;
 	let thinkingConfig: Record<string, any> = thinking;
 	let search: boolean = false;
-	if (modelId.startsWith('doubao/')) {
-		if (Array.isArray(processedMessages) && processedMessages.length > 0) {
-			const lastMsg = processedMessages[processedMessages.length - 1];
-			const parts = Array.isArray(lastMsg?.content) ? lastMsg.content : [];
-			const hasImage = parts.some((p: any) => p?.type === 'image' || p?.type === 'file');
-			if (hasImage) {
-				modelId = 'doubao/doubao-seed-1-6-vision-250815';
-			}
-		}
-	}
 	const messageText = processedMessages.map((msg: any) =>
 		typeof msg.content === 'string'
 			? msg.content.toLowerCase()
@@ -3219,7 +3199,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	isResearchMode = RESEARCH_KEYWORDS.some(keyword => messageText.includes(keyword));
 	const aiSdkTools: Record<string, any> = buildAiSdkTools(modelId, tools);
 	if (Object.keys(aiSdkTools).length === 0) {
-		if (modelId.startsWith('doubao/deepseek-v3-1')) {
+		if (modelId.startsWith('doubao/deepseek-v3')) {
 			thinkingConfig = {
 				type: 'enabled',
 			};
@@ -4532,11 +4512,11 @@ const CUSTOM_MODEL_LISTS = {
 	],
 	doubao: [
 		{ id: 'doubao-seed-code-preview-251028', name: 'Doubao Seed Code' },
-		{ id: 'doubao-seed-1-6-251015', name: 'Doubao Seed 1.6' },
-		{ id: 'doubao-seed-1-6-lite-251015', name: 'Doubao Seed 1.6 Lite' },
+		{ id: 'doubao-seed-1-8-251215', name: 'Doubao Seed 1.8' },
 		{ id: 'deepseek-v3-1-terminus', name: 'DeepSeek V3.1 Terminus (Volcengine)' },
+		{ id: 'deepseek-v3-2-251201', name: 'DeepSeek V3.2 (Volcengine)' },
 		{ id: 'deepseek-r1-250528', name: 'DeepSeek R1 (Volcengine)' },
-		{ id: 'kimi-k2-250905', name: 'Kimi K2 (Volcengine)' },
+		{ id: 'kimi-k2-thinking-251104', name: 'Kimi K2 Thinking (Volcengine)' },
 	],
 	cohere: [
 		{ id: 'command-a-03-2025', name: 'Command A' },
@@ -4595,9 +4575,9 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 			headers: {
 				'Authorization': `Bearer ${copilotToken}`,
 				'Content-Type': 'application/json',
-				"editor-version": "vscode/1.107.0",
-				"editor-plugin-version": "copilot-chat/0.35.0",
-				"user-agent": "GitHubCopilotChat/0.35.0"
+				"editor-version": "vscode/1.107.1",
+				"editor-plugin-version": "copilot-chat/0.35.1",
+				"user-agent": "GitHubCopilotChat/0.35.1"
 			},
 		});
 	} else {
@@ -4738,11 +4718,11 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 
 	const curated = [
 		{ id: 'admin/magic-vision', name: 'Management', description: '', object: 'model', created: 0, owned_by: 'internal' },
-		{ id: 'openai/gpt-5.2-thinking-image', name: 'GPT-5.2 Thinking Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
-		{ id: 'openai/gpt-5.2-instant-image', name: 'GPT-5.2 Instant Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
+		{ id: 'openai/gpt-5.2-image', name: 'GPT-5.2 Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
 		{ id: 'image/doubao-vision', name: 'Seedream 4.5', description: 'First 20 images free daily, then ¥0.25/image', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'image/bfl/flux-2-pro-vision', name: 'FLUX.2 [pro] (Gateway)', description: 'I: $0.015/MP, O: First MP $0.03, then $0.015/MP', object: 'model', created: 0, owned_by: 'gateway' },
 		{ id: 'image/bfl/flux-2-flex-vision', name: 'FLUX.2 [flex] (Gateway)', description: 'I/O: $0.06/MP', object: 'model', created: 0, owned_by: 'gateway' },
+		{ id: 'image/bfl/flux-2-max-vision', name: 'FLUX.2 [max] (Gateway)', description: 'I/O: $0.07/MP', object: 'model', created: 0, owned_by: 'gateway' },
 		{ id: 'image/modelscope/MusePublic/14_ckpt_SD_XL', name: 'Anything XL (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/modelscope/Tongyi-MAI/Z-Image-Turbo', name: 'Z-Image-Turbo (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/modelscope/black-forest-labs/FLUX.2-dev-vision', name: 'FLUX.2 [dev] (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
