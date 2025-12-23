@@ -306,8 +306,8 @@ const createCustomProvider = async (providerName: string, apiKey: string) => {
 				headers: {
 					"editor-version": "vscode/1.107.1",
 					"copilot-vision-request": "true",
-					"editor-plugin-version": "copilot-chat/0.35.1",
-					"user-agent": "GitHubCopilotChat/0.35.1"
+					"editor-plugin-version": "copilot-chat/0.35.2",
+					"user-agent": "GitHubCopilotChat/0.35.2"
 				},
 			});
 		default:
@@ -4513,9 +4513,7 @@ const CUSTOM_MODEL_LISTS = {
 	doubao: [
 		{ id: 'doubao-seed-code-preview-251028', name: 'Doubao Seed Code' },
 		{ id: 'doubao-seed-1-8-251215', name: 'Doubao Seed 1.8' },
-		{ id: 'deepseek-v3-1-terminus', name: 'DeepSeek V3.1 Terminus (Volcengine)' },
 		{ id: 'deepseek-v3-2-251201', name: 'DeepSeek V3.2 (Volcengine)' },
-		{ id: 'deepseek-r1-250528', name: 'DeepSeek R1 (Volcengine)' },
 		{ id: 'kimi-k2-thinking-251104', name: 'Kimi K2 Thinking (Volcengine)' },
 	],
 	cohere: [
@@ -4576,8 +4574,8 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 				'Authorization': `Bearer ${copilotToken}`,
 				'Content-Type': 'application/json',
 				"editor-version": "vscode/1.107.1",
-				"editor-plugin-version": "copilot-chat/0.35.1",
-				"user-agent": "GitHubCopilotChat/0.35.1"
+				"editor-plugin-version": "copilot-chat/0.35.2",
+				"user-agent": "GitHubCopilotChat/0.35.2"
 			},
 		});
 	} else {
