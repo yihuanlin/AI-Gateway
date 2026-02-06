@@ -167,7 +167,9 @@ const buildVideoGenerationWaiter = async (params: {
 
     const content: any[] = [{ type: 'text', text: prompt }];
     let modelId = '';
-    if (model.includes('doubao-seedance-pro')) {
+    if (model.includes('doubao-seedance-1.5')) {
+        modelId = 'doubao-seedance-1-5-pro-251215';
+    } else if (model.includes('doubao-seedance-1.0-pro')) {
         modelId = 'doubao-seedance-1-0-pro-250528';
     } else {
         if (links.length > 0 || imgs.has) modelId = 'doubao-seedance-1-0-lite-i2v-250428'; else modelId = 'doubao-seedance-1-0-lite-t2v-250428';

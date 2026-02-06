@@ -4501,20 +4501,15 @@ app.post('/v1/messages', async (c: Context) => {
 
 const CUSTOM_MODEL_LISTS = {
 	poixe: [
-		{ id: 'gpt-5:free', name: 'GPT-5 4K/2K' },
-		{ id: 'gpt-5-chat-latest:free', name: 'GPT-5 Chat 4K/2K' },
-		{ id: 'gpt-5-mini:free', name: 'GPT-5 Mini 4K' },
-		{ id: 'grok-3-mini:free', name: 'Grok 3 Mini 4K' },
-		{ id: 'grok-4:free', name: 'Grok 4 4K/2K' },
+		{ id: 'gpt-5.2:free', name: 'GPT-5 4K/2K' },
 		{ id: 'claude-sonnet-4-20250514:free', name: 'Claude Sonnet 4 4K/2K' },
-		{ id: 'doubao-seed-1-6-thinking-250615:free', name: 'Doubao Seed 1.6 Thinking 4K/2K' },
 		{ id: 'gemini-3-pro-preview:free', name: 'Gemini 3 Pro 4K/2K' },
 	],
 	doubao: [
-		{ id: 'doubao-seed-code-preview-251028', name: 'Doubao Seed Code' },
+		{ id: 'doubao-seed-character-251128', name: 'Doubao Seed Character' },
 		{ id: 'doubao-seed-1-8-251215', name: 'Doubao Seed 1.8' },
 		{ id: 'deepseek-v3-2-251201', name: 'DeepSeek V3.2 (Volcengine)' },
-		{ id: 'kimi-k2-thinking-251104', name: 'Kimi K2 Thinking (Volcengine)' },
+		{ id: 'glm-4-7-251222', name: 'GLM 4.7 (Volcengine)' },
 	],
 	cohere: [
 		{ id: 'command-a-03-2025', name: 'Command A' },
