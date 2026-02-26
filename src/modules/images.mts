@@ -1,7 +1,6 @@
 import { type WaitResult, lastUserPromptFromMessages, responsesBase, streamChatSingleText, streamResponsesSingleText, streamChatGenerationElapsed, streamResponsesGenerationElapsed, findLinks, hasImageInMessages, sleep } from './utils.mts';
 import { SUPPORTED_PROVIDERS } from '../shared/providers.mts';
 import { experimental_generateImage as generateImage } from 'ai';
-import { size } from 'zod';
 
 export type ImageResult = {
   usage: { input_tokens: number; output_tokens: number; total_tokens: number } | null;
@@ -229,7 +228,7 @@ const buildImageGenerationWaiter = async (params: {
     const url = `${base}/images/generations`;
     const response_format = (flags['format'] as string) || 'url';
     const watermark = false;
-    const model = 'doubao-seedream-4-5-251128';
+    const actualModel = (model.startsWith('image/seedream-paid')) ? 'doubao-seedream-5-0-260128' : 'doubao-seedream-4-5-251128';
 
     // Collect all potential reference images (uploaded message images + inline links)
     const referenceImages: string[] = [];
@@ -248,9 +247,9 @@ const buildImageGenerationWaiter = async (params: {
       let cleanPrompt = prompt.replace(/\s--(?:size|ratio)\s+[^\s]+/g, '').trim();
       const guidance = typeof flags['guidance'] === 'number' ? flags['guidance'] : (typeof top_p === 'number' ? Math.max(1, Math.min(10, (1 - top_p) * 9 + 1)) : 5.5);
       payload = {
-        model,
+        model: actualModel,
         prompt: cleanPrompt,
-        size: '4K',
+        size: (model.startsWith('image/seedream-paid')) ? '3K' : '4K',
         image: referenceImages.length === 1 ? referenceImages[0] : referenceImages,
         response_format,
         seed: typeof flags['seed'] === 'number' ? flags['seed'] : 21,
@@ -275,11 +274,11 @@ const buildImageGenerationWaiter = async (params: {
           };
           return ratioMap[ratio] || '4096x4096';
         }
-        return '4K';
+        return (model.startsWith('image/seedream-paid')) ? '3K' : '4K';
       })();
       const g = typeof flags['guidance'] === 'number' ? flags['guidance'] : guidanceFromTopP(top_p, temperature) ?? 2.5;
       payload = {
-        model,
+        model: actualModel,
         prompt,
         response_format,
         size,

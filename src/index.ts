@@ -304,10 +304,10 @@ const createCustomProvider = async (providerName: string, apiKey: string) => {
 				baseURL: config.baseURL,
 				includeUsage: true,
 				headers: {
-					"editor-version": "vscode/1.107.1",
+					"editor-version": "vscode/1.109.5",
 					"copilot-vision-request": "true",
-					"editor-plugin-version": "copilot-chat/0.35.2",
-					"user-agent": "GitHubCopilotChat/0.35.2"
+					"editor-plugin-version": "copilot-chat/0.37.5",
+					"user-agent": "GitHubCopilotChat/0.37.5"
 				},
 			});
 		default:
@@ -4501,13 +4501,15 @@ app.post('/v1/messages', async (c: Context) => {
 
 const CUSTOM_MODEL_LISTS = {
 	poixe: [
-		{ id: 'gpt-5.2:free', name: 'GPT-5 4K/2K' },
+		{ id: 'gpt-5:free', name: 'GPT-5 4K/2K' },
 		{ id: 'claude-sonnet-4-20250514:free', name: 'Claude Sonnet 4 4K/2K' },
 		{ id: 'gemini-3-pro-preview:free', name: 'Gemini 3 Pro 4K/2K' },
 	],
 	doubao: [
 		{ id: 'doubao-seed-character-251128', name: 'Doubao Seed Character' },
 		{ id: 'doubao-seed-1-8-251215', name: 'Doubao Seed 1.8' },
+		{ id: 'doubao-seed-2-0-pro-260215', name: 'Doubao Seed 2.0 Pro' },
+		{ id: 'doubao-seed-2-0-code-preview-260215', name: 'Doubao Seed 2.0 Code' },
 		{ id: 'deepseek-v3-2-251201', name: 'DeepSeek V3.2 (Volcengine)' },
 		{ id: 'glm-4-7-251222', name: 'GLM 4.7 (Volcengine)' },
 	],
@@ -4568,9 +4570,9 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 			headers: {
 				'Authorization': `Bearer ${copilotToken}`,
 				'Content-Type': 'application/json',
-				"editor-version": "vscode/1.107.1",
-				"editor-plugin-version": "copilot-chat/0.35.2",
-				"user-agent": "GitHubCopilotChat/0.35.2"
+				"editor-version": "vscode/1.109.5",
+				"editor-plugin-version": "copilot-chat/0.37.5",
+				"user-agent": "GitHubCopilotChat/0.37.5"
 			},
 		});
 	} else {
@@ -4711,8 +4713,9 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 
 	const curated = [
 		{ id: 'admin/magic-vision', name: 'Management', description: '', object: 'model', created: 0, owned_by: 'internal' },
-		{ id: 'openai/gpt-5.2-image', name: 'GPT-5.2 Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
+		{ id: 'openai/gpt-5.3-image', name: 'GPT-5.3 Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
 		{ id: 'image/doubao-vision', name: 'Seedream 4.5', description: 'First 20 images free daily, then ¥0.25/image', object: 'model', created: 0, owned_by: 'doubao' },
+		{ id: 'image/doubao-paid-vision', name: 'Seedream 5.0 Lite (Paid)', description: '¥0.22/image', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'image/bfl/flux-2-pro-vision', name: 'FLUX.2 [pro] (Gateway)', description: 'I: $0.015/MP, O: First MP $0.03, then $0.015/MP', object: 'model', created: 0, owned_by: 'gateway' },
 		{ id: 'image/bfl/flux-2-flex-vision', name: 'FLUX.2 [flex] (Gateway)', description: 'I/O: $0.06/MP', object: 'model', created: 0, owned_by: 'gateway' },
 		{ id: 'image/bfl/flux-2-max-vision', name: 'FLUX.2 [max] (Gateway)', description: 'I/O: $0.07/MP', object: 'model', created: 0, owned_by: 'gateway' },
@@ -4724,7 +4727,7 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 		{ id: 'image/huggingface/Tongyi-MAI/Z-Image-Turbo', name: 'Z-Image-Turbo (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'image/huggingface/black-forest-labs/FLUX.2-dev-vision', name: 'FLUX.2 [dev] (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'image/huggingface/Qwen/Qwen-Image-Edit-2509-vision', name: 'Qwen-Image-Edit (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
-		{ id: 'video/doubao-seedance-1.5-pro-vision', name: 'Seedance 1.0 Pro', description: 'First 2 MT free daily, then ¥8/MT (¥16/MT with audio)', object: 'model', created: 0, owned_by: 'doubao' },
+		{ id: 'video/doubao-seedance-1.5-pro-vision', name: 'Seedance 1.5 Pro', description: 'First 2 MT free daily, then ¥8/MT (¥16/MT with audio)', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'video/doubao-seedance-1.0-pro-vision', name: 'Seedance 1.0 Pro', description: 'First 2 MT free daily, then ¥15/MT', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'video/doubao-seedance-1.0-lite-vision', name: 'Seedance 1.0 Lite', description: 'First 2 MT free daily, then ¥10/MT', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'video/tencent/HunyuanVideo-1.5', name: 'Hunyuan Video 1.5', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
