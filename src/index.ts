@@ -1,6 +1,6 @@
 import { Hono, type Context } from 'hono'
 import { cors } from 'hono/cors'
-import { generateText, streamText, stepCountIs, tool } from 'ai'
+import { generateText, streamText, stepCountIs, tool, gateway } from 'ai'
 import { createGateway } from '@ai-sdk/gateway'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { openai, createOpenAI } from '@ai-sdk/openai'
@@ -15,7 +15,7 @@ import { getStoreWithConfig } from './shared/store.mts'
 const app = new Hono()
 const TEXT_ENCODER = new TextEncoder();
 const SEARCH_TOOLS = new Set(['web_search', 'fetch', 'google_search', 'url_context', 'scholar_search', 'paper_recommendations', 'ensembl_api']);
-const CODE_TOOLS = new Set(['code_execution', 'python_executor', 'code_interpreter']);
+const CODE_TOOLS = new Set(['code_execution', 'code_interpreter']);
 const EXCLUDED_TOOLS = new Set([...SEARCH_TOOLS, ...CODE_TOOLS, 'image_generation']);
 const RESEARCH_KEYWORDS = ['research', 'paper'];
 const MAX_ATTEMPTS = 3;
@@ -304,10 +304,10 @@ const createCustomProvider = async (providerName: string, apiKey: string) => {
 				baseURL: config.baseURL,
 				includeUsage: true,
 				headers: {
-					"editor-version": "vscode/1.109.5",
+					"editor-version": "vscode/1.110.1",
 					"copilot-vision-request": "true",
-					"editor-plugin-version": "copilot-chat/0.37.5",
-					"user-agent": "GitHubCopilotChat/0.37.5"
+					"editor-plugin-version": "copilot-chat/0.37.9",
+					"user-agent": "GitHubCopilotChat/0.37.9"
 				},
 			});
 		default:
@@ -763,13 +763,15 @@ const buildAiSdkTools = (model: string, userTools: any[] | undefined): Record<st
 				aiSdkTools.x_search = xai.tools.xSearch({});
 			}
 		} else if (googleIncompatible) {
-			if (tavilyApiKey) aiSdkTools.web_search = tavilySearchTool;
+			if (!isSupportedProvider(model.split('/')[0] as string)) {
+				aiSdkTools.web_search = isResearchMode ? gateway.tools.parallelSearch() : gateway.tools.perplexitySearch();
+			} else if (tavilyApiKey) aiSdkTools.web_search = tavilySearchTool;
 		}
 		if (googleIncompatible) {
 			if (!model.startsWith('anthropic') && !model.startsWith('xai')) aiSdkTools.fetch = jinaReaderTool;
 			if (!isResearchMode && !model.startsWith('openai') && !model.startsWith('anthropic')
 				&& !model.startsWith('xai') && pythonApiKey && pythonUrl) {
-				aiSdkTools.python_executor = pythonExecutorTool;
+				aiSdkTools.code_execution = pythonExecutorTool;
 			}
 		} else {
 			aiSdkTools = {
@@ -4506,8 +4508,7 @@ const CUSTOM_MODEL_LISTS = {
 		{ id: 'gemini-3-pro-preview:free', name: 'Gemini 3 Pro 4K/2K' },
 	],
 	doubao: [
-		{ id: 'doubao-seed-character-251128', name: 'Doubao Seed Character' },
-		{ id: 'doubao-seed-1-8-251215', name: 'Doubao Seed 1.8' },
+		{ id: 'doubao-seed-2-0-lite-260215', name: 'Doubao Seed 2.0 Lite' },
 		{ id: 'doubao-seed-2-0-pro-260215', name: 'Doubao Seed 2.0 Pro' },
 		{ id: 'doubao-seed-2-0-code-preview-260215', name: 'Doubao Seed 2.0 Code' },
 		{ id: 'deepseek-v3-2-251201', name: 'DeepSeek V3.2 (Volcengine)' },
@@ -4524,7 +4525,7 @@ const CUSTOM_MODEL_LISTS = {
 		{ id: 'longcat-flash-thinking', name: 'LongCat Flash Thinking (Meituan)' },
 	],
 	cloudflare: [
-		{ id: '@cf/meta/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout' },
+		{ id: '@cf/zai-org/glm-4.7-flash', name: 'GLM 4.7 Flash' },
 	],
 };
 
@@ -4570,9 +4571,9 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 			headers: {
 				'Authorization': `Bearer ${copilotToken}`,
 				'Content-Type': 'application/json',
-				"editor-version": "vscode/1.109.5",
-				"editor-plugin-version": "copilot-chat/0.37.5",
-				"user-agent": "GitHubCopilotChat/0.37.5"
+				"editor-version": "vscode/1.110.1",
+				"editor-plugin-version": "copilot-chat/0.37.9",
+				"user-agent": "GitHubCopilotChat/0.37.9"
 			},
 		});
 	} else {
@@ -4713,7 +4714,7 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 
 	const curated = [
 		{ id: 'admin/magic-vision', name: 'Management', description: '', object: 'model', created: 0, owned_by: 'internal' },
-		{ id: 'openai/gpt-5.3-image', name: 'GPT-5.3 Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
+		{ id: 'openai/gpt-5.4-image', name: 'GPT-5.4 Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
 		{ id: 'image/doubao-vision', name: 'Seedream 4.5', description: 'First 20 images free daily, then ¥0.25/image', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'image/doubao-paid-vision', name: 'Seedream 5.0 Lite (Paid)', description: '¥0.22/image', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'image/bfl/flux-2-pro-vision', name: 'FLUX.2 [pro] (Gateway)', description: 'I: $0.015/MP, O: First MP $0.03, then $0.015/MP', object: 'model', created: 0, owned_by: 'gateway' },
@@ -4794,7 +4795,7 @@ app.get('/v1/models', async (c: Context) => {
 // Files: serve blobs stored in Netlify store
 app.get('/v1/files/:key', async (c: Context) => {
 	try {
-		const key = c.req.param('key');
+		const key = c.req.param('key') as string;
 		const res = await getFileWithMetadata(key, 'blob' as any);
 		if (!res || !res.data) return c.text('Not found', 404);
 		const blob: Blob = res.data as Blob;
