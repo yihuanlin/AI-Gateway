@@ -1,6 +1,6 @@
 import { Hono, type Context } from 'hono'
 import { cors } from 'hono/cors'
-import { generateText, streamText, stepCountIs, tool, gateway } from 'ai'
+import { generateText, streamText, stepCountIs, tool } from 'ai' // gateway.tools missing in SDK 6
 import { createGateway } from '@ai-sdk/gateway'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { openai, createOpenAI } from '@ai-sdk/openai'
@@ -335,11 +335,35 @@ const buildDefaultProviderOptions = (args: {
 	if (model.startsWith('anthropic/')) {
 		return {
 			anthropic: {
-				thinking: { type: thinking?.type || "enabled", budgetTokens: thinking?.budget_tokens || (isResearchMode ? 32000 : 2048) },
-				cacheControl: { type: "ephemeral" },
+				...(thinking?.budget_tokens) && {
+					thinking: {
+						type: thinking?.type || "enabled",
+						budgetTokens: thinking?.budget_tokens
+					},
+				},
+				...(!thinking?.budget_tokens && thinking?.type != 'enabled') && {
+					thinking: {
+						type: "adatpive",
+					},
+					effort: reasoning_effort || (isResearchMode ? 'max' : "high"),
+					contextManagement: {
+						edits: [
+							{
+								type: 'compact_20260112',
+								// trigger: {
+								// 	type: 'input_tokens',
+								// 	value: 50000,
+								// },
+								// instructions:
+								// 	'Summarise the conversation concisely, preserving key decisions and context.',
+							},
+						],
+					},
+				}
 			},
 			gateway: {
-				only: ['anthropic', 'vertex']
+				only: ['anthropic', 'vertex'],
+				caching: 'auto'
 			}
 		};
 	}
@@ -375,7 +399,7 @@ const buildDefaultProviderOptions = (args: {
 	if (model.startsWith('openai/') || model.startsWith('chatgpt/')) {
 		return {
 			openai: {
-				reasoningEffort: reasoning_effort || (isResearchMode && (model.includes('5.2') || model.includes('max')) ? 'xhigh' : (isResearchMode ? 'high' : "medium")),
+				reasoningEffort: reasoning_effort || (isResearchMode && (model.includes('5.') || model.includes('max')) ? 'xhigh' : (isResearchMode ? 'high' : "medium")),
 				reasoningSummary: reasoning_summary || "auto",
 				textVerbosity: text_verbosity || "medium",
 				serviceTier: service_tier || "auto",
@@ -412,8 +436,8 @@ const buildDefaultProviderOptions = (args: {
 const getGatewayForAttempt = async (attempt: Attempt) => {
 	if (attempt.type === 'gateway') {
 		const gatewayOptions: any = { apiKey: attempt.apiKey };
-		if (attempt.model.startsWith('anthropic/claude-sonnet-4')) {
-			gatewayOptions.headers = { 'anthropic-beta': 'context-1m-2025-08-07' };
+		if (attempt.model.startsWith('anthropic/')) {
+			gatewayOptions.headers = { 'anthropic-beta': 'context-1m-2025-08-07,compact-2026-01-12' };
 		}
 		return createGateway(gatewayOptions);
 	}
@@ -740,7 +764,7 @@ const buildAiSdkTools = (model: string, userTools: any[] | undefined): Record<st
 			});
 			aiSdkTools.code_interpreter = openai.tools.codeInterpreter({});
 		} else if (model.startsWith('anthropic')) {
-			aiSdkTools.web_search = anthropic.tools.webSearch_20250305({
+			aiSdkTools.web_search = anthropic.tools.webSearch_20260209({
 				maxUses: isResearchMode ? 18 : 4,
 				...(!isResearchMode && geo ? {
 					userLocation: {
@@ -752,8 +776,8 @@ const buildAiSdkTools = (model: string, userTools: any[] | undefined): Record<st
 					}
 				} : {})
 			});
-			aiSdkTools.web_fetch = anthropic.tools.webFetch_20250910({ maxUses: isResearchMode ? 5 : 1 });
-			aiSdkTools.code_execution = anthropic.tools.codeExecution_20250825()
+			aiSdkTools.web_fetch = anthropic.tools.webFetch_20260209({ maxUses: isResearchMode ? 5 : 1 });
+			aiSdkTools.code_execution = anthropic.tools.codeExecution_20260120()
 		} else if (model.startsWith('xai')) {
 			aiSdkTools.web_search = xai.tools.webSearch({
 				enableImageUnderstanding: isResearchMode,
@@ -763,9 +787,10 @@ const buildAiSdkTools = (model: string, userTools: any[] | undefined): Record<st
 				aiSdkTools.x_search = xai.tools.xSearch({});
 			}
 		} else if (googleIncompatible) {
-			if (!isSupportedProvider(model.split('/')[0] as string)) {
-				aiSdkTools.web_search = isResearchMode ? gateway.tools.parallelSearch() : gateway.tools.perplexitySearch();
-			} else if (tavilyApiKey) aiSdkTools.web_search = tavilySearchTool;
+			// if (!isSupportedProvider(model.split('/')[0] as string)) {
+			// 	aiSdkTools.web_search = isResearchMode ? gateway.tools.parallelSearch() : gateway.tools.perplexitySearch();
+			// } else 
+			if (tavilyApiKey) aiSdkTools.web_search = tavilySearchTool;
 		}
 		if (googleIncompatible) {
 			if (!model.startsWith('anthropic') && !model.startsWith('xai')) aiSdkTools.fetch = jinaReaderTool;
@@ -2761,7 +2786,7 @@ app.post('/v1/responses', async (c: Context) => {
 								}
 								case 'finish': {
 									const reason = part.finishReason.replace("-", "_") || 'stop';
-									if (!(['stop', 'tool_calls', 'unknown'].some((e) => reason.includes(e)))) {
+									if (!(['stop', 'tool_calls', 'other'].some((e) => reason.includes(e)))) {
 										emit({
 											type: 'error',
 											sequence_number: sequenceNumber++,
@@ -2821,10 +2846,10 @@ app.post('/v1/responses', async (c: Context) => {
 											output_tokens: part.totalUsage.outputTokens,
 											total_tokens: part.totalUsage.totalTokens,
 											input_tokens_details: {
-												cached_tokens: part.totalUsage.cachedInputTokens || 0,
+												cached_tokens: part.totalUsage.inputTokenDetails.cacheReadTokens || 0,
 											},
 											output_tokens_details: {
-												reasoning_tokens: part.totalUsage.reasoningTokens,
+												reasoning_tokens: part.totalUsage.outputTokenDetails.reasoningTokens,
 											}
 										} : null
 									};
@@ -3708,10 +3733,10 @@ app.post('/v1/chat/completions', async (c: Context) => {
 					completion_tokens: result.usage.outputTokens,
 					total_tokens: result.usage.totalTokens,
 					prompt_tokens_details: {
-						cached_tokens: result.usage.cachedInputTokens || 0
+						cached_tokens: result.usage.inputTokenDetails.cacheReadTokens || 0
 					},
 					completion_tokens_details: {
-						reasoning_tokens: result.usage.reasoningTokens
+						reasoning_tokens: result.usage.outputTokenDetails.reasoningTokens
 					}
 				},
 			});

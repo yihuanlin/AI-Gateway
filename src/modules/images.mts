@@ -1,6 +1,6 @@
 import { type WaitResult, lastUserPromptFromMessages, responsesBase, streamChatSingleText, streamResponsesSingleText, streamChatGenerationElapsed, streamResponsesGenerationElapsed, findLinks, hasImageInMessages, sleep } from './utils.mts';
 import { SUPPORTED_PROVIDERS } from '../shared/providers.mts';
-import { experimental_generateImage as generateImage } from 'ai';
+import { generateImage } from 'ai';
 
 export type ImageResult = {
   usage: { input_tokens: number; output_tokens: number; total_tokens: number } | null;
