@@ -1,6 +1,6 @@
 import { Hono, type Context } from 'hono'
 import { cors } from 'hono/cors'
-import { generateText, streamText, stepCountIs, tool } from 'ai' // gateway.tools missing in SDK 6
+import { generateText, streamText, stepCountIs, tool, gateway } from 'ai' // gateway.tools missing in SDK 6
 import { createGateway } from '@ai-sdk/gateway'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { openai, createOpenAI } from '@ai-sdk/openai'
@@ -304,10 +304,10 @@ const createCustomProvider = async (providerName: string, apiKey: string) => {
 				baseURL: config.baseURL,
 				includeUsage: true,
 				headers: {
-					"editor-version": "vscode/1.110.1",
+					"editor-version": "vscode/1.113.0",
 					"copilot-vision-request": "true",
-					"editor-plugin-version": "copilot-chat/0.37.9",
-					"user-agent": "GitHubCopilotChat/0.37.9"
+					"editor-plugin-version": "copilot-chat/0.39.2",
+					"user-agent": "GitHubCopilotChat/0.39.2"
 				},
 			});
 		default:
@@ -787,10 +787,10 @@ const buildAiSdkTools = (model: string, userTools: any[] | undefined): Record<st
 				aiSdkTools.x_search = xai.tools.xSearch({});
 			}
 		} else if (googleIncompatible) {
-			// if (!isSupportedProvider(model.split('/')[0] as string)) {
-			// 	aiSdkTools.web_search = isResearchMode ? gateway.tools.parallelSearch() : gateway.tools.perplexitySearch();
-			// } else 
-			if (tavilyApiKey) aiSdkTools.web_search = tavilySearchTool;
+			if (!isSupportedProvider(model.split('/')[0] as string)) {
+				aiSdkTools.web_search = isResearchMode ? gateway.tools.parallelSearch() : gateway.tools.perplexitySearch();
+			} else
+				if (tavilyApiKey) aiSdkTools.web_search = tavilySearchTool;
 		}
 		if (googleIncompatible) {
 			if (!model.startsWith('anthropic') && !model.startsWith('xai')) aiSdkTools.fetch = jinaReaderTool;
@@ -4596,9 +4596,9 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 			headers: {
 				'Authorization': `Bearer ${copilotToken}`,
 				'Content-Type': 'application/json',
-				"editor-version": "vscode/1.110.1",
-				"editor-plugin-version": "copilot-chat/0.37.9",
-				"user-agent": "GitHubCopilotChat/0.37.9"
+				"editor-version": "vscode/1.113.0",
+				"editor-plugin-version": "copilot-chat/0.39.2",
+				"user-agent": "GitHubCopilotChat/0.39.2"
 			},
 		});
 	} else {
