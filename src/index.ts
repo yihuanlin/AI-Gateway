@@ -304,10 +304,10 @@ const createCustomProvider = async (providerName: string, apiKey: string) => {
 				baseURL: config.baseURL,
 				includeUsage: true,
 				headers: {
-					"editor-version": "vscode/1.113.0",
+					"editor-version": "vscode/1.114.0",
 					"copilot-vision-request": "true",
-					"editor-plugin-version": "copilot-chat/0.39.2",
-					"user-agent": "GitHubCopilotChat/0.39.2"
+					"editor-plugin-version": "copilot-chat/0.43.0",
+					"user-agent": "GitHubCopilotChat/0.43.0"
 				},
 			});
 		default:
@@ -469,7 +469,7 @@ const prepareProvidersToTry = (args: {
 			const start = Math.floor(Math.random() * gatewayKeys.length);
 			for (let idx = 0; idx < gatewayKeys.length; idx++) {
 				const k = gatewayKeys[(start + idx) % gatewayKeys.length];
-				if (k) providersToTry.push({ type: 'gateway', apiKey: k, model });
+				if (k) providersToTry.push({ type: 'gateway', name: 'gateway', apiKey: k, model });
 			}
 		}
 	}
@@ -2896,7 +2896,7 @@ app.post('/v1/responses', async (c: Context) => {
 										message,
 										param: null
 									});
-									console.error(`Error with provider ${attempt.name}: ${message}`);
+									console.error(`${code} Error with provider ${attempt.name}: ${message}`);
 									break;
 								}
 							}
@@ -3322,7 +3322,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 									i = maxAttempts;
 									chunk = { ...baseChunk, choices: [{ index: 0, delta: { refusal: message, content: '**Error**: ' + message }, finish_reason: 'stop' }] };
 									controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
-									console.error(`Error with provider ${attempt.name}: ${message}`);
+									console.error(`${code} Error with provider ${attempt.name}: ${message}`);
 									break;
 								case 'reasoning-delta':
 									chunk = { ...baseChunk, choices: [{ index: 0, delta: { reasoning_content: part.text }, finish_reason: null }] };
@@ -4353,7 +4353,7 @@ app.post('/v1/messages', async (c: Context) => {
 										error: { type: 'api_error', message: message }
 									};
 									controller.enqueue(TEXT_ENCODER.encode(`event: error\ndata: ${JSON.stringify(errorEvent)}\n\n`));
-									console.error(`Error with provider ${attempt.name}: ${message}`);
+									console.error(`${code} Error with provider ${attempt.name}: ${message}`);
 									break;
 							}
 						}
@@ -4528,9 +4528,10 @@ app.post('/v1/messages', async (c: Context) => {
 
 const CUSTOM_MODEL_LISTS = {
 	poixe: [
-		{ id: 'gpt-5:free', name: 'GPT-5 4K/2K' },
-		{ id: 'claude-sonnet-4-20250514:free', name: 'Claude Sonnet 4 4K/2K' },
+		{ id: 'gpt-5.2:free', name: 'GPT-5.2 4K/2K' },
 		{ id: 'gemini-3-pro-preview:free', name: 'Gemini 3 Pro 4K/2K' },
+		{ id: 'cli2api/claude-sonnet-4-6:free', name: 'Claude Sonnet 4.6 1MTM' },
+		{ id: 'cli2api/gpt-5.3-codex:free', name: 'Gemini 3 Pro 1MTM' },
 	],
 	doubao: [
 		{ id: 'doubao-seed-2-0-lite-260215', name: 'Doubao Seed 2.0 Lite' },
@@ -4551,6 +4552,7 @@ const CUSTOM_MODEL_LISTS = {
 	],
 	cloudflare: [
 		{ id: '@cf/zai-org/glm-4.7-flash', name: 'GLM 4.7 Flash' },
+		{ id: '@cf/moonshotai/kimi-k2.5', name: 'Kimi K2.5' },
 	],
 };
 
@@ -4596,9 +4598,9 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 			headers: {
 				'Authorization': `Bearer ${copilotToken}`,
 				'Content-Type': 'application/json',
-				"editor-version": "vscode/1.113.0",
-				"editor-plugin-version": "copilot-chat/0.39.2",
-				"user-agent": "GitHubCopilotChat/0.39.2"
+				"editor-version": "vscode/1.114.0",
+				"editor-plugin-version": "copilot-chat/0.43.0",
+				"user-agent": "GitHubCopilotChat/0.43.0"
 			},
 		});
 	} else {
@@ -4753,6 +4755,7 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 		{ id: 'image/huggingface/Tongyi-MAI/Z-Image-Turbo', name: 'Z-Image-Turbo (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'image/huggingface/black-forest-labs/FLUX.2-dev-vision', name: 'FLUX.2 [dev] (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'image/huggingface/Qwen/Qwen-Image-Edit-2509-vision', name: 'Qwen-Image-Edit (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
+		{ id: 'video/doubao-seedance-2.0-vision', name: 'Seedance 2.0', description: '¥46/MT', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'video/doubao-seedance-1.5-pro-vision', name: 'Seedance 1.5 Pro', description: 'First 2 MT free daily, then ¥8/MT (¥16/MT with audio)', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'video/doubao-seedance-1.0-pro-vision', name: 'Seedance 1.0 Pro', description: 'First 2 MT free daily, then ¥15/MT', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'video/doubao-seedance-1.0-lite-vision', name: 'Seedance 1.0 Lite', description: 'First 2 MT free daily, then ¥10/MT', object: 'model', created: 0, owned_by: 'doubao' },

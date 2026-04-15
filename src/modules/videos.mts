@@ -167,7 +167,9 @@ const buildVideoGenerationWaiter = async (params: {
 
     const content: any[] = [{ type: 'text', text: prompt }];
     let modelId = '';
-    if (model.includes('doubao-seedance-1.5')) {
+    if (model.includes('doubao-seedance-2.0')) {
+        modelId = 'doubao-seedance-2-0-260128';
+    } else if (model.includes('doubao-seedance-1.5')) {
         modelId = 'doubao-seedance-1-5-pro-251215';
     } else if (model.includes('doubao-seedance-1.0-pro')) {
         modelId = 'doubao-seedance-1-0-pro-250528';
@@ -190,7 +192,7 @@ const buildVideoGenerationWaiter = async (params: {
             }
         }
 
-        if (modelId.endsWith('i2v-250428')) {
+        if (!modelId.includes('1-0-pro-fast') || !modelId.includes('-t2v-')) {
             content.push({ type: 'image_url', image_url: { url: first }, role: 'first_frame' });
 
             // Check if prompt contains /repeat and only has one image
