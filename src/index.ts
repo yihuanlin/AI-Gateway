@@ -1,6 +1,6 @@
 import { Hono, type Context } from 'hono'
 import { cors } from 'hono/cors'
-import { generateText, streamText, stepCountIs, tool, gateway } from 'ai' // gateway.tools missing in SDK 6
+import { generateText, streamText, stepCountIs, tool, gateway } from 'ai'
 import { createGateway } from '@ai-sdk/gateway'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { openai, createOpenAI } from '@ai-sdk/openai'
@@ -304,10 +304,10 @@ const createCustomProvider = async (providerName: string, apiKey: string) => {
 				baseURL: config.baseURL,
 				includeUsage: true,
 				headers: {
-					"editor-version": "vscode/1.114.0",
+					"editor-version": "vscode/1.118.1",
 					"copilot-vision-request": "true",
-					"editor-plugin-version": "copilot-chat/0.43.0",
-					"user-agent": "GitHubCopilotChat/0.43.0"
+					"editor-plugin-version": "copilot-chat/0.45.1",
+					"user-agent": "GitHubCopilotChat/0.45.1"
 				},
 			});
 		default:
@@ -4598,9 +4598,9 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 			headers: {
 				'Authorization': `Bearer ${copilotToken}`,
 				'Content-Type': 'application/json',
-				"editor-version": "vscode/1.114.0",
-				"editor-plugin-version": "copilot-chat/0.43.0",
-				"user-agent": "GitHubCopilotChat/0.43.0"
+				"editor-version": "vscode/1.118.1",
+				"editor-plugin-version": "copilot-chat/0.45.1",
+				"user-agent": "GitHubCopilotChat/0.45.1"
 			},
 		});
 	} else {
