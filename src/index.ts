@@ -37,6 +37,41 @@ let isResearchMode: boolean = false;
 
 // Helper functions
 
+const addWebSearchFlagToLastUserMessage = (messages: any[]): void => {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (msg && msg.role === 'user') {
+			if (typeof msg.content === 'string') {
+				if (!msg.content.includes('--web_search')) {
+					msg.content = msg.content.trim() + ' --web_search';
+				}
+				break;
+			} else if (Array.isArray(msg.content)) {
+				for (let j = msg.content.length - 1; j >= 0; j--) {
+					const part = msg.content[j];
+					if (part && part.type === 'text' && typeof part.text === 'string') {
+						if (!part.text.includes('--web_search')) {
+							part.text = part.text.trim() + ' --web_search';
+						}
+						break;
+					} else if (typeof part === 'string') {
+						if (!part.includes('--web_search')) {
+							msg.content[j] = part.trim() + ' --web_search';
+						}
+						break;
+					}
+				}
+				break;
+			} else if (typeof msg.content === 'object' && msg.content && typeof msg.content.text === 'string') {
+				if (!msg.content.text.includes('--web_search')) {
+					msg.content.text = msg.content.text.trim() + ' --web_search';
+				}
+				break;
+			}
+		}
+	}
+}
+
 const randomId = (prefix: string) => {
 	try {
 		// Prefer Web Crypto for consistency across runtimes
@@ -463,7 +498,7 @@ const prepareProvidersToTry = (args: {
 	} else {
 		let gatewayKeys: string[] = [];
 		const gatewayKey = process.env.GATEWAY_API_KEY;
-		if (gatewayKey) gatewayKeys = gatewayKey.split(',').map(k => k.trim()).filter(Boolean);
+		if (gatewayKey) gatewayKeys = gatewayKey.split(',').map((k: string) => k.trim()).filter(Boolean);
 
 		if (gatewayKeys.length > 0) {
 			const start = Math.floor(Math.random() * gatewayKeys.length);
@@ -677,6 +712,9 @@ const responsesInputToAiSdkMessages = async (input: any, model?: string): Promis
 
 // Build AI SDK tools from OpenAI tools array with shared heuristics
 const buildAiSdkTools = (model: string, userTools: any[] | undefined): Record<string, any> => {
+	if (model.includes('gemini') && model.includes('image') && Array.isArray(userTools)) {
+		return { google_search: google.tools.googleSearch({}) }
+	}
 	let isAnthropic: boolean = false;
 	let aiSdkTools: Record<string, any> = {};
 	if (model.toLowerCase().includes('image') && model.startsWith('openai')) {
@@ -1556,6 +1594,10 @@ app.post('/v1/responses', async (c: Context) => {
 			return await handleImageForResponses({ model, messages: mapped, stream: !!stream, temperature, top_p, request_id: responseId || null });
 		}
 		if (model.startsWith('video/')) {
+			const userTools = tools;
+			if (Array.isArray(userTools) && model.includes('seedance')) {
+				addWebSearchFlagToLastUserMessage(mapped);
+			}
 			const { handleVideoForResponses } = await import('./modules/videos.js');
 			return await handleVideoForResponses({ model, messages: mapped, stream: !!stream, request_id: responseId });
 		}
@@ -3235,6 +3277,10 @@ app.post('/v1/chat/completions', async (c: Context) => {
 		return await handleImageForChat({ model, messages: processedMessages, stream: !!stream, temperature, top_p });
 	}
 	if (typeof model === 'string' && model.startsWith('video/')) {
+		const userTools = tools;
+		if (Array.isArray(userTools) && model.includes('seedance')) {
+			addWebSearchFlagToLastUserMessage(processedMessages);
+		}
 		const { handleVideoForChat } = await import('./modules/videos.js');
 		return await handleVideoForChat({ model, messages: processedMessages, stream: !!stream });
 	}
@@ -4805,8 +4851,8 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 		{ id: 'image/huggingface/Tongyi-MAI/Z-Image-Turbo', name: 'Z-Image-Turbo (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'image/huggingface/black-forest-labs/FLUX.2-dev-vision', name: 'FLUX.2 [dev] (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'image/huggingface/Qwen/Qwen-Image-Edit-2509-vision', name: 'Qwen-Image-Edit (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
-		{ id: 'video/seedance-2.0', name: 'Seedance 2.0 (Gateway)', description: '720p: $0.15/sec + $0.11/sec audio', object: 'model', created: 0, owned_by: 'gateway' },
-		{ id: 'video/seedance-2.0-fast', name: 'Seedance 2.0 Fast (Gateway)', description: '720p: $0.12/sec + $0.08/sec audio', object: 'model', created: 0, owned_by: 'gateway' },
+		{ id: 'video/seedance-2.0-vision', name: 'Seedance 2.0 (Gateway)', description: '720p: $0.15/sec + $0.11/sec audio', object: 'model', created: 0, owned_by: 'gateway' },
+		{ id: 'video/seedance-2.0-fast-vision', name: 'Seedance 2.0 Fast (Gateway)', description: '720p: $0.12/sec + $0.08/sec audio', object: 'model', created: 0, owned_by: 'gateway' },
 		{ id: 'video/doubao-seedance-2.0-vision', name: 'Seedance 2.0', description: '¥46/MT', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'video/doubao-seedance-1.5-pro-vision', name: 'Seedance 1.5 Pro', description: 'First 2 MT free daily, then ¥8/MT (¥16/MT with audio)', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'video/doubao-seedance-1.0-pro-vision', name: 'Seedance 1.0 Pro', description: 'First 2 MT free daily, then ¥15/MT', object: 'model', created: 0, owned_by: 'doubao' },
@@ -4872,7 +4918,7 @@ app.get('/v1/models', async (c: Context) => {
 	}
 });
 
-// Files: serve blobs stored in Netlify store
+// Files: serve blobs stored in Vercel store
 app.get('/v1/files/:key', async (c: Context) => {
 	try {
 		const key = c.req.param('key') as string;

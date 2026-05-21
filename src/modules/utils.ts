@@ -121,6 +121,7 @@ export const streamResponsesSingleText = (baseObj: any, messageText: string, tex
       emit({ type: 'response.output_item.done', sequence_number: sequenceNumber++, output_index: 0, item: finalItem });
       const completed = { ...baseObj, status: 'completed', output: [finalItem], usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } };
       emit({ type: 'response.completed', sequence_number: sequenceNumber++, response: completed });
+      controller.enqueue(enc.encode('data: [DONE]\n\n'));
       controller.close();
     }
   });

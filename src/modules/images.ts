@@ -13,7 +13,7 @@ const toMarkdownImage = (url: string): string => {
 
 const getHelpForModel = (model: string) => {
   if (model.startsWith('image/doubao') || model.startsWith('image/seedream')) {
-    return 'Use **Seedream** unified t2i / i2i model *doubao-seedream-4-5-251128* (multiple reference images supported).\nFlags: `--format url|b64_json`, `--size {WxH}|--ratio {e.g., 16:9}`, `--seed N`, `--guidance F`.\n`/upload` uploads output to storage when base64 is returned.';
+    return 'Use **Seedream** unified t2i / i2i model *doubao-seedream-4-5-251128* or *doubao-seedream-5-0-260128* if using "image/seedream-latest". (multiple reference images supported).\nFlags: `--format url|b64_json`, `--size {WxH}|--ratio {e.g., 16:9}`, `--seed N`, `--guidance F`.\n`/upload` uploads output to storage when base64 is returned.';
   }
   if (model.startsWith('image/huggingface/')) {
     return '**Hugging Face** Text-to-Image and Image-to-Image models.\nFlags: `--guidance F`, `--negative_prompt "text"`, `--steps N (1-100)"`, `--size WxH` or `--ratio A:B`, `--seed N`.\n`/upload` upload input images to storage (output images are uploaded to storage). Input images enable image-to-image mode.\nSpecial prompt trigger for Kontext models:\n`Make a shot in the same scene of...`\n`Remove ...`\n`redepthkontext ...`\n`Place it`\n`Fuse this image into background`\n`Convert this image into pencil drawing art style`\n`Turn this image into the Clay_Toy style.`';
