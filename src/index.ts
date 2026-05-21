@@ -798,6 +798,7 @@ const buildAiSdkTools = (model: string, userTools: any[] | undefined): Record<st
 				type: 'provider',
 				id: 'custom.web_search',
 				args: {
+					type: 'web_search',
 					limit: isResearchMode ? 20 : 10,
 					max_tool_calls: isResearchMode ? 10 : 3,
 				},
@@ -855,9 +856,39 @@ const buildCommonOptions = async (
 		finalMessages = params.messages;
 	}
 
+	const systemMessages = finalMessages.filter((m: any) => m?.role === 'system');
+	const otherMessages = finalMessages.filter((m: any) => m?.role !== 'system');
+
+	let systemPrompt: string | undefined = undefined;
+	if (systemMessages.length > 0) {
+		systemPrompt = systemMessages
+			.map((m: any) => {
+				if (typeof m.content === 'string') {
+					return m.content;
+				}
+				if (Array.isArray(m.content)) {
+					return m.content
+						.map((part: any) => {
+							if (typeof part === 'string') return part;
+							if (part && typeof part === 'object') {
+								if (part.type === 'text' && typeof part.text === 'string') return part.text;
+								if (part.text && typeof part.text === 'string') return part.text;
+							}
+							return '';
+						})
+						.filter(Boolean)
+						.join('\n');
+				}
+				return '';
+			})
+			.filter(Boolean)
+			.join('\n\n');
+	}
+
 	return {
 		model: gw(attempt.model),
-		messages: finalMessages,
+		system: systemPrompt || undefined,
+		messages: otherMessages,
 		tools: params.aiSdkTools,
 		temperature: params.temperature,
 		topP: params.top_p,
@@ -4027,6 +4058,12 @@ app.post('/v1/messages', async (c: Context) => {
 			}));
 			return [...systemMessages, ...messages];
 		}
+
+		if (typeof system === 'string') {
+			return [{ role: 'system', content: system }, ...messages];
+		}
+
+		return messages;
 	})();
 
 	const processedMessages = await processAnthropicMessages(contextMessages);
@@ -4941,6 +4978,7 @@ const getGeoFromHeaders = (headers: Headers): any => {
 
 export default (request: Request, context: any) => {
 	geo = context?.geo || getGeoFromHeaders(request.headers) || null;
+	console.log(geo);
 	return app.fetch(request);
 }
 
