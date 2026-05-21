@@ -77,9 +77,9 @@ GET /v1/files/:file                # Serve a file from Vercel Blobs
 
 ### Tools & Extensions
 **If required environment variables are set, the following tools are enabled by adding tools in request body (except for when Anthropic format client tools are provided), even an empty array (in [Cherry Studio](https://www.cherry-ai.com), this is triggered by enabling model build-in search):**
-- **Code Execution**: [Python Executor API](https://github.com/yihuanlin/python-executor-api) `python_executor` or model build-in (Gateway and Custom Gemini `code_execution`, Gateway Anthropic `code_execution`, Gateway OpenAI `code_interpreter`)
-- **Web Search**: [Tavily Search API](https://docs.tavily.com/documentation/api-reference/endpoint/search) `web_search` or model build-in (Gateway and Custom Gemini `google_search`, Gateway OpenAI `web_search_preview`, Gateway Anthropic `web_search`, Gateway Grok `mode = 'on'`, Gateway Perplexity `always on regardless of tools`)
-- **Content Extraction**: [Jina Reader API](https://jina.ai/reader/) `fetch` or model build-in (Gateway and Custom `url_context`)
+- **Code Execution**: [Python Executor API](https://github.com/yihuanlin/python-executor-api) `python_executor` or model build-in (Gateway and Custom Gemini `code_execution`, Gateway Anthropic `code_execution`, Gateway OpenAI `code_interpreter`, Gateway Grok `code_execution`)
+- **Web Search**: [Tavily Search API](https://docs.tavily.com/documentation/api-reference/endpoint/search) `web_search` or model build-in (Gateway and Custom Gemini `google_search`, Gateway OpenAI `web_search_preview`, Gateway Anthropic `web_search`, Gateway Grok `web_search` and `x_search` (when not `isResearchMode`), Gateway Perplexity `always on regardless of tools`), Gateway Others `gateway.tools.parallelSearch()` or `gateway.tools.perplexitySearch()` (when `isResearchMode`), Volcengine Doubao `web_search`
+- **Content Extraction**: [Jina Reader API](https://jina.ai/reader/) `fetch` or model build-in (Gateway and Custom Gemini `url_context`, Gateway Anthropic `web_fetch`, and those built-in with Web Search)
 
 **In OpenAI endpoints, research mode is triggered by detecting keywards `research` and `paper` in conversation. Default search depth and reasoning effort will increase, all tools above (except `python_executor`) and research APIs below will be enabled:**
 - **Research APIs**: [Ensembl API](https://rest.ensembl.org) `ensembl_api`, [Semantic Scholar APIs](https://www.semanticscholar.org/product/api) `scholar_search` and `paper_recommendations`

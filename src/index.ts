@@ -7,6 +7,7 @@ import { openai, createOpenAI } from '@ai-sdk/openai'
 import { google, createGoogleGenerativeAI } from '@ai-sdk/google'
 import { anthropic } from '@ai-sdk/anthropic';
 import { xai } from '@ai-sdk/xai';
+import { createOpenResponses } from '@ai-sdk/open-responses';
 import { string, number, boolean, array, object, optional, int, enum as zenum } from 'zod/mini'
 import { uploadBlobToStorage, getFileWithMetadata } from './shared/bucket.js';
 import { SUPPORTED_PROVIDERS, getProviderKeys } from './shared/providers.js'
@@ -309,6 +310,11 @@ const createCustomProvider = async (providerName: string, apiKey: string) => {
 					"editor-plugin-version": "copilot-chat/0.48.1",
 					"user-agent": "GitHubCopilotChat/0.48.1"
 				},
+			});
+		case 'doubao':
+			return createOpenResponses({
+				name: 'custom',
+				url: config.baseURL,
 			});
 		default:
 			return createOpenAICompatible({
@@ -786,6 +792,16 @@ const buildAiSdkTools = (model: string, userTools: any[] | undefined): Record<st
 			if (!isResearchMode) {
 				aiSdkTools.x_search = xai.tools.xSearch({});
 			}
+		} else if (model.startsWith('doubao')) {
+			aiSdkTools.web_search = tool({
+				type: 'provider',
+				id: 'custom.web_search',
+				args: {
+					limit: isResearchMode ? 20 : 10,
+					max_tool_calls: isResearchMode ? 10 : 3,
+				},
+				inputSchema: object({}),
+			});
 		} else if (googleIncompatible) {
 			if (!isSupportedProvider(model.split('/')[0] as string)) {
 				aiSdkTools.web_search = isResearchMode ? gateway.tools.parallelSearch() : gateway.tools.perplexitySearch();
@@ -793,7 +809,7 @@ const buildAiSdkTools = (model: string, userTools: any[] | undefined): Record<st
 				if (tavilyApiKey) aiSdkTools.web_search = tavilySearchTool;
 		}
 		if (googleIncompatible) {
-			if (!model.startsWith('anthropic') && !model.startsWith('xai')) aiSdkTools.fetch = jinaReaderTool;
+			if (!model.startsWith('anthropic') && !model.startsWith('xai') && !model.startsWith('doubao')) aiSdkTools.fetch = jinaReaderTool;
 			if (!isResearchMode && !model.startsWith('openai') && !model.startsWith('anthropic')
 				&& !model.startsWith('xai') && pythonApiKey && pythonUrl) {
 				aiSdkTools.code_execution = pythonExecutorTool;
@@ -3098,10 +3114,10 @@ app.post('/v1/responses', async (c: Context) => {
 					output_tokens: result.usage.outputTokens,
 					total_tokens: result.usage.totalTokens,
 					input_tokens_details: {
-						cached_tokens: result.usage.cachedInputTokens || 0,
+						cached_tokens: result.usage.inputTokenDetails?.cacheReadTokens || 0,
 					},
 					output_tokens_details: {
-						reasoning_tokens: result.usage.reasoningTokens,
+						reasoning_tokens: result.usage.outputTokenDetails?.reasoningTokens,
 					}
 				} : null,
 				user: null,
@@ -4482,7 +4498,7 @@ app.post('/v1/messages', async (c: Context) => {
 				usage: {
 					input_tokens: result.usage?.inputTokens || 0,
 					output_tokens: result.usage?.outputTokens || 0,
-					cache_read_input_tokens: result.usage?.cachedInputTokens || 0,
+					cache_read_input_tokens: result.usage?.inputTokenDetails?.cacheReadTokens || 0,
 					service_tier: service_tier || 'standard'
 				}
 			});
@@ -4541,9 +4557,7 @@ const CUSTOM_MODEL_LISTS = {
 		{ id: 'glm-4-7-251222', name: 'GLM 4.7 (Volcengine)' },
 	],
 	cohere: [
-		{ id: 'command-a-03-2025', name: 'Command A' },
-		{ id: 'command-a-vision-07-2025', name: 'Cohere A Vision' },
-		{ id: 'command-a-reasoning-08-2025', name: 'Command A Reasoning' },
+		{ id: 'command-a-plus-05-2026', name: 'Command A+' },
 		{ id: 'command-a-translate-08-2025', name: 'Command A Translation' },
 	],
 	longcat: [
@@ -4667,17 +4681,29 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 				if (!currentApiKey) throw new Error('No valid gateway API key found');
 				const gateway = createGateway({ apiKey: currentApiKey });
 				const availableModels = await gateway.getAvailableModels();
+				const textModels = availableModels.models.filter((m) => m.modelType === 'language');
 				const now = Math.floor(Date.now() / 1000);
-				return availableModels.models
+				const imageModels = availableModels.models.filter((m) => m.modelType === 'image');
+				const imageModelsResponse = imageModels
 					.map((model: any) => ({
 						id: model.id,
 						name: model.name,
-						description: model.pricing ? ` I: $${(Number(model.pricing.input) * 1000000).toFixed(2)}, O: $${(Number(model.pricing.output) * 1000000).toFixed(2)}; ${model.description || ''}` : (model.description || ''),
+						description: model.pricing ? ` ${model.pricing.input ? `I: $${(Number(model.pricing.input) * 1000000).toFixed(2)}, ` : ''} ${model.pricing.output ? `O: $${(Number(model.pricing.output) * 1000000).toFixed(2)}; ` : ''}${model.pricing.image ? `Image: $${model.pricing.image}; ` : ''}${model.description || ''}` : (model.description || ''),
+						object: 'model',
+						created: now,
+						owned_by: model.name.split('/')[0],
+					}));
+				const textModelsResponse = textModels
+					.map((model: any) => ({
+						id: model.id,
+						name: model.name,
+						description: model.pricing ? ` ${model.pricing.input ? `I: $${(Number(model.pricing.input) * 1000000).toFixed(2)}, ` : ''} ${model.pricing.output ? `O: $${(Number(model.pricing.output) * 1000000).toFixed(2)}; ` : ''}${model.pricing.image ? `Image: $${model.pricing.image}; ` : ''}${model.description || ''}` : (model.description || ''),
 						object: 'model',
 						created: now,
 						owned_by: model.name.split('/')[0],
 					}))
 					.filter((m: any) => shouldIncludeModel(m));
+				return [...imageModelsResponse, ...textModelsResponse];
 			} catch (e) {
 				return [] as any[];
 			}
@@ -4741,12 +4767,16 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 
 	const curated = [
 		{ id: 'admin/magic-vision', name: 'Management', description: '', object: 'model', created: 0, owned_by: 'internal' },
-		{ id: 'openai/gpt-5.5-image', name: 'GPT-5.5 Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
+		// { id: 'openai/gpt-5.5-image', name: 'GPT-5.5 Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
 		{ id: 'image/doubao-vision', name: 'Seedream 4.5', description: 'First 20 images free daily, then ¥0.25/image', object: 'model', created: 0, owned_by: 'doubao' },
-		{ id: 'image/doubao-latest-vision', name: 'Seedream 5.0 Lite (Paid)', description: '¥0.22/image', object: 'model', created: 0, owned_by: 'doubao' },
-		{ id: 'image/bfl/flux-2-pro-vision', name: 'FLUX.2 [pro] (Gateway)', description: 'I: $0.015/MP, O: First MP $0.03, then $0.015/MP', object: 'model', created: 0, owned_by: 'gateway' },
-		{ id: 'image/bfl/flux-2-flex-vision', name: 'FLUX.2 [flex] (Gateway)', description: 'I/O: $0.06/MP', object: 'model', created: 0, owned_by: 'gateway' },
-		{ id: 'image/bfl/flux-2-max-vision', name: 'FLUX.2 [max] (Gateway)', description: 'I/O: $0.07/MP', object: 'model', created: 0, owned_by: 'gateway' },
+		{ id: 'image/doubao-latest-vision', name: 'Seedream 5.0 Lite', description: 'First 20 images free daily, then ¥0.22/image', object: 'model', created: 0, owned_by: 'doubao' },
+		{ id: 'image/openai/gpt-image-2-vision', name: 'GPT Image 2.0 (Gateway)', description: 'I: text $5/MT, image $8/MT, O: $8/MT', object: 'model', created: 0, owned_by: 'gateway' },
+		{ id: 'image/bfl/flux-kontext-max-vision', name: 'FLUX [max] (Gateway)', description: '$0.08/img', object: 'model', created: 0, owned_by: 'gateway' },
+		{ id: 'image/recraft/recraft-v4.1-pro', name: 'Recraft V4.1 Pro (Gateway)', description: '$0.25/img', object: 'model', created: 0, owned_by: 'gateway' },
+		{ id: 'image/recraft/recraft-v4.1-utility-pro', name: 'Recraft V4.1 Utility Pro (Gateway)', description: '$0.25/img', object: 'model', created: 0, owned_by: 'gateway' },
+		{ id: 'image/xai/grok-imagine-image', name: 'Grok Imagine (Gateway)', description: '$0.02/img', object: 'model', created: 0, owned_by: 'gateway' },
+		{ id: 'image/google/gemini-3.1-flash-image-preview', name: 'Gemini 3.1 Flash Image (Gateway)', description: 'I: $0.5/MT, O: 4K $0.15/img 1K $0.07/img', object: 'model', created: 0, owned_by: 'gateway' },
+		{ id: 'image/google/gemini-3-pro-image', name: 'Gemini 3 Pro Image (Gateway)', description: 'I: $2/MT, O: 4K $0.24/img 1K $0.13/img', object: 'model', created: 0, owned_by: 'gateway' },
 		{ id: 'image/modelscope/MusePublic/14_ckpt_SD_XL', name: 'Anything XL (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/modelscope/Tongyi-MAI/Z-Image-Turbo', name: 'Z-Image-Turbo (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/modelscope/black-forest-labs/FLUX.2-dev-vision', name: 'FLUX.2 [dev] (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
@@ -4755,6 +4785,8 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 		{ id: 'image/huggingface/Tongyi-MAI/Z-Image-Turbo', name: 'Z-Image-Turbo (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'image/huggingface/black-forest-labs/FLUX.2-dev-vision', name: 'FLUX.2 [dev] (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'image/huggingface/Qwen/Qwen-Image-Edit-2509-vision', name: 'Qwen-Image-Edit (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
+		{ id: 'video/seedance-2.0', name: 'Seedance 2.0 (Gateway)', description: '720p: $0.15/sec + $0.11/sec audio', object: 'model', created: 0, owned_by: 'doubao' },
+		{ id: 'video/seedance-2.0-fast', name: 'Seedance 2.0 Fast (Gateway)', description: '720p: $0.12/sec + $0.08/sec audio', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'video/doubao-seedance-2.0-vision', name: 'Seedance 2.0', description: '¥46/MT', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'video/doubao-seedance-1.5-pro-vision', name: 'Seedance 1.5 Pro', description: 'First 2 MT free daily, then ¥8/MT (¥16/MT with audio)', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'video/doubao-seedance-1.0-pro-vision', name: 'Seedance 1.0 Pro', description: 'First 2 MT free daily, then ¥15/MT', object: 'model', created: 0, owned_by: 'doubao' },
@@ -4865,8 +4897,49 @@ app.get('/*', (c: Context) => {
 	return c.text('Running')
 })
 
+
+const getGeoFromHeaders = (headers: Headers): any => {
+	const countryCode = headers.get('x-vercel-ip-country');
+	if (!countryCode) return null;
+
+	const city = headers.get('x-vercel-ip-city') || undefined;
+	const timezone = headers.get('x-vercel-ip-timezone') || undefined;
+	const regionCode = headers.get('x-vercel-ip-country-region') || undefined;
+
+	let countryName = countryCode;
+	try {
+		const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
+		countryName = regionNames.of(countryCode) || countryCode;
+	} catch {
+		// Ignore
+	}
+
+	let subdivisionName: string | undefined;
+	if (regionCode) {
+		try {
+			const subdivisionNames = new Intl.DisplayNames(['en'], { type: 'region' });
+			subdivisionName = subdivisionNames.of(regionCode) || regionCode;
+		} catch {
+			subdivisionName = regionCode;
+		}
+	}
+
+	return {
+		city: city ? decodeURIComponent(city) : undefined,
+		country: {
+			code: countryCode,
+			name: countryName,
+		},
+		timezone,
+		subdivision: regionCode ? {
+			code: regionCode,
+			name: subdivisionName || regionCode,
+		} : undefined,
+	};
+}
+
 export default (request: Request, context: any) => {
-	geo = context.geo || null;
+	geo = context?.geo || getGeoFromHeaders(request.headers) || null;
 	return app.fetch(request);
 }
 

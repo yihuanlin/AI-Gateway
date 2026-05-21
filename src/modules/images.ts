@@ -21,10 +21,26 @@ const getHelpForModel = (model: string) => {
   if (model.startsWith('image/modelscope/')) {
     return '**ModelScope** Text-to-Image and Image-to-Image models.\nFlags: `--negative_prompt "text"`, `--steps N (1-100)`, `--guidance F` (or derived from `top_p`/`temperature`), `--size WxH` or `--ratio A:B`, `--seed N`.\nFLUX.1 uses support any ratio. For Qwen models, supported ratios: 1:1, 16:9, 9:16, 4:3, 3:4, 3:2, 2:3.\n`/upload` upload input images to storage. Input images enable image-to-image mode.\nIf prompt contains `miratsu style` or `chibi` with Qwen/Qwen-Image, switches to **MTWLDFC/miratsu_style**.';
   }
-  if (model.startsWith('image/bfl/')) {
-    return '**Black Forest Labs** FLUX models via AI SDK Gateway.\nMultiple input images supported.\nFlags:\n`--imagePrompt` Base64-encoded image for additional visual context\n`--imagePromptStrength F` (0.0-1.0) Strength of image prompt influence\n`--promptUpsampling` Enable prompt upsampling\n`--raw` Enable raw mode for natural aesthetics\n`--size WxH` Output dimensions (width and height must be multiples of 16)\n`--steps N` Inference steps (flex models only)\n`--guidance F` Guidance scale (flex models only)';
+  if (model.startsWith('image/')) {
+    const provider = model.split('/')[1] || 'generic';
+    return `**${provider.toUpperCase()}** image model via AI SDK Gateway.
+Supported flags:
+- \`--n N\`: Number of images to generate
+- \`--size WxH\`: Custom dimensions
+- \`--aspectRatio {1:1|16:9|9:16|4:3|3:4|2:3|3:2}\`: Aspect ratio
+- \`--seed S\`: Generation seed
+- \`--image URL\`: Reference image (can specify multiple)
+- \`--mask URL\`: Mask image
+- \`--headers.Header-Name value\`: Custom request header
+- \`--providerOptions.provider.key value\`: Custom provider option
+
+Provider Specifics:
+- **Black Forest Labs (BFL)**: \`--imagePrompt\` (base64 image), \`--imagePromptUrl\` (URL to download & base64 encode), \`--guidance F\`. Default: \`safetyTolerance = 6\`, \`outputFormat = 'png'\`.
+- **Google**: \`--imageSize\`. Default: \`imageSize = '4k'\` for gemini-3-pro-image.
+- **OpenAI**: \`--transparent\` (sets background to transparent). Default: \`quality = 'high'\`, \`outputFormat = 'png'\`.
+- **xAI**: \`--resolution\`. Default: \`quality = 'high'\`, \`resolution = '2k'\` for grok-imagine-image-pro.`;
   }
-  return 'Supported providers: **Seedream** `image/doubao` (t2i/i2i), **Hugging Face** `image/huggingface/huggingface-model-id` (t2i/i2i), **ModelScope** `image/modelscope/modelscope-model-id` (t2i/i2i), **Black Forest Labs** `image/bfl/model-id` (t2i/i2i).';
+  return 'Supported providers: **Seedream** `image/doubao` (t2i/i2i), **Hugging Face** `image/huggingface/huggingface-model-id` (t2i/i2i), **ModelScope** `image/modelscope/modelscope-model-id` (t2i/i2i), **AI Gateway** `image/model-id`.';
 }
 
 export const handleImageForChat = async (args: {
@@ -128,20 +144,45 @@ export const handleImageForResponses = async (args: {
 }
 
 const extractFlags = (prompt: string) => {
-  const flags: Record<string, string | number | boolean> = {};
+  const flags: Record<string, any> = {};
   let cleaned = prompt;
-  const flagRegex = /\s--([a-zA-Z_\-]+)(?:\s+([^\s][^\n]*?))?(?=\s--|$)/g;
+  const flagRegex = /\s--([a-zA-Z0-9_\-\.]+)(?:\s+([^\s][^\n]*?))?(?=\s--|$)/g;
   cleaned = cleaned.replace(flagRegex, (_m, key, val) => {
-    const k = String(key).trim().toLowerCase();
+    const k = String(key).trim();
+    let parsedVal: any;
     if (typeof val === 'string' && val.trim().length > 0) {
       const v = val.trim();
-      if (/^\d+$/.test(v)) flags[k] = Number(v);
-      else if (/^\d+\.\d+$/.test(v)) flags[k] = Number(v);
-      else if (v === 'true' || v === 'false') flags[k] = v === 'true';
-      else flags[k] = v;
+      if (/^\d+$/.test(v)) parsedVal = Number(v);
+      else if (/^\d+\.\d+$/.test(v)) parsedVal = Number(v);
+      else if (v === 'true' || v === 'false') parsedVal = v === 'true';
+      else parsedVal = v;
     } else {
-      flags[k] = true;
+      parsedVal = true;
     }
+
+    if (flags[k] !== undefined) {
+      if (Array.isArray(flags[k])) {
+        flags[k].push(parsedVal);
+      } else {
+        flags[k] = [flags[k], parsedVal];
+      }
+    } else {
+      flags[k] = parsedVal;
+    }
+
+    const lowerK = k.toLowerCase();
+    if (lowerK !== k) {
+      if (flags[lowerK] !== undefined) {
+        if (Array.isArray(flags[lowerK])) {
+          flags[lowerK].push(parsedVal);
+        } else {
+          flags[lowerK] = [flags[lowerK], parsedVal];
+        }
+      } else {
+        flags[lowerK] = parsedVal;
+      }
+    }
+
     return '';
   });
   cleaned = cleaned.replace(/\s+/g, ' ').trim();
@@ -194,6 +235,22 @@ const ratioToSize = (r: string, model: string): string | null => {
 
   return null;
 }
+
+const setNestedProperty = (obj: any, path: string[], value: any) => {
+  let current = obj;
+  for (let i = 0; i < path.length - 1; i++) {
+    const key = path[i];
+    if (key === undefined) continue;
+    if (current[key] === undefined || typeof current[key] !== 'object') {
+      current[key] = {};
+    }
+    current = current[key];
+  }
+  const lastKey = path[path.length - 1];
+  if (lastKey !== undefined) {
+    current[lastKey] = value;
+  }
+};
 
 const buildImageGenerationWaiter = async (params: {
   model: string;
@@ -568,8 +625,7 @@ const buildImageGenerationWaiter = async (params: {
     }
   }
 
-  if (model.startsWith('image/bfl/')) {
-    // Black Forest Labs via AI SDK Gateway
+  if (model.startsWith('image/')) {
     let apiKey: string | null = null;
     try {
       const gatewayKey = process.env.GATEWAY_API_KEY;
@@ -583,12 +639,139 @@ const buildImageGenerationWaiter = async (params: {
     } catch { }
     if (!apiKey) return { ok: false, error: { code: 'no_api_key', message: 'Missing Gateway API key' }, status: 401 };
 
-    const bflModelId = model.replace('image/bfl/', 'bfl/').replace(/-vision$/, '');
-    const isFlexModel = /flex/i.test(bflModelId);
+    const targetModelId = model.replace('image/', '').replace(/-vision$/, '');
     const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
-    const taskId = `bfl_${timestamp}`;
+    const taskId = `${targetModelId.split('/')[0] || 'gateway'}_${timestamp}`;
 
-    // Collect input images from message content and links
+    const originalKeys = Object.keys(flags).filter(k => {
+      const lowerK = k.toLowerCase();
+      if (k === lowerK) {
+        const hasOriginalUppercase = Object.keys(flags).some(otherKey => otherKey.toLowerCase() === lowerK && otherKey !== lowerK);
+        if (hasOriginalUppercase) {
+          return false;
+        }
+      }
+      return true;
+    });
+
+    const headers: Record<string, string> = {};
+    const providerOptions: Record<string, any> = {};
+
+    for (const key of originalKeys) {
+      if (key.startsWith('headers.')) {
+        const headerName = key.slice('headers.'.length);
+        setNestedProperty(headers, [headerName], flags[key]);
+      } else if (key.startsWith('providerOptions.')) {
+        const path = key.slice('providerOptions.'.length).split('.');
+        setNestedProperty(providerOptions, path, flags[key]);
+      }
+    }
+
+    // BFL defaults & aliases
+    if (targetModelId.startsWith('bfl/')) {
+      if (!providerOptions.blackForestLabs) {
+        providerOptions.blackForestLabs = {};
+      }
+      if (providerOptions.blackForestLabs.safetyTolerance === undefined) {
+        providerOptions.blackForestLabs.safetyTolerance = 6;
+      }
+      if (providerOptions.blackForestLabs.outputFormat === undefined) {
+        providerOptions.blackForestLabs.outputFormat = 'png';
+      }
+
+      const imagePromptVal = flags['imagePrompt'] || flags['imageprompt'];
+      if (imagePromptVal !== undefined) {
+        providerOptions.blackForestLabs.imagePrompt = imagePromptVal;
+      } else {
+        if (providerOptions.blackForestLabs.imagePrompt === undefined) {
+          providerOptions.blackForestLabs.imagePrompt = {};
+        }
+        if (providerOptions.blackForestLabs.imagePrompt && typeof providerOptions.blackForestLabs.imagePrompt === 'object') {
+          if (providerOptions.blackForestLabs.imagePrompt.safetyTolerance === undefined) {
+            providerOptions.blackForestLabs.imagePrompt.safetyTolerance = 6;
+          }
+        }
+      }
+
+      const guidanceVal = flags['guidance'];
+      if (guidanceVal !== undefined) {
+        providerOptions.blackForestLabs.guidance = guidanceVal;
+      }
+
+      // Flex model specific flat options (for backwards compatibility)
+      const isFlexModel = /flex/i.test(targetModelId);
+      if (isFlexModel) {
+        if (typeof flags['steps'] === 'number') {
+          providerOptions.blackForestLabs.steps = flags['steps'];
+        }
+      }
+      if (flags['promptupsampling'] === true || flags['promptUpsampling'] === true) {
+        providerOptions.blackForestLabs.promptUpsampling = true;
+      }
+      if (flags['raw'] === true) {
+        providerOptions.blackForestLabs.raw = true;
+      }
+      const strength = flags['imagePromptStrength'] || flags['imagepromptstrength'];
+      if (typeof strength === 'number') {
+        providerOptions.blackForestLabs.imagePromptStrength = Math.max(0, Math.min(1, strength));
+      }
+    }
+
+    // Google defaults & aliases
+    if (targetModelId.startsWith('google/')) {
+      if (!providerOptions.google) {
+        providerOptions.google = {};
+      }
+      if (!providerOptions.google.imageConfig) {
+        providerOptions.google.imageConfig = {};
+      }
+      const imageSizeVal = flags['imageSize'] || flags['imagesize'];
+      if (imageSizeVal !== undefined) {
+        providerOptions.google.imageConfig.imageSize = imageSizeVal;
+      }
+      if (targetModelId.includes('gemini-3-pro-image')) {
+        if (providerOptions.google.imageConfig.imageSize === undefined) {
+          providerOptions.google.imageConfig.imageSize = '4k';
+        }
+      }
+    }
+
+    // OpenAI defaults & aliases
+    if (targetModelId.startsWith('openai/')) {
+      if (!providerOptions.openai) {
+        providerOptions.openai = {};
+      }
+      if (flags['transparent'] === true) {
+        providerOptions.openai.background = 'transparent';
+      }
+      if (providerOptions.openai.quality === undefined) {
+        providerOptions.openai.quality = 'high';
+      }
+      if (providerOptions.openai.outputFormat === undefined) {
+        providerOptions.openai.outputFormat = 'png';
+      }
+    }
+
+    // xAI defaults & aliases
+    if (targetModelId.startsWith('xai/')) {
+      if (!providerOptions.xai) {
+        providerOptions.xai = {};
+      }
+      const resolutionVal = flags['resolution'];
+      if (resolutionVal !== undefined) {
+        providerOptions.xai.resolution = resolutionVal;
+      }
+      if (providerOptions.xai.quality === undefined) {
+        providerOptions.xai.quality = 'high';
+      }
+      if (targetModelId.includes('grok-imagine-image-pro')) {
+        if (providerOptions.xai.resolution === undefined) {
+          providerOptions.xai.resolution = '2k';
+        }
+      }
+    }
+
+    // Collect input images from message content, links, and all --image flags
     const inputImages: string[] = [];
     if (imgs.has && Array.isArray((imgs as any).urls)) {
       for (const u of (imgs as any).urls as string[]) {
@@ -598,95 +781,133 @@ const buildImageGenerationWaiter = async (params: {
     for (const l of links) {
       if (!inputImages.includes(l)) inputImages.push(l);
     }
-
-    // Build providerOptions for Black Forest Labs
-    const providerOptions: Record<string, any> = {
-      blackForestLabs: {
-        outputFormat: 'png',
-        safetyTolerance: 5,
-      }
-    };
-
-    // Add input images to providerOptions (inputImage, inputImage2, inputImage3, etc.)
-    if (inputImages.length > 0) {
-      providerOptions.blackForestLabs.inputImage = inputImages[0];
-      for (let i = 1; i < Math.min(inputImages.length, 10); i++) {
-        providerOptions.blackForestLabs[`inputImage${i + 1}`] = inputImages[i];
+    const imageFlagVal = flags['image'];
+    if (imageFlagVal !== undefined) {
+      const flagImages = Array.isArray(imageFlagVal) ? imageFlagVal : [imageFlagVal];
+      for (const fi of flagImages) {
+        if (typeof fi === 'string' && fi && !inputImages.includes(fi)) {
+          inputImages.push(fi);
+        }
       }
     }
 
-    // Handle optional flags
-    if (typeof flags['imageprompt'] === 'string') {
-      providerOptions.blackForestLabs.imagePrompt = flags['imageprompt'];
-    }
-    if (typeof flags['imagepromptstrength'] === 'number') {
-      providerOptions.blackForestLabs.imagePromptStrength = Math.max(0, Math.min(1, flags['imagepromptstrength']));
-    }
-    if (flags['promptupsampling'] === true) {
-      providerOptions.blackForestLabs.promptUpsampling = true;
-    }
-    if (flags['raw'] === true) {
-      providerOptions.blackForestLabs.raw = true;
-    }
-    // Handle --size WxH flag
-    if (typeof flags['size'] === 'string') {
-      const sizeParts = (flags['size'] as string).split('x').map(n => parseInt(n));
-      const width = sizeParts[0];
-      const height = sizeParts[1];
-      if (width && height && !isNaN(width) && !isNaN(height)) {
-        // Width and height must be multiples of 16
-        providerOptions.blackForestLabs.width = Math.round(width / 16) * 16;
-        providerOptions.blackForestLabs.height = Math.round(height / 16) * 16;
-      }
+    // Optional size, aspectRatio, seed, n, mask parameters
+    let sizeParam: `${number}x${number}` | undefined = undefined;
+    if (typeof flags['size'] === 'string' && /^\d+x\d+$/.test(flags['size'])) {
+      sizeParam = flags['size'] as `${number}x${number}`;
     }
 
-    // Flex model specific options
-    if (isFlexModel) {
-      if (typeof flags['steps'] === 'number') {
-        providerOptions.blackForestLabs.steps = flags['steps'];
-      }
-      if (typeof flags['guidance'] === 'number') {
-        providerOptions.blackForestLabs.guidance = flags['guidance'];
-      }
+    let aspectRatioParam: any = undefined;
+    const aspectVal = flags['aspectRatio'] || flags['aspectratio'];
+    if (typeof aspectVal === 'string' && ['1:1', '16:9', '9:16', '4:3', '3:4', '2:3', '3:2'].includes(aspectVal)) {
+      aspectRatioParam = aspectVal;
     }
 
-    const wait = async (_signal: AbortSignal) => {
+    let seedParam: number | undefined = undefined;
+    if (typeof flags['seed'] === 'number') {
+      seedParam = flags['seed'];
+    }
+
+    let nParam: number | undefined = undefined;
+    if (typeof flags['n'] === 'number') {
+      nParam = flags['n'];
+    }
+
+    // Build prompt parameter.
+    // If we have input images or a mask, format prompt as an object.
+    let promptParam: any;
+    if (inputImages.length > 0 || flags['mask'] !== undefined) {
+      const promptObj: any = {
+        text: prompt,
+        images: inputImages,
+      };
+      if (flags['mask'] !== undefined && typeof flags['mask'] === 'string') {
+        promptObj.mask = flags['mask'];
+      }
+      promptParam = promptObj;
+    } else {
+      promptParam = prompt;
+    }
+
+    const wait = async (_signal: AbortSignal): Promise<WaitResult> => {
       try {
-        // const { createGateway } = await import('@ai-sdk/gateway');
-        // const gateway = createGateway({ apiKey });
-        globalThis.process.env.AI_GATEWAY_API_KEY = apiKey;
-        // console.log(`Using BFL model: ${bflModelId} with prompt "${prompt}" and options:`, providerOptions);
-        const result = await generateImage({
-          // model: gateway.imageModel(bflModelId),
-          model: bflModelId,
-          prompt,
-          providerOptions,
-        });
+        const imagePromptUrlVal = flags['imagePromptUrl'] || flags['imageprompturl'];
+        if (typeof imagePromptUrlVal === 'string' && imagePromptUrlVal) {
+          try {
+            const resp = await fetch(imagePromptUrlVal);
+            if (!resp.ok) throw new Error(`Failed to fetch imagePromptUrl: ${resp.statusText}`);
+            const buffer = await resp.arrayBuffer();
+            const base64 = Buffer.from(buffer).toString('base64');
+            setNestedProperty(providerOptions, ['blackForestLabs', 'imagePrompt'], base64);
+          } catch (e) {
+            console.error('Error downloading imagePromptUrl:', e);
+          }
+        }
 
-        // Get the first generated image
-        const image = result.image;
-        if (!image || !image.base64) {
+        globalThis.process.env.AI_GATEWAY_API_KEY = apiKey;
+
+        const options: any = {
+          model: targetModelId,
+          prompt: promptParam,
+          providerOptions,
+          headers,
+          abortSignal: _signal,
+        };
+        if (nParam !== undefined) options.n = nParam;
+        if (sizeParam !== undefined) options.size = sizeParam;
+        if (aspectRatioParam !== undefined) options.aspectRatio = aspectRatioParam;
+        if (seedParam !== undefined) options.seed = seedParam;
+
+        const result = await generateImage(options);
+
+        const imagesToProcess = result.images && result.images.length > 0 ? result.images : (result.image ? [result.image] : []);
+        if (imagesToProcess.length === 0) {
           return { ok: false, error: { code: 'no_image', message: 'No image generated' } } as const;
         }
 
-        const mediaType = image.mediaType || 'image/png';
-        let finalUrl: string;
+        const urls: string[] = [];
+        for (let i = 0; i < imagesToProcess.length; i++) {
+          const img = imagesToProcess[i];
+          if (!img) continue;
+          const base64 = img.base64;
+          if (!base64) continue;
 
-        // Upload to blob storage if available; fallback to base64 URL
-        try {
-          if (!process.env.URL) throw new Error('No process.env.URL configured');
-          const { uploadBase64ToStorage } = await import('../shared/bucket.js');
-          const dataUrl = `data:${mediaType};base64,${image.base64}`;
-          finalUrl = await uploadBase64ToStorage(dataUrl, timestamp);
-        } catch (blobError) {
-          console.warn('Failed to upload to storage, using base64:', blobError);
-          finalUrl = `data:${mediaType};base64,${image.base64}`;
+          const mediaType = (img as any).mediaType || 'image/png';
+          const fileSuffix = imagesToProcess.length > 1 ? `${timestamp}_${i}` : timestamp;
+
+          let finalUrl: string;
+          try {
+            if (!process.env.URL) throw new Error('No process.env.URL configured');
+            const { uploadBase64ToStorage } = await import('../shared/bucket.js');
+            const dataUrl = `data:${mediaType};base64,${base64}`;
+            finalUrl = await uploadBase64ToStorage(dataUrl, fileSuffix);
+          } catch (blobError) {
+            console.warn('Failed to upload to storage, using base64:', blobError);
+            finalUrl = `data:${mediaType};base64,${base64}`;
+          }
+          urls.push(finalUrl);
         }
 
-        const usage = { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
-        return { ok: true, text: toMarkdownImage(finalUrl), usage, downloadLink: finalUrl, taskId } as const;
+        if (urls.length === 0) {
+          return { ok: false, error: { code: 'no_image', message: 'No image generated' } } as const;
+        }
+
+        const markdownText = urls.map(toMarkdownImage).join('\n\n');
+        const usage = result.usage ? {
+          input_tokens: result.usage.inputTokens ?? 0,
+          output_tokens: result.usage.outputTokens ?? 0,
+          total_tokens: result.usage.totalTokens ?? 0
+        } : { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
+
+        const waitRes: WaitResult = {
+          ok: true,
+          text: markdownText,
+          usage,
+          taskId,
+          ...(urls[0] !== undefined ? { downloadLink: urls[0] } : {})
+        };
+        return waitRes;
       } catch (e: any) {
-        // Handle case where error might be wrapped in a Promise
         let actualError = e;
         if (e instanceof Promise || (e && typeof e.then === 'function')) {
           try {
@@ -696,12 +917,9 @@ const buildImageGenerationWaiter = async (params: {
           }
         }
 
-        // Extract error message from Gateway errors
-        // Gateway errors stringify as: "GatewayInternalServerError: [JSON details]\n    at ..."
-        let errorMessage = 'BFL API failed';
+        let errorMessage = 'Gateway API failed';
         try {
           const errorString = actualError?.toString?.() || String(actualError);
-          // Try to extract message between "ErrorName: " and first newline
           const colonIndex = errorString.indexOf(':');
           if (colonIndex !== -1) {
             const afterColon = errorString.substring(colonIndex + 1);
@@ -712,12 +930,11 @@ const buildImageGenerationWaiter = async (params: {
               errorMessage = afterColon.trim();
             }
           }
-          // If still default or empty, try other properties
-          if (!errorMessage || errorMessage === 'BFL API failed') {
-            errorMessage = actualError?.message || actualError?.name || errorString.substring(0, 200) || 'BFL API failed';
+          if (!errorMessage || errorMessage === 'Gateway API failed') {
+            errorMessage = actualError?.message || actualError?.name || errorString.substring(0, 200) || 'Gateway API failed';
           }
         } catch {
-          errorMessage = 'BFL API failed';
+          errorMessage = 'Gateway API failed';
         }
         return { ok: false, error: { code: actualError?.statusCode || 'network_error', message: errorMessage } } as const;
       }
