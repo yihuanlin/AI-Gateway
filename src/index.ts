@@ -289,12 +289,12 @@ const createCustomProvider = async (providerName: string, apiKey: string) => {
 		case 'chatgpt':
 			return createOpenAI({
 				name: 'custom',
-				apiKey: apiKey,
+				apiKey,
 				baseURL: config.baseURL,
 			}).responses;
 		case 'gemini':
 			return createGoogleGenerativeAI({
-				apiKey: apiKey,
+				apiKey,
 				baseURL: config.baseURL,
 			});
 		case 'copilot':
@@ -314,12 +314,13 @@ const createCustomProvider = async (providerName: string, apiKey: string) => {
 		case 'doubao':
 			return createOpenResponses({
 				name: 'custom',
+				apiKey,
 				url: config.baseURL,
 			});
 		default:
 			return createOpenAICompatible({
 				name: 'custom',
-				apiKey: apiKey,
+				apiKey,
 				baseURL: config.baseURL,
 				includeUsage: true,
 			});
