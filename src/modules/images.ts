@@ -1,5 +1,5 @@
-import { type WaitResult, lastUserPromptFromMessages, responsesBase, streamChatSingleText, streamResponsesSingleText, streamChatGenerationElapsed, streamResponsesGenerationElapsed, findLinks, hasImageInMessages, sleep } from './utils.mts';
-import { SUPPORTED_PROVIDERS } from '../shared/providers.mts';
+import { type WaitResult, lastUserPromptFromMessages, responsesBase, streamChatSingleText, streamResponsesSingleText, streamChatGenerationElapsed, streamResponsesGenerationElapsed, findLinks, hasImageInMessages, sleep } from './utils.js';
+import { SUPPORTED_PROVIDERS } from '../shared/providers.js';
 import { generateImage } from 'ai';
 
 export type ImageResult = {
@@ -228,7 +228,7 @@ const buildImageGenerationWaiter = async (params: {
     const url = `${base}/images/generations`;
     const response_format = (flags['format'] as string) || 'url';
     const watermark = false;
-    const actualModel = (model.startsWith('image/seedream-paid')) ? 'doubao-seedream-5-0-260128' : 'doubao-seedream-4-5-251128';
+    const actualModel = (model.startsWith('image/seedream-latest')) ? 'doubao-seedream-5-0-260128' : 'doubao-seedream-4-5-251128';
 
     // Collect all potential reference images (uploaded message images + inline links)
     const referenceImages: string[] = [];
@@ -249,7 +249,7 @@ const buildImageGenerationWaiter = async (params: {
       payload = {
         model: actualModel,
         prompt: cleanPrompt,
-        size: (model.startsWith('image/seedream-paid')) ? '3K' : '4K',
+        size: (model.startsWith('image/seedream-latest')) ? '3K' : '4K',
         image: referenceImages.length === 1 ? referenceImages[0] : referenceImages,
         response_format,
         seed: typeof flags['seed'] === 'number' ? flags['seed'] : 21,
@@ -274,7 +274,7 @@ const buildImageGenerationWaiter = async (params: {
           };
           return ratioMap[ratio] || '4096x4096';
         }
-        return (model.startsWith('image/seedream-paid')) ? '3K' : '4K';
+        return (model.startsWith('image/seedream-latest')) ? '3K' : '4K';
       })();
       const g = typeof flags['guidance'] === 'number' ? flags['guidance'] : guidanceFromTopP(top_p, temperature) ?? 2.5;
       payload = {
@@ -300,7 +300,7 @@ const buildImageGenerationWaiter = async (params: {
 
         if (data?.b64_json && hasUploadFlag && process.env.URL) {
           try {
-            const { uploadBase64ToStorage } = await import('../shared/bucket.mts');
+            const { uploadBase64ToStorage } = await import('../shared/bucket.js');
             const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
             const blobUrl = await uploadBase64ToStorage(`data:image/png;base64,${data.b64_json}`, timestamp);
             urlOrB64 = blobUrl;
@@ -454,7 +454,7 @@ const buildImageGenerationWaiter = async (params: {
         let finalUrl: string;
         try {
           if (!process.env.URL) throw new Error('No process.env.URL configured');
-          const { uploadBlobToStorage } = await import('../shared/bucket.mts');
+          const { uploadBlobToStorage } = await import('../shared/bucket.js');
           const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
           finalUrl = await uploadBlobToStorage(result, timestamp);
         } catch (blobError) {
@@ -523,7 +523,7 @@ const buildImageGenerationWaiter = async (params: {
           return { ok: false, error: { code: 'no_storage_url', message: 'process.env.URL is required for base64 image upload in ModelScope i2i' }, status: 400 };
         }
         try {
-          const { uploadBase64ToStorage } = await import('../shared/bucket.mts');
+          const { uploadBase64ToStorage } = await import('../shared/bucket.js');
           const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
           const uploadedUrl = await uploadBase64ToStorage(imageUrl, timestamp);
           payload.image_url = uploadedUrl;
@@ -675,7 +675,7 @@ const buildImageGenerationWaiter = async (params: {
         // Upload to blob storage if available; fallback to base64 URL
         try {
           if (!process.env.URL) throw new Error('No process.env.URL configured');
-          const { uploadBase64ToStorage } = await import('../shared/bucket.mts');
+          const { uploadBase64ToStorage } = await import('../shared/bucket.js');
           const dataUrl = `data:${mediaType};base64,${image.base64}`;
           finalUrl = await uploadBase64ToStorage(dataUrl, timestamp);
         } catch (blobError) {

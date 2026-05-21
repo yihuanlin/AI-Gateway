@@ -8,7 +8,7 @@ A high-performance AI Gateway built with [Hono](https://github.com/honojs/hono) 
 - **Admin Models**: Special administrative models for system management (admin/magic-vision)
 - **Streaming Support**: Real-time responses with progress indicators
 - **Tool Integration**: Python execution, web search, content extraction
-- **Response Storage**: Persistent conversation management with Netlify Blobs
+- **Response Storage**: Persistent conversation management with Vercel Blobs
 
 ## 🛠 Quick Start
 
@@ -46,7 +46,7 @@ POST /v1/responses
 GET /v1/models
 ```
 
-### Response Management (Stored in Netlify Blobs; OpenAI)
+### Response Management (Stored in Vercel Blobs; OpenAI)
 ```
 GET /v1/responses/:response_id     # Get a specific response
 GET /v1/responses                  # List all responses
@@ -56,9 +56,9 @@ POST /v1/chat/completions (model: admin/magic-vision)
 POST /v1/responses (model: admin/magic-vision)
 ```
 
-### Files (Stored in Netlify Blobs)
+### Files (Stored in Vercel Blobs)
 ```
-GET /v1/files/:file                # Serve a file from Netlify Blobs
+GET /v1/files/:file                # Serve a file from Vercel Blobs
 ```
 
 ## 🔌 Supported Providers
@@ -72,7 +72,7 @@ GET /v1/files/:file                # Serve a file from Netlify Blobs
 - **GPT Image (`image_generation` tool)**: GPT-5 series native image generation: t2i and i2i
 - **Black Forest Labs**: FLUX models via Vercel AI Gateway: t2i and i2i
 - **Doubao (ByteDance)**: t2i/i2i (Seedream) and t2v/i2v (Seedance)
-- **ModelScope**: Community models for t2i and i2i (i2i requires Netlify Blobs)
+- **ModelScope**: Community models for t2i and i2i (i2i requires Vercel Blobs)
 - **Hugging Face**: Community models for t2i, i2i, t2v, and i2v
 
 ### Tools & Extensions
@@ -96,9 +96,8 @@ TAVILY_API_KEY=tvly-dev-...
 PYTHON_API_KEY=your-python-key
 PYTHON_URL=https://your-python-executor.com
 
-# Use Netlify Blobs in non-Netlify platforms
-NETLIFY_SITE_ID=your-netlify-site-id
-NETLIFY_TOKEN=nfp_...
+# Use Vercel Blobs in non-Vercel platforms
+BLOB_READ_WRITE_TOKEN=vercel_blob_...
 URL=http://localhost:8888 # Optional site URL to upload files
 
 # Optional provider-specific keys
@@ -144,7 +143,7 @@ LMSTUDIO_API_KEY=each-custom-provider-must-have-at-least-a-key
 - **Black Forest Labs**: `image/bfl/flux-2-pro`, `image/bfl/flux-kontext-pro` etc. (`image/bfl/` + BFL model ID via Vercel AI Gateway)
 - **Doubao (ByteDance)**: `image/doubao` - i2i and t2i.
 - **Hugging Face**: `image/huggingface/black-forest-labs/FLUX.1-Kontext-dev` etc. (`image/huggingface/` + any Hugging Face internal model ID)
-- **ModelScope**: `image/modelscope/Qwen/Qwen-Image` etc. (`image/modelscope/` + any ModelScope internal model ID; i2i requires Netlify Blobs)
+- **ModelScope**: `image/modelscope/Qwen/Qwen-Image` etc. (`image/modelscope/` + any ModelScope internal model ID; i2i requires Vercel Blobs)
 - **Flags**: `--size WxH`, `--ratio A:B`, `--guidance N`, `--steps N`, `--seed N` etc. (Send `/help` for help)
 
 ### Video Models
@@ -414,7 +413,7 @@ curl -X DELETE "$HOSTNAME/v1/responses/all" \
                                 ▼
                        ┌──────────────────┐
                        │   Data Storage   │
-                       │ • Netlify Blobs  │
+                       │ • Vercel Blobs   │
                        │ • Response Mgmt  │
                        │ • Conversation   │
                        └──────────────────┘

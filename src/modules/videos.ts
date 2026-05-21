@@ -1,5 +1,5 @@
-import { type WaitResult, lastUserPromptFromMessages, responsesBase, streamChatSingleText, streamResponsesSingleText, streamResponsesGenerationElapsed, streamChatGenerationElapsed, findLinks, hasImageInMessages, sleep } from './utils.mts';
-import { SUPPORTED_PROVIDERS } from '../shared/providers.mts';
+import { type WaitResult, lastUserPromptFromMessages, responsesBase, streamChatSingleText, streamResponsesSingleText, streamResponsesGenerationElapsed, streamChatGenerationElapsed, findLinks, hasImageInMessages, sleep } from './utils.js';
+import { SUPPORTED_PROVIDERS } from '../shared/providers.js';
 
 export const toMarkdownVideo = (url: string): string => {
     return `[Generated Video](${url})`;
@@ -134,7 +134,7 @@ const buildVideoGenerationWaiter = async (params: {
                 let finalUrl: string;
                 try {
                     if (!process.env.URL) throw new Error('No process.env.URL configured');
-                    const { uploadBlobToStorage } = await import('../shared/bucket.mts');
+                    const { uploadBlobToStorage } = await import('../shared/bucket.js');
                     const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
                     finalUrl = await uploadBlobToStorage(result, `vid_${timestamp}`);
                 } catch (blobError) {
@@ -184,7 +184,7 @@ const buildVideoGenerationWaiter = async (params: {
 
         if (first.startsWith('data:') && hasUploadFlag && process.env.URL) {
             try {
-                const { uploadBase64ToStorage } = await import('../shared/bucket.mts');
+                const { uploadBase64ToStorage } = await import('../shared/bucket.js');
                 const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
                 first = await uploadBase64ToStorage(first, `${timestamp}_first`);
             } catch (blobError) {
@@ -209,7 +209,7 @@ const buildVideoGenerationWaiter = async (params: {
 
                 if (lastUrl.startsWith('data:') && hasUploadFlag && process.env.URL) {
                     try {
-                        const { uploadBase64ToStorage } = await import('../shared/bucket.mts');
+                        const { uploadBase64ToStorage } = await import('../shared/bucket.js');
                         const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
                         lastUrl = await uploadBase64ToStorage(lastUrl, `${timestamp}_last`);
                     } catch (blobError) {

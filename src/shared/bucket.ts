@@ -1,4 +1,4 @@
-import { getStoreWithConfig } from './store.mts';
+import { getStoreWithConfig } from './store.js';
 
 const extFromContentType = (contentType: string): string => {
     if (!contentType) return 'bin';
@@ -13,7 +13,7 @@ const nowKey = (ext: string, timestamp?: string): string => {
 }
 
 export const buildPublicUrlForKey = (key: string): string => {
-    return `${process.env.URL}/v1/files/${encodeURIComponent(key)}`;
+    return `${process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.URL}/v1/files/${encodeURIComponent(key)}`;
 }
 
 export const uploadBase64ToStorage = async (base64Data: string, timestamp?: string): Promise<string> => {
@@ -42,7 +42,7 @@ export const uploadBase64ToStorage = async (base64Data: string, timestamp?: stri
     const ext = extFromContentType(contentType);
     const key = nowKey(ext, timestamp);
     const store = await getStoreWithConfig('files');
-    const blob = new Blob([bytes!], { type: contentType });
+    const blob = new Blob([bytes as any], { type: contentType });
     await store.set(key, blob, { metadata: { contentType } });
     return buildPublicUrlForKey(key);
 }

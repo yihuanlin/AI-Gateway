@@ -8,9 +8,9 @@ import { google, createGoogleGenerativeAI } from '@ai-sdk/google'
 import { anthropic } from '@ai-sdk/anthropic';
 import { xai } from '@ai-sdk/xai';
 import { string, number, boolean, array, object, optional, int, enum as zenum } from 'zod/mini'
-import { uploadBlobToStorage, getFileWithMetadata } from './shared/bucket.mts';
-import { SUPPORTED_PROVIDERS, getProviderKeys } from './shared/providers.mts'
-import { getStoreWithConfig } from './shared/store.mts'
+import { uploadBlobToStorage, getFileWithMetadata } from './shared/bucket.js';
+import { SUPPORTED_PROVIDERS, getProviderKeys } from './shared/providers.js'
+import { getStoreWithConfig } from './shared/store.js'
 
 const app = new Hono()
 const TEXT_ENCODER = new TextEncoder();
@@ -304,10 +304,10 @@ const createCustomProvider = async (providerName: string, apiKey: string) => {
 				baseURL: config.baseURL,
 				includeUsage: true,
 				headers: {
-					"editor-version": "vscode/1.118.1",
+					"editor-version": "vscode/1.121.0",
 					"copilot-vision-request": "true",
-					"editor-plugin-version": "copilot-chat/0.45.1",
-					"user-agent": "GitHubCopilotChat/0.45.1"
+					"editor-plugin-version": "copilot-chat/0.48.1",
+					"user-agent": "GitHubCopilotChat/0.48.1"
 				},
 			});
 		default:
@@ -832,7 +832,7 @@ const buildCommonOptions = async (
 ) => {
 	let finalMessages;
 	if (attempt.name === 'poe' && params.reasoning_effort) {
-		const { modifyMessagesForPoe } = await import('./modules/poe.mts');
+		const { modifyMessagesForPoe } = await import('./modules/poe.js');
 		finalMessages = modifyMessagesForPoe(params.messages, params.reasoning_effort);
 	} else {
 		finalMessages = params.messages;
@@ -1522,15 +1522,15 @@ app.post('/v1/responses', async (c: Context) => {
 		// Build AI SDK-style messages from Responses input (streamlined for modules)
 		const mapped = await responsesInputToAiSdkMessages(input, model);
 		if (model.startsWith('image/')) {
-			const { handleImageForResponses } = await import('./modules/images.mts');
+			const { handleImageForResponses } = await import('./modules/images.js');
 			return await handleImageForResponses({ model, messages: mapped, stream: !!stream, temperature, top_p, request_id: responseId || null });
 		}
 		if (model.startsWith('video/')) {
-			const { handleVideoForResponses } = await import('./modules/videos.mts');
+			const { handleVideoForResponses } = await import('./modules/videos.js');
 			return await handleVideoForResponses({ model, messages: mapped, stream: !!stream, request_id: responseId });
 		}
 		if (model.startsWith('admin/')) {
-			const { handleAdminForResponses } = await import('./modules/management.mts');
+			const { handleAdminForResponses } = await import('./modules/management.js');
 			return await handleAdminForResponses({ messages: mapped, model, request_id: responseId, stream: !!stream });
 		}
 	}
@@ -1697,7 +1697,7 @@ app.post('/v1/responses', async (c: Context) => {
 						let findThinkingIndex: (text: string) => number = () => -1;
 						let cleanPoeReasoningDelta = (delta: string, isFirstDelta: boolean = false) => delta;
 						if (isPoeProvider) {
-							({ startsWithThinking, findThinkingIndex, cleanPoeReasoningDelta } = await import('./modules/poe.mts'));
+							({ startsWithThinking, findThinkingIndex, cleanPoeReasoningDelta } = await import('./modules/poe.js'));
 						}
 
 						const commonOptions = await buildCommonOptions(gw, attempt, commonParams);
@@ -2970,7 +2970,7 @@ app.post('/v1/responses', async (c: Context) => {
 			let reasoningContent = result.reasoningText || '';
 
 			if (attempt.name === 'poe' && content && !reasoningContent) {
-				const { extractPoeReasoning } = await import('./modules/poe.mts');
+				const { extractPoeReasoning } = await import('./modules/poe.js');
 				const extracted = extractPoeReasoning(content);
 				content = extracted.content;
 				reasoningContent = extracted.reasoning;
@@ -3201,15 +3201,15 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	const contextMessages = (typeof model === 'string' && model.toLowerCase().includes('image')) ? messages : addContextMessages(messages, c);
 	const processedMessages = await processChatMessages(contextMessages, model);
 	if (typeof model === 'string' && model.startsWith('image/')) {
-		const { handleImageForChat } = await import('./modules/images.mts');
+		const { handleImageForChat } = await import('./modules/images.js');
 		return await handleImageForChat({ model, messages: processedMessages, stream: !!stream, temperature, top_p });
 	}
 	if (typeof model === 'string' && model.startsWith('video/')) {
-		const { handleVideoForChat } = await import('./modules/videos.mts');
+		const { handleVideoForChat } = await import('./modules/videos.js');
 		return await handleVideoForChat({ model, messages: processedMessages, stream: !!stream });
 	}
 	if (typeof model === 'string' && model.startsWith('admin/')) {
-		const { handleAdminForChat } = await import('./modules/management.mts');
+		const { handleAdminForChat } = await import('./modules/management.js');
 		return await handleAdminForChat({ messages: processedMessages, stream: !!stream, model });
 	}
 	const providerKeys = await getProviderKeys();
@@ -3296,7 +3296,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 						let findThinkingIndex = (text: string) => -1;
 						let cleanPoeReasoningDelta = (text: string, isFirstDelta = false) => text;
 						if (isPoeProvider) {
-							({ startsWithThinking, findThinkingIndex, cleanPoeReasoningDelta } = await import('./modules/poe.mts'));
+							({ startsWithThinking, findThinkingIndex, cleanPoeReasoningDelta } = await import('./modules/poe.js'));
 						}
 
 						const commonOptions = await buildCommonOptions(gw, attempt, commonParams);
@@ -3651,7 +3651,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 
 			// Handle Poe-specific reasoning extraction for non-streaming
 			if (provider.name === 'poe' && content && !reasoningContent) {
-				const { extractPoeReasoning } = await import('./modules/poe.mts');
+				const { extractPoeReasoning } = await import('./modules/poe.js');
 				const extracted = extractPoeReasoning(content);
 				content = extracted.content;
 				reasoningContent = extracted.reasoning;
@@ -4598,9 +4598,9 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 			headers: {
 				'Authorization': `Bearer ${copilotToken}`,
 				'Content-Type': 'application/json',
-				"editor-version": "vscode/1.118.1",
-				"editor-plugin-version": "copilot-chat/0.45.1",
-				"user-agent": "GitHubCopilotChat/0.45.1"
+				"editor-version": "vscode/1.121.0",
+				"editor-plugin-version": "copilot-chat/0.48.1",
+				"user-agent": "GitHubCopilotChat/0.48.1"
 			},
 		});
 	} else {
@@ -4741,9 +4741,9 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 
 	const curated = [
 		{ id: 'admin/magic-vision', name: 'Management', description: '', object: 'model', created: 0, owned_by: 'internal' },
-		{ id: 'openai/gpt-5.4-image', name: 'GPT-5.4 Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
+		{ id: 'openai/gpt-5.5-image', name: 'GPT-5.5 Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
 		{ id: 'image/doubao-vision', name: 'Seedream 4.5', description: 'First 20 images free daily, then ¥0.25/image', object: 'model', created: 0, owned_by: 'doubao' },
-		{ id: 'image/doubao-paid-vision', name: 'Seedream 5.0 Lite (Paid)', description: '¥0.22/image', object: 'model', created: 0, owned_by: 'doubao' },
+		{ id: 'image/doubao-latest-vision', name: 'Seedream 5.0 Lite (Paid)', description: '¥0.22/image', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'image/bfl/flux-2-pro-vision', name: 'FLUX.2 [pro] (Gateway)', description: 'I: $0.015/MP, O: First MP $0.03, then $0.015/MP', object: 'model', created: 0, owned_by: 'gateway' },
 		{ id: 'image/bfl/flux-2-flex-vision', name: 'FLUX.2 [flex] (Gateway)', description: 'I/O: $0.06/MP', object: 'model', created: 0, owned_by: 'gateway' },
 		{ id: 'image/bfl/flux-2-max-vision', name: 'FLUX.2 [max] (Gateway)', description: 'I/O: $0.07/MP', object: 'model', created: 0, owned_by: 'gateway' },
@@ -4839,25 +4839,25 @@ app.get('/v1/files/:key', async (c: Context) => {
 
 // Get a model response
 app.get('/v1/responses/:response_id', async (c: Context) => {
-	const { getResponseHttp } = await import('./modules/management.mts');
+	const { getResponseHttp } = await import('./modules/management.js');
 	return getResponseHttp(c);
 });
 
 // List responses
 app.get('/v1/responses', async (c: Context) => {
-	const { listResponsesHttp } = await import('./modules/management.mts');
+	const { listResponsesHttp } = await import('./modules/management.js');
 	return listResponsesHttp(c);
 });
 
 // Delete all responses
 app.delete('/v1/responses/all', async (c: Context) => {
-	const { deleteAllResponsesHttp } = await import('./modules/management.mts');
+	const { deleteAllResponsesHttp } = await import('./modules/management.js');
 	return deleteAllResponsesHttp(c);
 });
 
 // Delete a model response
 app.delete('/v1/responses/:response_id', async (c: Context) => {
-	const { deleteResponseHttp } = await import('./modules/management.mts');
+	const { deleteResponseHttp } = await import('./modules/management.js');
 	return deleteResponseHttp(c);
 });
 
@@ -4868,4 +4868,8 @@ app.get('/*', (c: Context) => {
 export default (request: Request, context: any) => {
 	geo = context.geo || null;
 	return app.fetch(request);
+}
+
+export const config = {
+	runtime: 'edge',
 }

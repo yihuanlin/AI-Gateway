@@ -188,7 +188,7 @@ export const streamResponsesGenerationElapsed = (params: {
         // Save to blob store if taskId and link are available
         if (taskId && result.downloadLink) {
           try {
-            const { getStoreWithConfig } = await import('../shared/store.mts');
+            const { getStoreWithConfig } = await import('../shared/store.js');
             const store = getStoreWithConfig('responses');
             const timestamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
             const mediaKey = `media_${timestamp}`;

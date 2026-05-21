@@ -1,5 +1,5 @@
-import { getStoreWithConfig } from '../shared/store.mts';
-import { responsesBase, streamChatSingleText, streamResponsesSingleText } from './utils.mts';
+import { getStoreWithConfig } from '../shared/store.js';
+import { responsesBase, streamChatSingleText, streamResponsesSingleText } from './utils.js';
 
 const handleAdminRequest = async (args: {
   text: string;
@@ -119,7 +119,7 @@ const handleAdminRequest = async (args: {
     if (!lastUser && !urlFromCommand) return 'No file found in your message.';
     const uploads: string[] = [];
     try {
-      const { uploadBase64ToStorage, uploadBlobToStorage, buildPublicUrlForKey } = await import('../shared/bucket.mts');
+      const { uploadBase64ToStorage, uploadBlobToStorage, buildPublicUrlForKey } = await import('../shared/bucket.js');
       if (lastUser) {
         for (const part of lastUser.content) {
           if (part?.type === 'file') {
@@ -134,7 +134,24 @@ const handleAdminRequest = async (args: {
                 const url = await uploadBlobToStorage(blob);
                 uploads.push(url);
               }
-            } catch { }
+            } catch (err: any) {
+              console.log(err?.message);
+            }
+          } else if (part?.type === 'image') {
+            try {
+              const mediaType = part.mediaType || 'image/png';
+              if (typeof part.image === 'string') {
+                const url = await uploadBase64ToStorage(part.image);
+                uploads.push(url);
+              } else if (part.image && typeof Blob !== 'undefined') {
+                const data = part.image as ArrayBuffer | Uint8Array;
+                const blob = new Blob([data as any], { type: mediaType });
+                const url = await uploadBlobToStorage(blob);
+                uploads.push(url);
+              }
+            } catch (err: any) {
+              console.log(err?.message);
+            }
           }
         }
       }
@@ -177,7 +194,7 @@ const handleAdminRequest = async (args: {
 }
 
 const forceRefreshCopilotToken = async (): Promise<{ ok: true; message: string } | { ok: false; message: string }> => {
-  const { SUPPORTED_PROVIDERS, getProviderKeys } = await import('../shared/providers.mts');
+  const { SUPPORTED_PROVIDERS, getProviderKeys } = await import('../shared/providers.js');
   try {
     const providerKeys = await getProviderKeys();
     const copilotKeys = providerKeys?.copilot || [];
