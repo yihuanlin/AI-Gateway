@@ -315,7 +315,7 @@ const createCustomProvider = async (providerName: string, apiKey: string) => {
 			return createOpenResponses({
 				name: 'custom',
 				apiKey,
-				url: config.baseURL,
+				url: config.baseURL + '/responses',
 			});
 		default:
 			return createOpenAICompatible({
