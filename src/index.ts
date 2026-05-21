@@ -2237,7 +2237,7 @@ app.post('/v1/responses', async (c: Context) => {
 										const base64Data: string = (part as any)?.file?.base64Data || undefined;
 										const mediaType: string = (part as any)?.file?.mediaType || 'image/png';
 
-										if (store && process.env.URL) {
+										if (store && (process.env.URL || process.env.VERCEL_PROJECT_PRODUCTION_URL)) {
 											if (!textItemId) {
 												textItemId = randomId('msg');
 												const textOutputIndex = outputIndex + 1;
@@ -2400,7 +2400,7 @@ app.post('/v1/responses', async (c: Context) => {
 										outputIndex = imageOutputIndex;
 
 										// If storing, upload to blob store and accumulate markdown to store (not to response)
-										if (store && base64Data && process.env.URL) {
+										if (store && base64Data && (process.env.URL || process.env.VERCEL_PROJECT_PRODUCTION_URL)) {
 											try {
 												const bin = atob(base64Data);
 												const bytes = new Uint8Array(bin.length);
@@ -2654,7 +2654,7 @@ app.post('/v1/responses', async (c: Context) => {
 											outputIndex = imageOutputIndex;
 
 											// If storing, upload to blob store and accumulate markdown to store (not to response)
-											if (store && base64Data && process.env.URL) {
+											if (store && base64Data && (process.env.URL || process.env.VERCEL_PROJECT_PRODUCTION_URL)) {
 												try {
 													const bin = atob(base64Data);
 													const bytes = new Uint8Array(bin.length);
@@ -3126,7 +3126,7 @@ app.post('/v1/responses', async (c: Context) => {
 			if (store) {
 				try {
 					let extraMd = '';
-					if (process.env.URL && Array.isArray((result as any).files) && (result as any).files.length > 0) {
+					if ((process.env.URL || process.env.VERCEL_PROJECT_PRODUCTION_URL) && Array.isArray((result as any).files) && (result as any).files.length > 0) {
 						for (const f of (result as any).files) {
 							try {
 								const fileObj = (f as any)?.file;
@@ -3484,7 +3484,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 											};
 											controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
 											// Also upload and stream markdown if storing
-											if (store && process.env.URL) {
+											if (store && (process.env.URL || process.env.VERCEL_PROJECT_PRODUCTION_URL)) {
 												try {
 													const bin = atob(b64);
 													const bytes = new Uint8Array(bin.length);
@@ -3531,7 +3531,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 												};
 												controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
 												// Also upload and stream markdown if storing
-												if (store && process.env.URL) {
+												if (store && (process.env.URL || process.env.VERCEL_PROJECT_PRODUCTION_URL)) {
 													try {
 														const bin = atob(b64);
 														const bytes = new Uint8Array(bin.length);
@@ -3696,7 +3696,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 			}
 
 			// If storing, upload images and append markdown to response content (chat requirement)
-			if (process.env.URL && store && Array.isArray((result as any).files) && (result as any).files.length > 0) {
+			if ((process.env.URL || process.env.VERCEL_PROJECT_PRODUCTION_URL) && store && Array.isArray((result as any).files) && (result as any).files.length > 0) {
 				for (const f of (result as any).files) {
 					try {
 						const fileObj = (f as any)?.file;
@@ -4686,7 +4686,7 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 				const imageModels = availableModels.models.filter((m) => m.modelType === 'image');
 				const imageModelsResponse = imageModels
 					.map((model: any) => ({
-						id: model.id,
+						id: 'image/' + model.id,
 						name: model.name,
 						description: model.pricing ? ` ${model.pricing.input ? `I: $${(Number(model.pricing.input) * 1000000).toFixed(2)}, ` : ''} ${model.pricing.output ? `O: $${(Number(model.pricing.output) * 1000000).toFixed(2)}; ` : ''}${model.pricing.image ? `Image: $${model.pricing.image}; ` : ''}${model.description || ''}` : (model.description || ''),
 						object: 'model',
@@ -4770,13 +4770,13 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 		// { id: 'openai/gpt-5.5-image', name: 'GPT-5.5 Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
 		{ id: 'image/doubao-vision', name: 'Seedream 4.5', description: 'First 20 images free daily, then ¥0.25/image', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'image/doubao-latest-vision', name: 'Seedream 5.0 Lite', description: 'First 20 images free daily, then ¥0.22/image', object: 'model', created: 0, owned_by: 'doubao' },
-		{ id: 'image/openai/gpt-image-2-vision', name: 'GPT Image 2.0 (Gateway)', description: 'I: text $5/MT, image $8/MT, O: $8/MT', object: 'model', created: 0, owned_by: 'gateway' },
-		{ id: 'image/bfl/flux-kontext-max-vision', name: 'FLUX [max] (Gateway)', description: '$0.08/img', object: 'model', created: 0, owned_by: 'gateway' },
-		{ id: 'image/recraft/recraft-v4.1-pro', name: 'Recraft V4.1 Pro (Gateway)', description: '$0.25/img', object: 'model', created: 0, owned_by: 'gateway' },
-		{ id: 'image/recraft/recraft-v4.1-utility-pro', name: 'Recraft V4.1 Utility Pro (Gateway)', description: '$0.25/img', object: 'model', created: 0, owned_by: 'gateway' },
-		{ id: 'image/xai/grok-imagine-image', name: 'Grok Imagine (Gateway)', description: '$0.02/img', object: 'model', created: 0, owned_by: 'gateway' },
-		{ id: 'image/google/gemini-3.1-flash-image-preview', name: 'Gemini 3.1 Flash Image (Gateway)', description: 'I: $0.5/MT, O: 4K $0.15/img 1K $0.07/img', object: 'model', created: 0, owned_by: 'gateway' },
-		{ id: 'image/google/gemini-3-pro-image', name: 'Gemini 3 Pro Image (Gateway)', description: 'I: $2/MT, O: 4K $0.24/img 1K $0.13/img', object: 'model', created: 0, owned_by: 'gateway' },
+		// { id: 'image/openai/gpt-image-2-vision', name: 'GPT Image 2.0 (Gateway)', description: 'I: text $5/MT, image $8/MT, O: $8/MT', object: 'model', created: 0, owned_by: 'gateway' },
+		// { id: 'image/bfl/flux-kontext-max-vision', name: 'FLUX [max] (Gateway)', description: '$0.08/img', object: 'model', created: 0, owned_by: 'gateway' },
+		// { id: 'image/recraft/recraft-v4.1-pro-vision', name: 'Recraft V4.1 Pro (Gateway)', description: '$0.25/img', object: 'model', created: 0, owned_by: 'gateway' },
+		// { id: 'image/recraft/recraft-v4.1-utility-pro-vision', name: 'Recraft V4.1 Utility Pro (Gateway)', description: '$0.25/img', object: 'model', created: 0, owned_by: 'gateway' },
+		// { id: 'image/xai/grok-imagine-image-vision', name: 'Grok Imagine (Gateway)', description: '$0.02/img', object: 'model', created: 0, owned_by: 'gateway' },
+		// { id: 'image/google/gemini-3.1-flash-image-preview-vision', name: 'Gemini 3.1 Flash Image (Gateway)', description: 'I: $0.5/MT, O: 4K $0.15/img 1K $0.07/img', object: 'model', created: 0, owned_by: 'gateway' },
+		// { id: 'image/google/gemini-3-pro-image-vision', name: 'Gemini 3 Pro Image (Gateway)', description: 'I: $2/MT, O: 4K $0.24/img 1K $0.13/img', object: 'model', created: 0, owned_by: 'gateway' },
 		{ id: 'image/modelscope/MusePublic/14_ckpt_SD_XL', name: 'Anything XL (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/modelscope/Tongyi-MAI/Z-Image-Turbo', name: 'Z-Image-Turbo (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },
 		{ id: 'image/modelscope/black-forest-labs/FLUX.2-dev-vision', name: 'FLUX.2 [dev] (ModelScope)', description: '', object: 'model', created: 0, owned_by: 'modelscope' },

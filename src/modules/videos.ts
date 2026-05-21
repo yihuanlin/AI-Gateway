@@ -259,7 +259,7 @@ const buildVideoGenerationWaiter = async (params: {
                 // Upload to storage; fallback to base64 URL on error
                 let finalUrl: string;
                 try {
-                    if (!process.env.URL) throw new Error('No process.env.URL configured');
+                    if (!process.env.URL && !process.env.VERCEL_PROJECT_PRODUCTION_URL) throw new Error('No URL or VERCEL_PROJECT_PRODUCTION_URL configured');
                     const { uploadBlobToStorage } = await import('../shared/bucket.js');
                     const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
                     finalUrl = await uploadBlobToStorage(result, `vid_${timestamp}`);
@@ -315,7 +315,7 @@ const buildVideoGenerationWaiter = async (params: {
         let lastFrameUrl = parsedFlags.last;
 
         if (firstFrameUrl) {
-            if (firstFrameUrl.startsWith('data:') && hasUploadFlag && process.env.URL) {
+            if (firstFrameUrl.startsWith('data:') && hasUploadFlag && (process.env.URL || process.env.VERCEL_PROJECT_PRODUCTION_URL)) {
                 try {
                     const { uploadBase64ToStorage } = await import('../shared/bucket.js');
                     const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
@@ -328,7 +328,7 @@ const buildVideoGenerationWaiter = async (params: {
         }
 
         if (lastFrameUrl) {
-            if (lastFrameUrl.startsWith('data:') && hasUploadFlag && process.env.URL) {
+            if (lastFrameUrl.startsWith('data:') && hasUploadFlag && (process.env.URL || process.env.VERCEL_PROJECT_PRODUCTION_URL)) {
                 try {
                     const { uploadBase64ToStorage } = await import('../shared/bucket.js');
                     const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
@@ -344,7 +344,7 @@ const buildVideoGenerationWaiter = async (params: {
         if (!parsedFlags.first && !parsedFlags.last) {
             if (imgs.has || links.length > 0) {
                 let first = imgs.first || links[0] || '';
-                if (first.startsWith('data:') && hasUploadFlag && process.env.URL) {
+                if (first.startsWith('data:') && hasUploadFlag && (process.env.URL || process.env.VERCEL_PROJECT_PRODUCTION_URL)) {
                     try {
                         const { uploadBase64ToStorage } = await import('../shared/bucket.js');
                         const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
@@ -364,7 +364,7 @@ const buildVideoGenerationWaiter = async (params: {
                     if (isRepeatMode && hasOnlyOneImage) {
                         lastUrl = first;
                     }
-                    if (lastUrl.startsWith('data:') && hasUploadFlag && process.env.URL) {
+                    if (lastUrl.startsWith('data:') && hasUploadFlag && (process.env.URL || process.env.VERCEL_PROJECT_PRODUCTION_URL)) {
                         try {
                             const { uploadBase64ToStorage } = await import('../shared/bucket.js');
                             const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
@@ -581,7 +581,7 @@ const buildVideoGenerationWaiter = async (params: {
         const wait = async (_signal: AbortSignal) => {
             try {
                 // Upload promptImage / lastFrameImage / refImages to storage if base64 and /upload flag present
-                if (hasUploadFlag && process.env.URL) {
+                if (hasUploadFlag && (process.env.URL || process.env.VERCEL_PROJECT_PRODUCTION_URL)) {
                     const { uploadBase64ToStorage } = await import('../shared/bucket.js');
                     if (promptImage && promptImage.startsWith('data:')) {
                         try {
@@ -652,7 +652,7 @@ const buildVideoGenerationWaiter = async (params: {
                 const blob = new Blob([videoBuffer as any], { type: 'video/mp4' });
                 let finalUrl: string;
                 try {
-                    if (!process.env.URL) throw new Error('No process.env.URL configured');
+                    if (!process.env.URL && !process.env.VERCEL_PROJECT_PRODUCTION_URL) throw new Error('No URL or VERCEL_PROJECT_PRODUCTION_URL configured');
                     const { uploadBlobToStorage } = await import('../shared/bucket.js');
                     const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
                     finalUrl = await uploadBlobToStorage(blob, `vid_${timestamp}`);

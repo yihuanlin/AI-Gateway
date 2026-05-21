@@ -355,7 +355,7 @@ const buildImageGenerationWaiter = async (params: {
         const data = json?.data?.[0];
         let urlOrB64 = data?.url || (data?.b64_json ? `data:image/png;base64,${data.b64_json}` : '');
 
-        if (data?.b64_json && hasUploadFlag && process.env.URL) {
+        if (data?.b64_json && hasUploadFlag && (process.env.URL || process.env.VERCEL_PROJECT_PRODUCTION_URL)) {
           try {
             const { uploadBase64ToStorage } = await import('../shared/bucket.js');
             const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
@@ -510,7 +510,7 @@ const buildImageGenerationWaiter = async (params: {
         // Upload to blob storage; fallback to base64 URL on error
         let finalUrl: string;
         try {
-          if (!process.env.URL) throw new Error('No process.env.URL configured');
+          if (!process.env.URL && !process.env.VERCEL_PROJECT_PRODUCTION_URL) throw new Error('No URL or VERCEL_PROJECT_PRODUCTION_URL configured');
           const { uploadBlobToStorage } = await import('../shared/bucket.js');
           const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
           finalUrl = await uploadBlobToStorage(result, timestamp);
@@ -576,8 +576,8 @@ const buildImageGenerationWaiter = async (params: {
 
       // If it's a base64 image, upload to storage first (requires process.env.URL)
       if (imageUrl.startsWith('data:')) {
-        if (!process.env.URL) {
-          return { ok: false, error: { code: 'no_storage_url', message: 'process.env.URL is required for base64 image upload in ModelScope i2i' }, status: 400 };
+        if (!process.env.URL && !process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+          return { ok: false, error: { code: 'no_storage_url', message: 'URL or VERCEL_PROJECT_PRODUCTION_URL is required for base64 image upload in ModelScope i2i' }, status: 400 };
         }
         try {
           const { uploadBase64ToStorage } = await import('../shared/bucket.js');
@@ -877,7 +877,7 @@ const buildImageGenerationWaiter = async (params: {
 
           let finalUrl: string;
           try {
-            if (!process.env.URL) throw new Error('No process.env.URL configured');
+            if (!process.env.URL && !process.env.VERCEL_PROJECT_PRODUCTION_URL) throw new Error('No URL or VERCEL_PROJECT_PRODUCTION_URL configured');
             const { uploadBase64ToStorage } = await import('../shared/bucket.js');
             const dataUrl = `data:${mediaType};base64,${base64}`;
             finalUrl = await uploadBase64ToStorage(dataUrl, fileSuffix);
