@@ -4,7 +4,7 @@ export const SUPPORTED_PROVIDERS = {
   doubao: { baseURL: 'https://ark.cn-beijing.volces.com/api/v3' },
   gemini: { baseURL: 'https://generativelanguage.googleapis.com/v1beta' },
   poe: { baseURL: 'https://api.poe.com/v1' },
-  cerebras: { baseURL: 'https://api.cerebras.ai/v1' },
+  // cerebras: { baseURL: 'https://api.cerebras.ai/v1' }, // Cerebras had blocked Vercel backends
   groq: { baseURL: 'https://api.groq.com/openai/v1' },
   modelscope: { baseURL: 'https://api-inference.modelscope.cn/v1' },
   infini: { baseURL: 'https://cloud.infini-ai.com/maas/v1' },

@@ -7,7 +7,6 @@ import { openai, createOpenAI } from '@ai-sdk/openai'
 import { google, createGoogleGenerativeAI } from '@ai-sdk/google'
 import { anthropic } from '@ai-sdk/anthropic';
 import { xai } from '@ai-sdk/xai';
-import { createOpenResponses } from '@ai-sdk/open-responses';
 import { string, number, boolean, array, object, optional, int, enum as zenum } from 'zod/mini'
 import { uploadBlobToStorage, getFileWithMetadata } from './shared/bucket.js';
 import { SUPPORTED_PROVIDERS, getProviderKeys } from './shared/providers.js'
@@ -310,12 +309,6 @@ const createCustomProvider = async (providerName: string, apiKey: string) => {
 					"editor-plugin-version": "copilot-chat/0.48.1",
 					"user-agent": "GitHubCopilotChat/0.48.1"
 				},
-			});
-		case 'doubao':
-			return createOpenResponses({
-				name: 'custom',
-				apiKey,
-				url: config.baseURL + '/responses',
 			});
 		default:
 			return createOpenAICompatible({
@@ -793,8 +786,6 @@ const buildAiSdkTools = (model: string, userTools: any[] | undefined): Record<st
 			if (!isResearchMode) {
 				aiSdkTools.x_search = xai.tools.xSearch({});
 			}
-		} else if (model.startsWith('doubao')) {
-			aiSdkTools.web_search = openai.tools.webSearch({});
 		} else if (googleIncompatible) {
 			if (!isSupportedProvider(model.split('/')[0] as string)) {
 				aiSdkTools.web_search = isResearchMode ? gateway.tools.parallelSearch() : gateway.tools.perplexitySearch();
@@ -802,7 +793,7 @@ const buildAiSdkTools = (model: string, userTools: any[] | undefined): Record<st
 				if (tavilyApiKey) aiSdkTools.web_search = tavilySearchTool;
 		}
 		if (googleIncompatible) {
-			if (!model.startsWith('anthropic') && !model.startsWith('xai') && !model.startsWith('doubao')) aiSdkTools.fetch = jinaReaderTool;
+			if (!model.startsWith('anthropic') && !model.startsWith('xai')) aiSdkTools.fetch = jinaReaderTool;
 			if (!isResearchMode && !model.startsWith('openai') && !model.startsWith('anthropic')
 				&& !model.startsWith('xai') && pythonApiKey && pythonUrl) {
 				aiSdkTools.code_execution = pythonExecutorTool;
@@ -2179,9 +2170,9 @@ app.post('/v1/responses', async (c: Context) => {
 
 										outputIndex = textOutputIndex;
 									}
-									if (!collectedText && modelId === 'cerebras/qwen-3-235b-a22b-thinking-2507') {
-										text = '<think>' + text;
-									}
+									// if (!collectedText && modelId === 'cerebras/qwen-3-235b-a22b-thinking-2507') {
+									// 	text = '<think>' + text;
+									// }
 									collectedText += text;
 									emit({
 										type: 'response.output_text.delta',
@@ -3469,9 +3460,9 @@ app.post('/v1/chat/completions', async (c: Context) => {
 											}
 										}
 									}
-									if (!accumulatedText && model === 'cerebras/qwen-3-235b-a22b-thinking-2507') {
-										text = '<think>' + text;
-									}
+									// if (!accumulatedText && model === 'cerebras/qwen-3-235b-a22b-thinking-2507') {
+									// 	text = '<think>' + text;
+									// }
 									// Regular text handling (non-Poe or non-reasoning content)
 									accumulatedText += text;
 									chunk = { ...baseChunk, choices: [{ index: 0, delta: { content: text }, finish_reason: null }] };
@@ -4715,7 +4706,7 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 				const imageModels = availableModels.models.filter((m) => m.modelType === 'image');
 				const imageModelsResponse = imageModels
 					.map((model: any) => ({
-						id: 'image/' + model.id,
+						id: 'image/' + model.id + '-vision',
 						name: model.name,
 						description: model.pricing ? ` ${model.pricing.input ? `I: $${(Number(model.pricing.input) * 1000000).toFixed(2)}, ` : ''} ${model.pricing.output ? `O: $${(Number(model.pricing.output) * 1000000).toFixed(2)}; ` : ''}${model.pricing.image ? `Image: $${model.pricing.image}; ` : ''}${model.description || ''}` : (model.description || ''),
 						object: 'model',
@@ -4814,8 +4805,8 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 		{ id: 'image/huggingface/Tongyi-MAI/Z-Image-Turbo', name: 'Z-Image-Turbo (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'image/huggingface/black-forest-labs/FLUX.2-dev-vision', name: 'FLUX.2 [dev] (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
 		{ id: 'image/huggingface/Qwen/Qwen-Image-Edit-2509-vision', name: 'Qwen-Image-Edit (Hugging Face)', description: '', object: 'model', created: 0, owned_by: 'huggingface' },
-		{ id: 'video/seedance-2.0', name: 'Seedance 2.0 (Gateway)', description: '720p: $0.15/sec + $0.11/sec audio', object: 'model', created: 0, owned_by: 'doubao' },
-		{ id: 'video/seedance-2.0-fast', name: 'Seedance 2.0 Fast (Gateway)', description: '720p: $0.12/sec + $0.08/sec audio', object: 'model', created: 0, owned_by: 'doubao' },
+		{ id: 'video/seedance-2.0', name: 'Seedance 2.0 (Gateway)', description: '720p: $0.15/sec + $0.11/sec audio', object: 'model', created: 0, owned_by: 'gateway' },
+		{ id: 'video/seedance-2.0-fast', name: 'Seedance 2.0 Fast (Gateway)', description: '720p: $0.12/sec + $0.08/sec audio', object: 'model', created: 0, owned_by: 'gateway' },
 		{ id: 'video/doubao-seedance-2.0-vision', name: 'Seedance 2.0', description: '¥46/MT', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'video/doubao-seedance-1.5-pro-vision', name: 'Seedance 1.5 Pro', description: 'First 2 MT free daily, then ¥8/MT (¥16/MT with audio)', object: 'model', created: 0, owned_by: 'doubao' },
 		{ id: 'video/doubao-seedance-1.0-pro-vision', name: 'Seedance 1.0 Pro', description: 'First 2 MT free daily, then ¥15/MT', object: 'model', created: 0, owned_by: 'doubao' },
@@ -4949,10 +4940,8 @@ const getGeoFromHeaders = (headers: Headers): any => {
 		fullRegionCode = countryCode + '-' + regionCode
 		try {
 			const subdivisionNames = new Intl.DisplayNames(['en'], { type: 'region' });
-			subdivisionName = subdivisionNames.of(fullRegionCode) || fullRegionCode;
-		} catch {
-			subdivisionName = fullRegionCode;
-		}
+			subdivisionName = subdivisionNames.of(fullRegionCode);
+		} catch { }
 	}
 
 	return {
@@ -4964,7 +4953,7 @@ const getGeoFromHeaders = (headers: Headers): any => {
 		timezone,
 		subdivision: regionCode ? {
 			code: fullRegionCode,
-			name: subdivisionName || regionCode,
+			name: subdivisionName,
 		} : undefined,
 	};
 }
