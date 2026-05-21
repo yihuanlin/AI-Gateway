@@ -794,16 +794,7 @@ const buildAiSdkTools = (model: string, userTools: any[] | undefined): Record<st
 				aiSdkTools.x_search = xai.tools.xSearch({});
 			}
 		} else if (model.startsWith('doubao')) {
-			aiSdkTools.web_search = tool({
-				type: 'provider',
-				id: 'custom.web_search',
-				args: {
-					type: 'web_search',
-					limit: isResearchMode ? 20 : 10,
-					max_tool_calls: isResearchMode ? 10 : 3,
-				},
-				inputSchema: object({}),
-			});
+			aiSdkTools.web_search = openai.tools.webSearch({});
 		} else if (googleIncompatible) {
 			if (!isSupportedProvider(model.split('/')[0] as string)) {
 				aiSdkTools.web_search = isResearchMode ? gateway.tools.parallelSearch() : gateway.tools.perplexitySearch();
@@ -4953,12 +4944,14 @@ const getGeoFromHeaders = (headers: Headers): any => {
 	}
 
 	let subdivisionName: string | undefined;
+	let fullRegionCode: string | undefined;
 	if (regionCode) {
+		fullRegionCode = countryCode + '-' + regionCode
 		try {
 			const subdivisionNames = new Intl.DisplayNames(['en'], { type: 'region' });
-			subdivisionName = subdivisionNames.of(regionCode) || regionCode;
+			subdivisionName = subdivisionNames.of(fullRegionCode) || fullRegionCode;
 		} catch {
-			subdivisionName = regionCode;
+			subdivisionName = fullRegionCode;
 		}
 	}
 
@@ -4970,7 +4963,7 @@ const getGeoFromHeaders = (headers: Headers): any => {
 		},
 		timezone,
 		subdivision: regionCode ? {
-			code: regionCode,
+			code: fullRegionCode,
 			name: subdivisionName || regionCode,
 		} : undefined,
 	};
