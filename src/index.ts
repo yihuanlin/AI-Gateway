@@ -4935,16 +4935,16 @@ app.get('/v1/files/:key', async (c: Context) => {
 	}
 });
 
+// List responses
+app.get('/v1/responses/all', async (c: Context) => {
+	const { listResponsesHttp } = await import('./modules/management.js');
+	return listResponsesHttp(c);
+});
+
 // Get a model response
 app.get('/v1/responses/:response_id', async (c: Context) => {
 	const { getResponseHttp } = await import('./modules/management.js');
 	return getResponseHttp(c);
-});
-
-// List responses
-app.get('/v1/responses', async (c: Context) => {
-	const { listResponsesHttp } = await import('./modules/management.js');
-	return listResponsesHttp(c);
 });
 
 // Delete all responses

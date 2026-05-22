@@ -14,7 +14,7 @@ const handleAdminRequest = async (args: {
 
   // Help
   if (/^\/help$/i.test(text)) {
-    return 'Commands: `refresh` (Copilot token) | `list` (responses) | `list [prefix]` (`-r`/`r` responses, `-m`/`m` media, `-c`/`c` chat, `-f`/`f`/`file` files) | `ls` (== `list all`) | `delete all` | `delete [id]` | `rm -f [fileKey]` (delete single file) | `rm -f` (delete all files) | `upload [url?]` (from last user files or URL) | `[id]` to view.';
+    return 'Commands: `refresh` (Copilot token) | `list` (responses) | `ls` == `list all` (responses) | `list [prefix]` (`-r`/`r` responses, `-m`/`m` media, `-c`/`c` chat, `-f`/`f`/`file` files) | `delete all` (responses) | `delete [id]` | `rm -f [fileKey]` (delete single file) | `rm -f` (delete all files) | `upload [url?]` (from last user files or URL) | `[id]` to view.';
   }
 
   // Refresh Copilot token

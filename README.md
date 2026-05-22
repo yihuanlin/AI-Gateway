@@ -368,7 +368,7 @@ curl -X GET "$HOSTNAME/v1/responses/resp_abc123?stream=true" \
 ### List All Responses
 ```bash
 # List all stored responses
-curl -X GET "$HOSTNAME/v1/responses" \
+curl -X GET "$HOSTNAME/v1/responses/all" \
   -H "Authorization: Bearer $PASSWORD"
 ```
 

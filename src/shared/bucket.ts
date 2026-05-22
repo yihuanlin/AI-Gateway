@@ -13,7 +13,7 @@ const nowKey = (ext: string, timestamp?: string): string => {
 }
 
 export const buildPublicUrlForKey = (key: string): string => {
-    return `${process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.URL}/v1/files/${encodeURIComponent(key)}`;
+    return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.URL}/v1/files/${encodeURIComponent(key)}`;
 }
 
 export const uploadBase64ToStorage = async (base64Data: string, timestamp?: string): Promise<string> => {
