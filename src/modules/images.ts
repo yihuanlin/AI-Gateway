@@ -38,7 +38,7 @@ Provider Specifics:
 - **Black Forest Labs (BFL)**: \`--imagePrompt\` (base64 image), \`--imagePromptUrl\` (URL to download & base64 encode), \`--guidance F\`. Default: \`safetyTolerance = 6\`, \`outputFormat = 'png'\`.
 - **Google**: \`--imageSize\`. Default: \`imageSize = '4k'\` for gemini-3-pro-image.
 - **OpenAI**: \`--transparent\` (sets background to transparent). Default: \`quality = 'high'\`, \`outputFormat = 'png'\`.
-- **xAI**: \`--resolution\`. Default: \`quality = 'high'\`, \`resolution = '2k'\` for grok-imagine-image-pro.`;
+- **xAI**: \`--resolution\`. Default: \`quality = 'high'\``;
   }
   return 'Supported providers: **Seedream** `image/doubao` (t2i/i2i), **Hugging Face** `image/huggingface/huggingface-model-id` (t2i/i2i), **ModelScope** `image/modelscope/modelscope-model-id` (t2i/i2i), **AI Gateway** `image/model-id`.';
 }
@@ -763,11 +763,6 @@ const buildImageGenerationWaiter = async (params: {
       }
       if (providerOptions.xai.quality === undefined) {
         providerOptions.xai.quality = 'high';
-      }
-      if (targetModelId.includes('grok-imagine-image-pro')) {
-        if (providerOptions.xai.resolution === undefined) {
-          providerOptions.xai.resolution = '2k';
-        }
       }
     }
 

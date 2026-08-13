@@ -439,8 +439,13 @@ export const getResponseHttp = async (c: any) => {
         } else if (Array.isArray(message.content)) {
           outputMessage.content = message.content.map((part: any) => {
             if (part.type === 'text') return { type: message.role === 'assistant' ? 'output_text' : 'input_text', text: part.text, annotations: [] };
-            if (part.type === 'image') return { type: 'input_image', image_url: { url: part.image }, ...(part.mediaType && { media_type: part.mediaType }) };
-            if (part.type === 'file') return { type: 'input_file', data: part.data, media_type: part.mediaType };
+            if (part.type === 'image') return { type: 'input_image', image_url: { url: part.image || part.data }, ...(part.mediaType && { media_type: part.mediaType }) };
+            if (part.type === 'file') {
+              if (part.mediaType?.includes('image') || part.mediaType?.startsWith('image/')) {
+                return { type: 'input_image', image_url: { url: part.data || part.image }, ...(part.mediaType && { media_type: part.mediaType }) };
+              }
+              return { type: 'input_file', data: part.data || part.image, media_type: part.mediaType };
+            }
             return part;
           });
         }

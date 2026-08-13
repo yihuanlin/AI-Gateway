@@ -1,10 +1,10 @@
 import { Hono, type Context } from 'hono'
 import { cors } from 'hono/cors'
-import { generateText, streamText, stepCountIs, tool, gateway } from 'ai'
+import { generateText, streamText, isStepCount, tool, gateway } from 'ai'
 import { createGateway } from '@ai-sdk/gateway'
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import { openai, createOpenAI } from '@ai-sdk/openai'
-import { google, createGoogleGenerativeAI } from '@ai-sdk/google'
+import { google, createGoogle } from '@ai-sdk/google'
 import { anthropic } from '@ai-sdk/anthropic';
 import { xai } from '@ai-sdk/xai';
 import { string, number, boolean, array, object, optional, int, enum as zenum } from 'zod/mini'
@@ -176,7 +176,7 @@ const processChatMessages = async (contextMessages: any[], model: string): Promi
 				} catch { }
 			}
 			if (image) {
-				files.push({ type: 'image', image, mediaType });
+				files.push({ type: 'file', data: image, mediaType });
 				cleaned = cleaned.replace(match[0], '').trim();
 			}
 		}
@@ -289,7 +289,11 @@ const processChatMessages = async (contextMessages: any[], model: string): Promi
 			message.content = await Promise.all(
 				message.content.map(async (part: any) => {
 					if (part.type === 'image_url') {
-						return { type: 'image', image: part.image_url.url };
+						return {
+							type: 'file',
+							data: part.image_url.url,
+							mediaType: 'image'
+						};
 					} else if (part.type === 'input_file') {
 						const base64Data = part.file_data;
 						let mediaType = 'application/pdf';
@@ -327,7 +331,7 @@ const createCustomProvider = async (providerName: string, apiKey: string) => {
 				baseURL: config.baseURL,
 			}).responses;
 		case 'gemini':
-			return createGoogleGenerativeAI({
+			return createGoogle({
 				apiKey,
 				baseURL: config.baseURL,
 			});
@@ -370,13 +374,13 @@ const buildDefaultProviderOptions = (args: {
 	if (model.startsWith('anthropic/')) {
 		return {
 			anthropic: {
-				...(thinking?.budget_tokens) && {
+				...((thinking?.budget_tokens) && {
 					thinking: {
 						type: thinking?.type || "enabled",
 						budgetTokens: thinking?.budget_tokens
 					},
-				},
-				...(!thinking?.budget_tokens && thinking?.type != 'enabled') && {
+				}),
+				...((!thinking?.budget_tokens && thinking?.type != 'enabled') && {
 					thinking: {
 						type: "adatpive",
 					},
@@ -394,7 +398,7 @@ const buildDefaultProviderOptions = (args: {
 							},
 						],
 					},
-				}
+				})
 			},
 			gateway: {
 				only: ['anthropic', 'vertex'],
@@ -557,7 +561,7 @@ const responsesInputToAiSdkMessages = async (input: any, model?: string): Promis
 				} catch { }
 			}
 			if (image) {
-				files.push({ type: 'image', image, mediaType });
+				files.push({ type: 'file', data: image, mediaType });
 				cleaned = cleaned.replace(match[0], '').trim();
 			}
 		}
@@ -573,7 +577,7 @@ const responsesInputToAiSdkMessages = async (input: any, model?: string): Promis
 		for (const item of input) {
 			if (item?.role === 'user' && Array.isArray(item?.content)) {
 				userHasImage = item.content.some((p: any) =>
-					p?.type?.includes('image') || p?.type === 'input_file'
+					p?.type?.includes('image') || p?.type === 'input_file' || (p?.type === 'file' && (p?.mediaType?.includes('image') || p?.mediaType?.startsWith('image/')))
 				);
 				if (userHasImage) break;
 			}
@@ -666,7 +670,7 @@ const responsesInputToAiSdkMessages = async (input: any, model?: string): Promis
 					} else {
 						parts.push({ type: 'text', text: part.text });
 					}
-				} else if (part.type.includes('image')) {
+				} else if (part.type.includes('image') || (part.type === 'file' && (part?.mediaType?.includes('image') || part?.mediaType?.startsWith('image/')))) {
 					const image = part?.image_url?.url || part?.url || part?.image || part?.data || (typeof part?.image_url === 'string' ? part.image_url : undefined);
 					if (image) {
 						let mediaType = part?.media_type || part?.mediaType;
@@ -678,10 +682,10 @@ const responsesInputToAiSdkMessages = async (input: any, model?: string): Promis
 								mediaType = 'image/png';
 							}
 						}
-						parts.push({ type: 'image', image, mediaType });
+						parts.push({ type: 'file', data: image, mediaType });
 					}
 				} else if (part.type.includes('file')) {
-					const data = part?.data || part?.file_data || part?.url;
+					const data = part?.data || part?.file_data || part?.url || part?.image;
 					if (data) {
 						let mediaType = part?.media_type || part?.mediaType;
 						if (!mediaType) {
@@ -907,7 +911,7 @@ const buildCommonOptions = async (
 
 	return {
 		model: gw(attempt.model),
-		system: systemPrompt || undefined,
+		instructions: systemPrompt || undefined,
 		messages: otherMessages,
 		tools: params.aiSdkTools,
 		temperature: params.temperature,
@@ -921,7 +925,7 @@ const buildCommonOptions = async (
 		toolChoice: params.tool_choice,
 		abortSignal: params.abortSignal,
 		providerOptions: params.providerOptions,
-		stopWhen: [stepCountIs(isResearchMode ? 20 : 5)],
+		stopWhen: [isStepCount(isResearchMode ? 20 : 5)],
 		maxRetries: 0,
 		onError: () => { }
 	} as any;
@@ -1775,7 +1779,7 @@ app.post('/v1/responses', async (c: Context) => {
 						const commonOptions = await buildCommonOptions(gw, attempt, commonParams);
 						const result = streamText(commonOptions);
 
-						for await (const part of (result as any).fullStream) {
+						for await (const part of (result as any).stream) {
 							if (abortController.signal.aborted) throw new Error('aborted');
 
 							switch (part.type) {
@@ -2913,15 +2917,15 @@ app.post('/v1/responses', async (c: Context) => {
 										...baseResponseObj,
 										status: 'completed',
 										output: filteredOutput,
-										usage: part.totalUsage ? {
-											input_tokens: part.totalUsage.inputTokens,
-											output_tokens: part.totalUsage.outputTokens,
-											total_tokens: part.totalUsage.totalTokens,
+										usage: (part.usage || part.totalUsage) ? {
+											input_tokens: (part.usage || part.totalUsage).inputTokens,
+											output_tokens: (part.usage || part.totalUsage).outputTokens,
+											total_tokens: (part.usage || part.totalUsage).totalTokens,
 											input_tokens_details: {
-												cached_tokens: part.totalUsage.inputTokenDetails.cacheReadTokens || 0,
+												cached_tokens: (part.usage || part.totalUsage).inputTokenDetails?.cacheReadTokens || (part.usage || part.totalUsage).inputTokenDetails.cacheReadTokens || 0,
 											},
 											output_tokens_details: {
-												reasoning_tokens: part.totalUsage.outputTokenDetails.reasoningTokens,
+												reasoning_tokens: (part.usage || part.totalUsage).outputTokenDetails.outputTokenDetails.reasoningTokens || (part.usage || part.totalUsage).outputTokenDetails.reasoningTokens || 0,
 											}
 										} : null
 									};
@@ -3379,7 +3383,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 
 						const result = streamText(commonOptions);
 						// Forward chunks; on error, try next key/provider
-						for await (const part of (result as any).fullStream) {
+						for await (const part of (result as any).stream) {
 
 							if (abortController.signal.aborted) throw new Error('aborted');
 							let chunk: any;
@@ -3631,17 +3635,17 @@ app.post('/v1/chat/completions', async (c: Context) => {
 										choices: [
 											{ index: 0, delta: {}, finish_reason: reason }
 										],
-										usage: {
-											prompt_tokens: part.totalUsage.inputTokens,
-											completion_tokens: part.totalUsage.outputTokens,
-											total_tokens: part.totalUsage.totalTokens,
+										usage: (part.usage || part.totalUsage) ? {
+											prompt_tokens: (part.usage || part.totalUsage).inputTokens,
+											completion_tokens: (part.usage || part.totalUsage).outputTokens,
+											total_tokens: (part.usage || part.totalUsage).totalTokens,
 											prompt_tokens_details: {
-												cached_tokens: part.totalUsage.cachedInputTokens || 0
+												cached_tokens: (part.usage || part.totalUsage).inputTokenDetails?.cacheReadTokens || (part.usage || part.totalUsage).inputTokenDetails.cacheReadTokens || 0
 											},
 											completion_tokens_details: {
-												reasoning_tokens: part.totalUsage.reasoningTokens || 0
+												reasoning_tokens: (part.usage || part.totalUsage).outputTokenDetails.outputTokenDetails.reasoningTokens || (part.usage || part.totalUsage).outputTokenDetails.reasoningTokens || 0
 											}
-										}
+										} : undefined
 									};
 									controller.enqueue(TEXT_ENCODER.encode(`data: ${JSON.stringify(chunk)}\n\n`));
 									break;
@@ -3812,7 +3816,7 @@ app.post('/v1/chat/completions', async (c: Context) => {
 						cached_tokens: result.usage.inputTokenDetails.cacheReadTokens || 0
 					},
 					completion_tokens_details: {
-						reasoning_tokens: result.usage.outputTokenDetails.reasoningTokens
+						reasoning_tokens: result.usage.outputTokenDetails?.reasoningTokens
 					}
 				},
 			});
@@ -3895,8 +3899,9 @@ const processAnthropicMessages = async (contextMessages: any[]): Promise<any[]> 
 								const mediaType = contentBlock.source.media_type || 'image/png';
 								const dataUrl = `data:${mediaType};base64,${base64Data}`;
 								processedMessage.content.push({
-									type: 'image',
-									image: dataUrl
+									type: 'file',
+									data: dataUrl,
+									mediaType: 'image'
 								});
 							}
 							break;
@@ -3992,8 +3997,9 @@ const processAnthropicMessages = async (contextMessages: any[]): Promise<any[]> 
 								const mediaType = contentBlock.source.media_type || 'image/png';
 								const dataUrl = `data:${mediaType};base64,${base64Data}`;
 								processedContent.push({
-									type: 'image',
-									image: dataUrl
+									type: 'file',
+									data: dataUrl,
+									mediaType: 'image'
 								});
 							}
 							break;
@@ -4062,7 +4068,7 @@ app.post('/v1/messages', async (c: Context) => {
 	const {
 		model,
 		messages = [],
-		system,
+		instructions: system,
 		tools,
 		stream = false,
 		temperature,
@@ -4160,7 +4166,7 @@ app.post('/v1/messages', async (c: Context) => {
 						let contentBlockIndex = 0;
 						let contentBlockStarted = false;
 
-						for await (const part of (result as any).fullStream) {
+						for await (const part of (result as any).stream) {
 							if (abortController.signal.aborted) throw new Error('aborted');
 
 							switch (part.type) {
@@ -4399,10 +4405,11 @@ app.post('/v1/messages', async (c: Context) => {
 									}
 
 									const stopReason = part.finishReason === 'tool-calls' ? 'tool_use' : 'end_turn';
+									const chunkUsage = part.usage || part.totalUsage;
 									const usage = {
-										input_tokens: part.totalUsage?.inputTokens || 0,
-										output_tokens: part.totalUsage?.outputTokens || 0,
-										cache_read_input_tokens: part.totalUsage?.cachedInputTokens || 0,
+										input_tokens: chunkUsage?.inputTokens || 0,
+										output_tokens: chunkUsage?.outputTokens || 0,
+										cache_read_input_tokens: chunkUsage?.inputTokenDetails?.cacheReadTokens || chunkUsage.inputTokenDetails.cacheReadTokens || 0,
 										service_tier: service_tier || 'standard'
 									};
 
