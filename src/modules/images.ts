@@ -13,7 +13,7 @@ const toMarkdownImage = (url: string): string => {
 
 const getHelpForModel = (model: string) => {
   if (model.startsWith('image/doubao') || model.startsWith('image/seedream')) {
-    return 'Use **Seedream** unified t2i / i2i model *doubao-seedream-4-5-251128* or *doubao-seedream-5-0-260128* if using "image/seedream-latest". (multiple reference images supported).\nFlags: `--format url|b64_json`, `--size {WxH}|--ratio {e.g., 16:9}`, `--seed N`, `--guidance F`.\n`/upload` uploads output to storage when base64 is returned.';
+    return 'Use **Seedream** unified t2i / i2i models: *doubao-seedream-5-0-260128* (Seedream 5.0 Lite, 4K) for "image/doubao-vision", *doubao-seedream-5-0-pro-260628* (Seedream 5.0 Pro, 2K) for "image/doubao-latest-vision", or *doubao-seedream-4-5-251128* (Seedream 4.5). (multiple reference images supported).\nFlags: `--format url|b64_json`, `--size {WxH}|--ratio {e.g., 16:9}`, `--seed N`, `--guidance F`.\n`/upload` uploads output to storage when base64 is returned.';
   }
   if (model.startsWith('image/huggingface/')) {
     return '**Hugging Face** Text-to-Image and Image-to-Image models.\nFlags: `--guidance F`, `--negative_prompt "text"`, `--steps N (1-100)"`, `--size WxH` or `--ratio A:B`, `--seed N`.\n`/upload` upload input images to storage (output images are uploaded to storage). Input images enable image-to-image mode.\nSpecial prompt trigger for Kontext models:\n`Make a shot in the same scene of...`\n`Remove ...`\n`redepthkontext ...`\n`Place it`\n`Fuse this image into background`\n`Convert this image into pencil drawing art style`\n`Turn this image into the Clay_Toy style.`';
@@ -274,7 +274,7 @@ const buildImageGenerationWaiter = async (params: {
     }
   }
 
-  if (model.startsWith('image/seedream') || model === 'image/doubao') {
+  if (model.startsWith('image/seedream') || model.startsWith('image/doubao')) {
     let apiKey: string | null = null;
     try {
       const keys = String(process.env.DOUBAO_API_KEY).split(',').map((k: string) => k.trim()) || [];
@@ -285,7 +285,21 @@ const buildImageGenerationWaiter = async (params: {
     const url = `${base}/images/generations`;
     const response_format = (flags['format'] as string) || 'url';
     const watermark = false;
-    const actualModel = (model.startsWith('image/seedream-latest')) ? 'doubao-seedream-5-0-260128' : 'doubao-seedream-4-5-251128';
+
+    let actualModel = 'doubao-seedream-5-0-260128';
+    let defaultResolution = '4K';
+
+    if (model.startsWith('image/doubao-latest') || model.startsWith('image/seedream-latest') || model.includes('pro')) {
+      actualModel = 'doubao-seedream-5-0-pro-260628';
+      defaultResolution = '2K';
+    } else if (model.includes('legacy') || model.includes('4-5') || model.includes('4.5')) {
+      actualModel = 'doubao-seedream-4-5-251128';
+      defaultResolution = '4K';
+    } else {
+      // image/doubao-vision, image/doubao, image/seedream, etc. -> Seedream 5.0 Lite (4K)
+      actualModel = 'doubao-seedream-5-0-260128';
+      defaultResolution = '4K';
+    }
 
     // Collect all potential reference images (uploaded message images + inline links)
     const referenceImages: string[] = [];
@@ -306,7 +320,7 @@ const buildImageGenerationWaiter = async (params: {
       payload = {
         model: actualModel,
         prompt: cleanPrompt,
-        size: (model.startsWith('image/seedream-latest')) ? '3K' : '4K',
+        size: typeof flags['size'] === 'string' ? flags['size'] : defaultResolution,
         image: referenceImages.length === 1 ? referenceImages[0] : referenceImages,
         response_format,
         seed: typeof flags['seed'] === 'number' ? flags['seed'] : 21,
@@ -319,7 +333,20 @@ const buildImageGenerationWaiter = async (params: {
         if (typeof flags['size'] === 'string') return flags['size'];
         if (typeof flags['ratio'] === 'string') {
           const ratio = flags['ratio'] as string;
-          const ratioMap: Record<string, string> = {
+          if (defaultResolution === '2K') {
+            const ratioMap2k: Record<string, string> = {
+              '1:1': '2048x2048',
+              '4:3': '2368x1776',
+              '3:4': '1776x2368',
+              '16:9': '2816x1584',
+              '9:16': '1584x2816',
+              '3:2': '2496x1664',
+              '2:3': '1664x2496',
+              '21:9': '3136x1344'
+            };
+            return ratioMap2k[ratio] || '2048x2048';
+          }
+          const ratioMap4k: Record<string, string> = {
             '1:1': '4096x4096',
             '4:3': '4704x3520',
             '3:4': '3520x4704',
@@ -329,9 +356,9 @@ const buildImageGenerationWaiter = async (params: {
             '2:3': '3328x4992',
             '21:9': '6240x2656'
           };
-          return ratioMap[ratio] || '4096x4096';
+          return ratioMap4k[ratio] || '4096x4096';
         }
-        return (model.startsWith('image/seedream-latest')) ? '3K' : '4K';
+        return defaultResolution;
       })();
       const g = typeof flags['guidance'] === 'number' ? flags['guidance'] : guidanceFromTopP(top_p, temperature) ?? 2.5;
       payload = {

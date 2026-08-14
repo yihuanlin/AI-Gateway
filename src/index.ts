@@ -343,10 +343,10 @@ const createCustomProvider = async (providerName: string, apiKey: string) => {
 				baseURL: config.baseURL,
 				includeUsage: true,
 				headers: {
-					"editor-version": "vscode/1.121.0",
+					"editor-version": "vscode/1.133.0",
 					"copilot-vision-request": "true",
-					"editor-plugin-version": "copilot-chat/0.48.1",
-					"user-agent": "GitHubCopilotChat/0.48.1"
+					"editor-plugin-version": "copilot-chat/1.0.231",
+					"user-agent": "GitHubCopilotChat/1.0.231"
 				},
 			});
 		default:
@@ -438,7 +438,7 @@ const buildDefaultProviderOptions = (args: {
 	if (model.startsWith('openai/') || model.startsWith('chatgpt/')) {
 		return {
 			openai: {
-				reasoningEffort: reasoning_effort || (isResearchMode && (model.includes('5.') || model.includes('max')) ? 'xhigh' : (isResearchMode ? 'high' : "medium")),
+				reasoningEffort: reasoning_effort || (isResearchMode && (model.includes('gpt-5.') || model.includes('max') || model.includes('glm-5-2')) ? 'xhigh' : (isResearchMode ? 'high' : "medium")),
 				reasoningSummary: reasoning_summary || "auto",
 				textVerbosity: text_verbosity || "medium",
 				serviceTier: service_tier || "auto",
@@ -467,7 +467,6 @@ const buildDefaultProviderOptions = (args: {
 		custom: {
 			reasoning_effort: reasoning_effort || (isResearchMode ? 'high' : "medium"),
 			...(extra_body && { extra_body }),
-			...(thinking && { thinking }),
 		}
 	};
 }
@@ -1649,13 +1648,7 @@ app.post('/v1/responses', async (c: Context) => {
 	).join(' ');
 	isResearchMode = RESEARCH_KEYWORDS.some(keyword => messageText.includes(keyword));
 	const aiSdkTools: Record<string, any> = buildAiSdkTools(modelId, tools);
-	if (Object.keys(aiSdkTools).length === 0) {
-		if (modelId.startsWith('doubao/deepseek-v3')) {
-			thinking = {
-				type: 'enabled',
-			};
-		}
-	} else {
+	if (Object.keys(aiSdkTools).length !== 0) {
 		search = true;
 	}
 	if (modelId.startsWith('openai/')) {
@@ -2922,10 +2915,10 @@ app.post('/v1/responses', async (c: Context) => {
 											output_tokens: (part.usage || part.totalUsage).outputTokens,
 											total_tokens: (part.usage || part.totalUsage).totalTokens,
 											input_tokens_details: {
-												cached_tokens: (part.usage || part.totalUsage).inputTokenDetails?.cacheReadTokens || (part.usage || part.totalUsage).inputTokenDetails.cacheReadTokens || 0,
+												cached_tokens: (part.usage || part.totalUsage).inputTokenDetails?.cacheReadTokens || 0,
 											},
 											output_tokens_details: {
-												reasoning_tokens: (part.usage || part.totalUsage).outputTokenDetails.outputTokenDetails.reasoningTokens || (part.usage || part.totalUsage).outputTokenDetails.reasoningTokens || 0,
+												reasoning_tokens: (part.usage || part.totalUsage).outputTokenDetails?.reasoningTokens || 0,
 											}
 										} : null
 									};
@@ -3177,7 +3170,7 @@ app.post('/v1/responses', async (c: Context) => {
 						cached_tokens: result.usage.inputTokenDetails?.cacheReadTokens || 0,
 					},
 					output_tokens_details: {
-						reasoning_tokens: result.usage.outputTokenDetails?.reasoningTokens,
+						reasoning_tokens: result.usage.outputTokenDetails?.reasoningTokens || 0,
 					}
 				} : null,
 				user: null,
@@ -3640,10 +3633,10 @@ app.post('/v1/chat/completions', async (c: Context) => {
 											completion_tokens: (part.usage || part.totalUsage).outputTokens,
 											total_tokens: (part.usage || part.totalUsage).totalTokens,
 											prompt_tokens_details: {
-												cached_tokens: (part.usage || part.totalUsage).inputTokenDetails?.cacheReadTokens || (part.usage || part.totalUsage).inputTokenDetails.cacheReadTokens || 0
+												cached_tokens: (part.usage || part.totalUsage).inputTokenDetails?.cacheReadTokens || 0
 											},
 											completion_tokens_details: {
-												reasoning_tokens: (part.usage || part.totalUsage).outputTokenDetails.outputTokenDetails.reasoningTokens || (part.usage || part.totalUsage).outputTokenDetails.reasoningTokens || 0
+												reasoning_tokens: (part.usage || part.totalUsage).outputTokenDetails?.reasoningTokens || 0
 											}
 										} : undefined
 									};
@@ -3813,10 +3806,10 @@ app.post('/v1/chat/completions', async (c: Context) => {
 					completion_tokens: result.usage.outputTokens,
 					total_tokens: result.usage.totalTokens,
 					prompt_tokens_details: {
-						cached_tokens: result.usage.inputTokenDetails.cacheReadTokens || 0
+						cached_tokens: result.usage.inputTokenDetails?.cacheReadTokens || 0
 					},
 					completion_tokens_details: {
-						reasoning_tokens: result.usage.outputTokenDetails?.reasoningTokens
+						reasoning_tokens: result.usage.outputTokenDetails?.reasoningTokens || 0
 					}
 				},
 			});
@@ -4617,29 +4610,29 @@ app.post('/v1/messages', async (c: Context) => {
 
 const CUSTOM_MODEL_LISTS = {
 	poixe: [
-		{ id: 'gpt-5.2:free', name: 'GPT-5.2 4K/2K' },
-		{ id: 'gemini-3-pro-preview:free', name: 'Gemini 3 Pro 4K/2K' },
-		{ id: 'cli2api/claude-sonnet-4-6:free', name: 'Claude Sonnet 4.6 1MTM' },
-		{ id: 'cli2api/gpt-5.3-codex:free', name: 'Gemini 3 Pro 1MTM' },
+		{ id: 'gpt-5.2:free', name: 'GPT-5.2 4K/2K', modalities: { input: ["text", "image", "pdf"], output: ["text"] } },
+		{ id: 'gemini-3-pro-preview:free', name: 'Gemini 3 Pro 4K/2K', modalities: { input: ["text", "image", "pdf"], output: ["text"] } },
+		{ id: 'cli2api/claude-sonnet-4-6:free', name: 'Claude Sonnet 4.6 1MTM', modalities: { input: ["text", "image", "pdf"], output: ["text"] } },
+		{ id: 'cli2api/gpt-5.3-codex:free', name: 'Gemini 3 Pro 1MTM', modalities: { input: ["text", "image", "pdf"], output: ["text"] } },
 	],
 	doubao: [
-		{ id: 'doubao-seed-2-0-lite-260215', name: 'Doubao Seed 2.0 Lite' },
-		{ id: 'doubao-seed-2-0-pro-260215', name: 'Doubao Seed 2.0 Pro' },
-		{ id: 'doubao-seed-2-0-code-preview-260215', name: 'Doubao Seed 2.0 Code' },
-		{ id: 'deepseek-v3-2-251201', name: 'DeepSeek V3.2 (Volcengine)' },
-		{ id: 'glm-4-7-251222', name: 'GLM 4.7 (Volcengine)' },
+		{ id: 'doubao-seed-2-1-pro-260628', name: 'Doubao Seed 2.1 Pro', modalities: { input: ["text", "image", "pdf"], output: ["text"] } },
+		{ id: 'doubao-seed-2-1-turbo-260628', name: 'Doubao Seed 2.1 Turbo', modalities: { input: ["text", "image", "pdf"], output: ["text"] } },
+		{ id: 'doubao-seed-2-0-code-preview-260215', name: 'Doubao Seed 2.0 Code', modalities: { input: ["text", "image", "pdf"], output: ["text"] } },
+		{ id: 'deepseek-v4-flash-ga-260731', name: 'DeepSeek V4 Flash (Volcengine)', modalities: { input: ["text"], output: ["text"] } },
+		{ id: 'glm-5-2-260617', name: 'GLM 5.2 (Volcengine)', modalities: { input: ["text"], output: ["text"] } },
 	],
 	cohere: [
-		{ id: 'command-a-plus-05-2026', name: 'Command A+' },
-		{ id: 'command-a-translate-08-2025', name: 'Command A Translation' },
+		{ id: 'command-a-plus-05-2026', name: 'Command A+', modalities: { input: ["text"], output: ["text"] } },
+		{ id: 'command-a-translate-08-2025', name: 'Command A Translation', modalities: { input: ["text"], output: ["text"] } },
 	],
 	longcat: [
-		{ id: 'longcat-flash-chat', name: 'LongCat Flash Chat (Meituan)' },
-		{ id: 'longcat-flash-thinking', name: 'LongCat Flash Thinking (Meituan)' },
+		{ id: 'longcat-flash-chat', name: 'LongCat Flash Chat (Meituan)', modalities: { input: ["text"], output: ["text"] } },
+		{ id: 'longcat-flash-thinking', name: 'LongCat Flash Thinking (Meituan)', modalities: { input: ["text"], output: ["text"] } },
 	],
 	cloudflare: [
-		{ id: '@cf/zai-org/glm-4.7-flash', name: 'GLM 4.7 Flash' },
-		{ id: '@cf/moonshotai/kimi-k2.5', name: 'Kimi K2.5' },
+		{ id: '@cf/zai-org/glm-4.7-flash', name: 'GLM 4.7 Flash', modalities: { input: ["text"], output: ["text"] } },
+		{ id: '@cf/moonshotai/kimi-k2.5', name: 'Kimi K2.5', modalities: { input: ["text"], output: ["text"] } },
 	],
 };
 
@@ -4685,9 +4678,9 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 			headers: {
 				'Authorization': `Bearer ${copilotToken}`,
 				'Content-Type': 'application/json',
-				"editor-version": "vscode/1.121.0",
-				"editor-plugin-version": "copilot-chat/0.48.1",
-				"user-agent": "GitHubCopilotChat/0.48.1"
+				"editor-version": "vscode/1.133.0",
+				"editor-plugin-version": "copilot-chat/1.0.231",
+				"user-agent": "GitHubCopilotChat/1.0.231"
 			},
 		});
 	} else {
@@ -4765,6 +4758,13 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 						object: 'model',
 						created: now,
 						owned_by: model.name.split('/')[0],
+						supported_parameters: model.supported_parameters,
+						modalities: model.modalities,
+						pricing: {
+							prompt: model.pricing.input || 0,
+							completion: model.pricing.output || 0,
+							image: model.pricing.image || 0,
+						},
 					}));
 				const textModelsResponse = textModels
 					.map((model: any) => ({
@@ -4774,6 +4774,13 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 						object: 'model',
 						created: now,
 						owned_by: model.name.split('/')[0],
+						supported_parameters: model.supported_parameters,
+						modalities: model.modalities,
+						pricing: {
+							prompt: model.pricing.input || 0,
+							completion: model.pricing.output || 0,
+							image: model.pricing.image || 0,
+						},
 					}))
 					.filter((m: any) => shouldIncludeModel(m));
 				return [...imageModelsResponse, ...textModelsResponse];
@@ -4807,6 +4814,13 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 						object: 'model',
 						created: 0,
 						owned_by: providerName,
+						modalities: model.modalities,
+						supported_parameters: ["max_tokens", "temperature", "stop", "tools", "tool_choice", "reasoning", "include_reasoning"],
+						pricing: {
+							prompt: 0,
+							completion: 0,
+							image: 0,
+						},
 					}));
 				} else {
 					// Use regular API call for providers that support /models endpoint
@@ -4818,6 +4832,9 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 						object: 'model',
 						created: model.created || 0,
 						owned_by: model.owned_by || providerName,
+						modalities: model.modalities,
+						supported_parameters: model.supported_parameters,
+						pricing: model.pricing,
 					})).filter((model: any) => {
 						if (!shouldIncludeModel(model, providerName)) {
 							return false;
@@ -4841,8 +4858,9 @@ const getModelsResponse = async (providerKeys: Record<string, string[]>) => {
 	const curated = [
 		{ id: 'admin/magic-vision', name: 'Management', description: '', object: 'model', created: 0, owned_by: 'internal' },
 		// { id: 'openai/gpt-5.5-image', name: 'GPT-5.5 Image', description: '', object: 'model', created: 0, owned_by: 'openai' },
-		{ id: 'image/doubao-vision', name: 'Seedream 4.5', description: 'First 20 images free daily, then ¥0.25/image', object: 'model', created: 0, owned_by: 'doubao' },
-		{ id: 'image/doubao-latest-vision', name: 'Seedream 5.0 Lite', description: 'First 20 images free daily, then ¥0.22/image', object: 'model', created: 0, owned_by: 'doubao' },
+		{ id: 'image/doubao-vision', name: 'Seedream 5.0 Lite', description: 'First 20 images free daily, then ¥0.22/image', object: 'model', created: 0, owned_by: 'doubao' },
+		{ id: 'image/doubao-latest-vision', name: 'Seedream 5.0 Pro', description: 'First 20 images free daily, then ¥0.3/image', object: 'model', created: 0, owned_by: 'doubao' },
+		{ id: 'image/doubao-legacy-vision', name: 'Seedream 4.5', description: 'First 20 images free daily, then ¥0.25/image', object: 'model', created: 0, owned_by: 'doubao' },
 		// { id: 'image/openai/gpt-image-2-vision', name: 'GPT Image 2.0 (Gateway)', description: 'I: text $5/MT, image $8/MT, O: $8/MT', object: 'model', created: 0, owned_by: 'gateway' },
 		// { id: 'image/bfl/flux-kontext-max-vision', name: 'FLUX [max] (Gateway)', description: '$0.08/img', object: 'model', created: 0, owned_by: 'gateway' },
 		// { id: 'image/recraft/recraft-v4.1-pro-vision', name: 'Recraft V4.1 Pro (Gateway)', description: '$0.25/img', object: 'model', created: 0, owned_by: 'gateway' },
