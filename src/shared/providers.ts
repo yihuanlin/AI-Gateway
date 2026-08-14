@@ -7,7 +7,6 @@ export const SUPPORTED_PROVIDERS = {
   // cerebras: { baseURL: 'https://api.cerebras.ai/v1' }, // Cerebras had blocked Vercel backends
   groq: { baseURL: 'https://api.groq.com/openai/v1' },
   modelscope: { baseURL: 'https://api-inference.modelscope.cn/v1' },
-  github: { baseURL: 'https://models.github.ai/inference' },
   openrouter: { baseURL: 'https://openrouter.ai/api/v1' },
   nvidia: { baseURL: 'https://integrate.api.nvidia.com/v1' },
   mistral: { baseURL: 'https://api.mistral.ai/v1' },

@@ -1653,6 +1653,12 @@ app.post('/v1/responses', async (c: Context) => {
 	}
 	if (modelId.startsWith('openai/')) {
 		modelId = modelId.replace('-image', '');
+	} else if (modelId === ('doubao/seed-latest')) {
+		modelId = 'doubao/doubao-seed-2-1-pro-260628';
+	} else if (modelId === ('doubao/deepseek-latest')) {
+		modelId = 'doubao/deepseek-v4-flash-ga-260731';
+	} else if (modelId === ('doubao/glm-latest')) {
+		modelId = 'doubao/glm-5-2-260617';
 	}
 	const { providersToTry } = prepareProvidersToTry({ model: modelId, providerKeys });
 	const providerOptions = buildDefaultProviderOptions({
@@ -3309,6 +3315,12 @@ app.post('/v1/chat/completions', async (c: Context) => {
 	}
 	if (modelId.startsWith('openai/')) {
 		modelId = modelId.replace('-image', '');
+	} else if (modelId === ('doubao/seed-latest')) {
+		modelId = 'doubao-seed-2-1-pro-260628';
+	} else if (modelId === ('doubao/deepseek-latest')) {
+		modelId = 'doubao/deepseek-v4-flash-ga-260731';
+	} else if (modelId === ('doubao/glm-latest')) {
+		modelId = 'doubao/glm-5-2-260617';
 	}
 	const { providersToTry } = prepareProvidersToTry({ model: modelId, providerKeys });
 	const providerOptions = buildDefaultProviderOptions({
@@ -4616,6 +4628,9 @@ const CUSTOM_MODEL_LISTS = {
 		{ id: 'cli2api/gpt-5.3-codex:free', name: 'Gemini 3 Pro 1MTM', modalities: { input: ["text", "image", "pdf"], output: ["text"] } },
 	],
 	doubao: [
+		{ id: 'doubao-seed-latest-vision', name: 'Doubao Seed Latest', modalities: { input: ["text", "image", "pdf"], output: ["text"] } },
+		{ id: 'deepseek-latest', name: 'DeepSeek Latest (Volcengine)', modalities: { input: ["text"], output: ["text"] } },
+		{ id: 'glm-latest', name: 'GLM Latest (Volcengine)', modalities: { input: ["text"], output: ["text"] } },
 		{ id: 'doubao-seed-2-1-pro-260628', name: 'Doubao Seed 2.1 Pro', modalities: { input: ["text", "image", "pdf"], output: ["text"] } },
 		{ id: 'doubao-seed-2-1-turbo-260628', name: 'Doubao Seed 2.1 Turbo', modalities: { input: ["text", "image", "pdf"], output: ["text"] } },
 		{ id: 'doubao-seed-2-0-code-preview-260215', name: 'Doubao Seed 2.0 Code', modalities: { input: ["text", "image", "pdf"], output: ["text"] } },
@@ -4663,9 +4678,7 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 	}
 	const config = SUPPORTED_PROVIDERS[providerName];
 	if (!config) throw new Error(`Unsupported provider: ${providerName}`);
-	let modelsEndpoint: string;
-	if (providerName === 'github') modelsEndpoint = config.baseURL.replace('inference', 'catalog/models');
-	else modelsEndpoint = `${config.baseURL}/models`;
+	let modelsEndpoint: string = `${config.baseURL}/models`;
 
 	let response: Response;
 	if (providerName === 'gemini') {
@@ -4690,14 +4703,6 @@ const fetchProviderModels = async (providerName: string, apiKey: string) => {
 	const data = (await response.json()) as any;
 	if (providerName === 'gemini') {
 		return { data: data.models.map((m: any) => ({ id: m.name, name: m.displayName, description: m.description || '' })) };
-	} else if (providerName === 'github') {
-		return {
-			data: data.map((model: any) => ({
-				...model,
-				name: parseModelDisplayName(model.name.replace(' (preview)', '')),
-				description: `${model.rate_limit_tier.charAt(0).toUpperCase() + model.rate_limit_tier.slice(1)} tier, ${Math.round((model.limits?.max_input_tokens || 0) / 1000)}K context. ${model.summary || ''}`
-			}))
-		};
 	} else if (providerName === 'copilot') {
 		return {
 			data: data.data.filter((model: any) =>
